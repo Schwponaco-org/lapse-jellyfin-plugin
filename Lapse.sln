@@ -1,0 +1,25 @@
+
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Jellyfin.Plugin.Lapse", "Jellyfin.Plugin.Lapse\Jellyfin.Plugin.Lapse.csproj", "{6C64A810-B802-40F3-95DA-DB36CACD6BC4}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{6C64A810-B802-40F3-95DA-DB36CACD6BC4}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6C64A810-B802-40F3-95DA-DB36CACD6BC4}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6C64A810-B802-40F3-95DA-DB36CACD6BC4}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6C64A810-B802-40F3-95DA-DB36CACD6BC4}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {809BA0E5-2AE9-497D-A795-C403DA6C5D70}
+	EndGlobalSection
+EndGlobal

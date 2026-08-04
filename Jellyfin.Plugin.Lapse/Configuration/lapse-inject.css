@@ -1,0 +1,86 @@
+/* LAPSE Jellyfin Plugin
+   Copyright (C) 2026 Rasmus Stisen Jensen (rs-jensen)
+   Licensed under GPL v3 - see LICENSE for details */
+
+.lapseOverlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, .6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10000;
+}
+
+.lapseDialogCard {
+    background: var(--theme-body-background, #202124);
+    color: inherit;
+    border-radius: .3em;
+    padding: 1.5em;
+    max-width: 90vw;
+    width: 20em;
+    max-height: 90vh;
+    overflow-y: auto;
+    box-shadow: 0 4px 24px rgba(0, 0, 0, .5);
+}
+
+.lapseDialogCard h3 {
+    margin-top: 0;
+}
+
+.lapseDialogButtons {
+    display: flex;
+    gap: .5em;
+    margin-top: 1em;
+}
+
+.lapseDialogButtons button {
+    flex: 1;
+}
+
+.lapseIframeOverlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, .75);
+    z-index: 10000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.lapseIframeCard {
+    position: relative;
+    width: 92vw;
+    height: 92vh;
+    background: var(--theme-body-background, #202124);
+    border-radius: .3em;
+    overflow: hidden;
+    box-shadow: 0 4px 24px rgba(0, 0, 0, .5);
+}
+
+.lapseIframeCard iframe {
+    width: 100%;
+    height: 100%;
+    border: 0;
+}
+
+.lapseIframeCloseButton {
+    position: absolute;
+    top: .3em;
+    right: .3em;
+    z-index: 1;
+}
+
+.lapseToast {
+    position: fixed;
+    left: 50%;
+    bottom: 4em;
+    transform: translateX(-50%);
+    background: var(--theme-body-background, #202124);
+    color: inherit;
+    padding: .7em 1.2em;
+    border-radius: .3em;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, .5);
+    z-index: 10001;
+    max-width: 80vw;
+}

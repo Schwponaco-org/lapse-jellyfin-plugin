@@ -1,0 +1,11 @@
+root = true
+
+[*.cs]
+
+# CA2007: Consider calling ConfigureAwait on the awaited task - doesn't matter here,
+# this is a plugin running inside Jellyfin's host, not a general purpose library.
+dotnet_diagnostic.CA2007.severity = none
+
+# CA1859: Use concrete types when possible for improved performance - nice to have,
+# not worth chasing everywhere.
+dotnet_diagnostic.CA1859.severity = suggestion

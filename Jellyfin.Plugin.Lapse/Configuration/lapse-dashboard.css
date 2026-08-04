@@ -1,0 +1,119 @@
+/* LAPSE Jellyfin Plugin
+   Copyright (C) 2026 Rasmus Stisen Jensen (rs-jensen)
+   Licensed under GPL v3 - see LICENSE for details */
+
+/* small colored pill next to each movie's name, so status is easy to scan at a glance */
+.lapseStatusPill {
+    display: inline-block;
+    padding: .15em .6em;
+    border-radius: 1em;
+    font-size: .8em;
+    margin-left: .5em;
+}
+
+.lapseStatusPill-pending {
+    background: rgba(150, 150, 150, .3);
+}
+
+.lapseStatusPill-synced {
+    background: rgba(82, 181, 75, .3);
+}
+
+.lapseStatusPill-skipped {
+    background: rgba(255, 193, 7, .3);
+}
+
+.lapseStatusPill-failed {
+    background: rgba(216, 67, 67, .3);
+}
+
+/* keep the movie list to a fixed height and scroll inside it, otherwise a big library
+   turns this page into an endless wall of rows */
+.lapseMovieList {
+    max-height: 28em;
+    overflow-y: auto;
+}
+
+.lapseMovieRow {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: .5em;
+    flex-wrap: wrap;
+}
+
+.lapseMovieRowActions {
+    display: flex;
+    gap: .3em;
+}
+
+/* the little Sync / Advanced popup and the full advanced dialog both use this overlay */
+.lapseOverlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, .6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10000;
+}
+
+.lapseDialogCard {
+    background: var(--theme-body-background, #202124);
+    color: inherit;
+    border-radius: .3em;
+    padding: 1.5em;
+    max-width: 90vw;
+    width: 22em;
+    max-height: 90vh;
+    overflow-y: auto;
+    box-shadow: 0 4px 24px rgba(0, 0, 0, .5);
+}
+
+.lapseDialogCard h3 {
+    margin-top: 0;
+}
+
+.lapseDialogButtons {
+    display: flex;
+    gap: .5em;
+    margin-top: 1em;
+}
+
+.lapseDialogButtons button {
+    flex: 1;
+}
+
+/* full viewport iframe overlay used for the "Advanced" deep link into the dashboard */
+.lapseIframeOverlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, .75);
+    z-index: 10000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.lapseIframeCard {
+    position: relative;
+    width: 92vw;
+    height: 92vh;
+    background: var(--theme-body-background, #202124);
+    border-radius: .3em;
+    overflow: hidden;
+    box-shadow: 0 4px 24px rgba(0, 0, 0, .5);
+}
+
+.lapseIframeCard iframe {
+    width: 100%;
+    height: 100%;
+    border: 0;
+}
+
+.lapseIframeCloseButton {
+    position: absolute;
+    top: .3em;
+    right: .3em;
+    z-index: 1;
+}
