@@ -1,0 +1,11 @@
+[
+    {
+        "guid": "486090e1-ca92-46e1-8549-9f6bb914a1d0",
+        "name": "LAPSE",
+        "overview": "Sync subtitles that have drifted out of time",
+        "description": "Lines up subtitles against a movie's audio or against another subtitle file, using the LAPSE alignment engine. Adds a Sync Subtitles button to the movie context menu, a dashboard for bulk syncing and engine setup, auto sync for newly added movies, and manual fine tuning for when a sync lands close but not perfect.",
+        "owner": "rs-jensen",
+        "category": "General",
+        "versions": []
+    }
+]

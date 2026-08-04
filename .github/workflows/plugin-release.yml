@@ -1,0 +1,118 @@
+name: Build and release plugin
+
+# Tag a commit and push the tag to cut a release:
+#   git tag v1.0.0 && git push origin v1.0.0
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build, for example v1.0.0"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "9.0.x"
+
+      - name: Work out the version numbers
+        id: vars
+        run: |
+          set -euo pipefail
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          VERSION="${TAG#v}"
+
+          # Jellyfin wants a four part version, so pad out whatever the tag gave us.
+          IFS='.' read -ra PARTS <<< "$VERSION"
+          while [ "${#PARTS[@]}" -lt 4 ]; do PARTS+=("0"); done
+          FULL="${PARTS[0]}.${PARTS[1]}.${PARTS[2]}.${PARTS[3]}"
+
+          # build.yaml decides which Jellyfin version we target, so it only lives in one place.
+          ABI=$(grep '^targetAbi:' build.yaml | cut -d'"' -f2)
+
+          {
+            echo "tag=$TAG"
+            echo "version=$FULL"
+            echo "abi=$ABI"
+            echo "zip=lapse-jellyfin-plugin-$TAG.zip"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Building $TAG as version $FULL for Jellyfin $ABI"
+
+      - name: Build
+        run: |
+          dotnet build --configuration Release \
+            -p:Version=${{ steps.vars.outputs.version }} \
+            -p:AssemblyVersion=${{ steps.vars.outputs.version }} \
+            -p:FileVersion=${{ steps.vars.outputs.version }}
+
+      - name: Zip it up
+        id: package
+        run: |
+          set -euo pipefail
+          # Only our own dll goes in. Jellyfin already ships everything else we reference,
+          # and bundling those again can clash at runtime.
+          mkdir -p dist
+          cp Jellyfin.Plugin.Lapse/bin/Release/net9.0/Jellyfin.Plugin.Lapse.dll dist/
+          (cd dist && zip -r "../${{ steps.vars.outputs.zip }}" .)
+
+          CHECKSUM=$(md5sum "${{ steps.vars.outputs.zip }}" | cut -d' ' -f1)
+          echo "checksum=$CHECKSUM" >> "$GITHUB_OUTPUT"
+          echo "Checksum: $CHECKSUM"
+
+      - name: Publish the GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.vars.outputs.tag }}
+          files: ${{ steps.vars.outputs.zip }}
+          generate_release_notes: true
+
+      - name: Add this version to manifest.json
+        run: |
+          set -euo pipefail
+
+          # The tag build runs on a detached head, so hop onto main before committing.
+          git fetch origin main
+          git checkout -B main origin/main
+
+          SOURCE_URL="https://github.com/${{ github.repository }}/releases/download/${{ steps.vars.outputs.tag }}/${{ steps.vars.outputs.zip }}"
+          TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+          # Newest version goes first. Drop any existing entry for the same version so
+          # re-running a tag replaces it instead of listing it twice.
+          jq --arg version "${{ steps.vars.outputs.version }}" \
+             --arg abi "${{ steps.vars.outputs.abi }}" \
+             --arg url "$SOURCE_URL" \
+             --arg checksum "${{ steps.package.outputs.checksum }}" \
+             --arg timestamp "$TIMESTAMP" \
+             '.[0].versions = ([{
+                version: $version,
+                changelog: "See the release notes on GitHub.",
+                targetAbi: $abi,
+                sourceUrl: $url,
+                checksum: $checksum,
+                timestamp: $timestamp
+              }] + (.[0].versions | map(select(.version != $version))))' \
+             manifest.json > manifest.tmp
+          mv manifest.tmp manifest.json
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add manifest.json
+          git diff --cached --quiet || git commit -m "Add ${{ steps.vars.outputs.version }} to the plugin manifest"
+          git push origin main
