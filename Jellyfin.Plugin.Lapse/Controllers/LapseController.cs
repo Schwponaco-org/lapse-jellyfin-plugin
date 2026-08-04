@@ -87,7 +87,8 @@ public class LapseController : ControllerBase
                 Name = movie.Name ?? "Unknown",
                 Status = status,
                 LastSyncUtc = record?.LastSyncUtc,
-                LastError = record?.LastError
+                LastError = record?.LastError,
+                HasExternalSubtitle = _subtitleLocator.GetExternalSubtitles(movie).Count > 0
             });
         }
 

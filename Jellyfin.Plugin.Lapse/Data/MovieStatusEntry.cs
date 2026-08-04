@@ -36,4 +36,12 @@ public class MovieStatusEntry
     /// Gets or sets the last error message, if the last attempt failed.
     /// </summary>
     public string? LastError { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether this movie has at least one external
+    /// subtitle. Libraries that scan in unrelated video files (phone backups, personal
+    /// clips, whatever) tend to fill up with items that have none, so the dashboard
+    /// hides those by default.
+    /// </summary>
+    public bool HasExternalSubtitle { get; set; }
 }

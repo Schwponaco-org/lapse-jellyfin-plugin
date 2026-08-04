@@ -49,6 +49,13 @@
                 <div class="inputContainer">
                     <input is="emby-input" id="lapseMovieSearch" type="text" placeholder="Search movies..." />
                 </div>
+                <div class="checkboxContainer checkboxContainer-withDescription">
+                    <label class="emby-checkbox-label">
+                        <input id="lapseIncludeAll" type="checkbox" is="emby-checkbox" />
+                        <span>Include all</span>
+                    </label>
+                    <div class="fieldDescription">Movies with no external subtitle are hidden by default to keep this list clean. Turn this on to show everything.</div>
+                </div>
                 <div id="lapseMovieList" class="paperList lapseMovieList"></div>
             </div>
 

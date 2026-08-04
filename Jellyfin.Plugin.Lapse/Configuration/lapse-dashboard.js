@@ -154,8 +154,19 @@
     function renderMovieList(view, movies) {
         var container = view.querySelector('#lapseMovieList');
 
-        // hang on to the full list so the search box can filter without refetching
+        // hang on to the full list so the search box and the include-all checkbox can
+        // both filter locally without refetching from the server
         allMovies = movies;
+
+        // libraries that scan in unrelated video files (phone backups, personal clips,
+        // whatever) tend to fill up with items that have no external subtitle at all -
+        // hide those by default so the list stays useful, unless the user asks for everything
+        var includeAll = view.querySelector('#lapseIncludeAll').checked;
+        if (!includeAll) {
+            movies = movies.filter(function (m) {
+                return m.HasExternalSubtitle;
+            });
+        }
 
         var search = (view.querySelector('#lapseMovieSearch').value || '').trim().toLowerCase();
         if (search) {
@@ -165,9 +176,14 @@
         }
 
         if (movies.length === 0) {
-            container.innerHTML = search
-                ? '<div class="fieldDescription">No movies match that search.</div>'
-                : '<div class="fieldDescription">No movies found in the library yet.</div>';
+            if (search) {
+                container.innerHTML = '<div class="fieldDescription">No movies match that search.</div>';
+            } else if (!includeAll) {
+                container.innerHTML = '<div class="fieldDescription">No movies with an external subtitle found. Turn on "Include all" above to see every movie in the library.</div>';
+            } else {
+                container.innerHTML = '<div class="fieldDescription">No movies found in the library yet.</div>';
+            }
+
             return;
         }
 
@@ -566,6 +582,9 @@
 
         view.querySelector('#lapseMovieSearch').addEventListener('input', function () {
             // re-render straight from the list we already have, no server round trip
+            renderMovieList(view, allMovies);
+        });
+        view.querySelector('#lapseIncludeAll').addEventListener('change', function () {
             renderMovieList(view, allMovies);
         });
         view.querySelector('#btnDownloadEngine').addEventListener('click', function () {
