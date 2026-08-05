@@ -54,7 +54,7 @@ public partial class LapseEngine : IEngine
     };
 
     /// <inheritdoc />
-    public IReadOnlyList<string> BuildArguments(string referencePath, string inputPath, string outputPath, SyncMode mode, int penalty)
+    public IReadOnlyList<string> BuildArguments(string referencePath, string inputPath, string outputPath, SyncMode mode, int penalty, string? ffmpegDirectory)
     {
         var modeArgument = mode switch
         {

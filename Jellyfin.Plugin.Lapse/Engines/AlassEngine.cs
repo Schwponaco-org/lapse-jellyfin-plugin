@@ -49,7 +49,7 @@ public partial class AlassEngine : IEngine
     };
 
     /// <inheritdoc />
-    public IReadOnlyList<string> BuildArguments(string referencePath, string inputPath, string outputPath, SyncMode mode, int penalty)
+    public IReadOnlyList<string> BuildArguments(string referencePath, string inputPath, string outputPath, SyncMode mode, int penalty, string? ffmpegDirectory)
     {
         var args = new List<string> { referencePath, inputPath, outputPath };
 

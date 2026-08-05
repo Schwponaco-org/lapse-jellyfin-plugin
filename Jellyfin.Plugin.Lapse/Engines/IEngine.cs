@@ -26,8 +26,10 @@ public interface IEngine
     /// <param name="outputPath">Where the fixed subtitle should be written.</param>
     /// <param name="mode">Which alignment mode to use.</param>
     /// <param name="penalty">Penalty value, only meaningful for split mode.</param>
+    /// <param name="ffmpegDirectory">Folder holding Jellyfin's ffmpeg and ffprobe, or null if
+    /// it couldn't be found. Engines that shell out to ffmpeg can point themselves at it.</param>
     /// <returns>The arguments, in order.</returns>
-    IReadOnlyList<string> BuildArguments(string referencePath, string inputPath, string outputPath, SyncMode mode, int penalty);
+    IReadOnlyList<string> BuildArguments(string referencePath, string inputPath, string outputPath, SyncMode mode, int penalty, string? ffmpegDirectory);
 
     /// <summary>
     /// Reads whatever the engine printed and works out what happened.

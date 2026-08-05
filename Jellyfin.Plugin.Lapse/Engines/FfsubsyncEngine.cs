@@ -48,9 +48,20 @@ public partial class FfsubsyncEngine : IEngine
     };
 
     /// <inheritdoc />
-    public IReadOnlyList<string> BuildArguments(string referencePath, string inputPath, string outputPath, SyncMode mode, int penalty)
+    public IReadOnlyList<string> BuildArguments(string referencePath, string inputPath, string outputPath, SyncMode mode, int penalty, string? ffmpegDirectory)
     {
-        return new List<string> { referencePath, "-i", inputPath, "-o", outputPath };
+        var args = new List<string> { referencePath, "-i", inputPath, "-o", outputPath };
+
+        // ffsubsync runs ffmpeg and ffprobe itself. Telling it exactly which folder to
+        // look in is steadier than hoping PATH resolves to the same build, since the
+        // Jellyfin images keep their ffmpeg somewhere PATH doesn't cover.
+        if (!string.IsNullOrEmpty(ffmpegDirectory))
+        {
+            args.Add("--ffmpeg-path");
+            args.Add(ffmpegDirectory);
+        }
+
+        return args;
     }
 
     /// <inheritdoc />

@@ -216,7 +216,7 @@ public class EngineRunner
                 File.Copy(subtitlePath, workPath, overwrite: true);
             }
 
-            var args = engine.BuildArguments(referencePath, subtitlePath, workPath, mode, penalty);
+            var args = engine.BuildArguments(referencePath, subtitlePath, workPath, mode, penalty, GetFfmpegDirectory());
             var (stdout, stderr, exitCode) = await RunProcessAsync(enginePath, args, cancellationToken).ConfigureAwait(false);
 
             var result = engine.ParseResult(stdout, stderr, exitCode, mode, penalty);
@@ -299,15 +299,12 @@ public class EngineRunner
         return (stdoutBuilder.ToString(), stderrBuilder.ToString(), process.ExitCode);
     }
 
-    // ffsubsync shells out to ffmpeg and ffprobe by name, and the Jellyfin docker images
-    // don't have either on PATH - they live in the jellyfin-ffmpeg folder instead. Without
-    // this ffsubsync dies with "No such file or directory: 'ffmpeg'". Jellyfin already
-    // knows where its own build is, so borrow that rather than making people install
-    // a second copy of ffmpeg.
-    private void AddFfmpegToPath(ProcessStartInfo startInfo)
+    /// <summary>
+    /// Gets the folder holding Jellyfin's own ffmpeg build, or null if it can't be found.
+    /// </summary>
+    /// <returns>The folder, or null.</returns>
+    public string? GetFfmpegDirectory()
     {
-        var folders = new List<string>();
-
         foreach (var toolPath in new[] { _mediaEncoder.EncoderPath, _mediaEncoder.ProbePath })
         {
             if (string.IsNullOrWhiteSpace(toolPath))
@@ -316,20 +313,31 @@ public class EngineRunner
             }
 
             var folder = Path.GetDirectoryName(toolPath);
-            if (!string.IsNullOrEmpty(folder) && Directory.Exists(folder) && !folders.Contains(folder))
+            if (!string.IsNullOrEmpty(folder) && Directory.Exists(folder))
             {
-                folders.Add(folder);
+                return folder;
             }
         }
 
-        if (folders.Count == 0)
+        return null;
+    }
+
+    // ffsubsync shells out to ffmpeg and ffprobe by name, and the Jellyfin docker images
+    // don't have either on PATH - they live in the jellyfin-ffmpeg folder instead. Without
+    // this ffsubsync dies with "No such file or directory: 'ffmpeg'". Jellyfin already
+    // knows where its own build is, so borrow that rather than making people install
+    // a second copy of ffmpeg. Engines that take an explicit ffmpeg path get told as well,
+    // this is just so anything shelling out by name still works.
+    private void AddFfmpegToPath(ProcessStartInfo startInfo)
+    {
+        var folder = GetFfmpegDirectory();
+        if (folder is null)
         {
             return;
         }
 
         var existing = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
-        folders.Add(existing);
-        startInfo.Environment["PATH"] = string.Join(Path.PathSeparator, folders);
+        startInfo.Environment["PATH"] = folder + Path.PathSeparator + existing;
     }
 
     private static void TryKill(Process process)
