@@ -8,6 +8,14 @@
     "category": "General",
     "versions": [
       {
+        "version": "1.2.1.0",
+        "changelog": "See the release notes on GitHub.",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/rs-jensen/lapse-jellyfin-plugin/releases/download/v1.2.1/lapse-jellyfin-plugin-v1.2.1.zip",
+        "checksum": "7703e1acf4e8032bbb48f138adbf060c",
+        "timestamp": "2026-08-05T08:41:14Z"
+      },
+      {
         "version": "1.2.0.0",
         "changelog": "See the release notes on GitHub.",
         "targetAbi": "10.11.0.0",
