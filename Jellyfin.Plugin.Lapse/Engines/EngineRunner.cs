@@ -216,8 +216,9 @@ public class EngineRunner
                 File.Copy(subtitlePath, workPath, overwrite: true);
             }
 
-            var args = engine.BuildArguments(referencePath, subtitlePath, workPath, mode, penalty, GetFfmpegDirectory());
-            var (stdout, stderr, exitCode) = await RunProcessAsync(enginePath, args, cancellationToken).ConfigureAwait(false);
+            var ffmpegDirectory = GetFfmpegDirectory();
+            var args = engine.BuildArguments(referencePath, subtitlePath, workPath, mode, penalty, ffmpegDirectory);
+            var (stdout, stderr, exitCode) = await RunProcessAsync(enginePath, args, ffmpegDirectory, cancellationToken).ConfigureAwait(false);
 
             var result = engine.ParseResult(stdout, stderr, exitCode, mode, penalty);
             result.EngineId = engine.Descriptor.Id;
@@ -251,6 +252,7 @@ public class EngineRunner
     private async Task<(string Stdout, string Stderr, int ExitCode)> RunProcessAsync(
         string enginePath,
         System.Collections.Generic.IReadOnlyList<string> args,
+        string? ffmpegDirectory,
         CancellationToken cancellationToken)
     {
         var startInfo = new ProcessStartInfo
@@ -267,7 +269,7 @@ public class EngineRunner
             startInfo.ArgumentList.Add(arg);
         }
 
-        AddFfmpegToPath(startInfo);
+        AddFfmpegToPath(startInfo, ffmpegDirectory);
 
         _logger.LogInformation("Running engine: {Path} {Args}", enginePath, string.Join(' ', startInfo.ArgumentList));
 
@@ -300,26 +302,86 @@ public class EngineRunner
     }
 
     /// <summary>
-    /// Gets the folder holding Jellyfin's own ffmpeg build, or null if it can't be found.
+    /// Gets the folder engines should use to find ffmpeg and ffprobe.
+    ///
+    /// This hands back a folder of tiny wrapper scripts rather than Jellyfin's real ffmpeg
+    /// folder, because of how ffsubsync is packaged. It's a PyInstaller bundle, and
+    /// PyInstaller points LD_LIBRARY_PATH at its own unpacked copy of everything. Any
+    /// process it starts inherits that, so ffmpeg and ffprobe end up trying to load
+    /// PyInstaller's libraries instead of their own and fall over with an unhelpful
+    /// "ffprobe error". The wrappers clear that variable and then run the real binary.
     /// </summary>
-    /// <returns>The folder, or null.</returns>
+    /// <returns>The folder to point engines at, or null if ffmpeg couldn't be found.</returns>
     public string? GetFfmpegDirectory()
     {
-        foreach (var toolPath in new[] { _mediaEncoder.EncoderPath, _mediaEncoder.ProbePath })
-        {
-            if (string.IsNullOrWhiteSpace(toolPath))
-            {
-                continue;
-            }
+        var encoderPath = FirstExisting(_mediaEncoder.EncoderPath);
+        var probePath = FirstExisting(_mediaEncoder.ProbePath);
 
-            var folder = Path.GetDirectoryName(toolPath);
-            if (!string.IsNullOrEmpty(folder) && Directory.Exists(folder))
-            {
-                return folder;
-            }
+        // ffprobe normally sits next to ffmpeg, so fall back to looking there for it
+        if (probePath is null && encoderPath is not null)
+        {
+            var sibling = Path.Combine(Path.GetDirectoryName(encoderPath)!, "ffprobe");
+            probePath = File.Exists(sibling) ? sibling : null;
         }
 
-        return null;
+        if (encoderPath is null && probePath is null)
+        {
+            return null;
+        }
+
+        var realFolder = Path.GetDirectoryName(encoderPath ?? probePath!)!;
+
+        if (!OperatingSystem.IsLinux())
+        {
+            return realFolder;
+        }
+
+        try
+        {
+            var shimFolder = Path.Combine(_applicationPaths.DataPath, "lapse", "ffmpeg-shim");
+            Directory.CreateDirectory(shimFolder);
+
+            WriteShim(shimFolder, "ffmpeg", encoderPath);
+            WriteShim(shimFolder, "ffprobe", probePath);
+
+            return shimFolder;
+        }
+        catch (IOException ex)
+        {
+            // couldn't write the wrappers, so fall back to the real folder. Engines that
+            // don't care about LD_LIBRARY_PATH will be fine either way.
+            _logger.LogWarning(ex, "Could not create the ffmpeg wrapper scripts, using {Folder} directly", realFolder);
+            return realFolder;
+        }
+    }
+
+    private static string? FirstExisting(string? path)
+    {
+        return !string.IsNullOrWhiteSpace(path) && File.Exists(path) ? path : null;
+    }
+
+    private static void WriteShim(string shimFolder, string name, string? realPath)
+    {
+        // only ever called from the Linux branch above, but the analyzer can't follow that
+        if (realPath is null || !OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        var shimPath = Path.Combine(shimFolder, name);
+        var script = "#!/bin/sh\n"
+            + "# Written by the LAPSE Jellyfin plugin.\n"
+            + "# PyInstaller based engines hand their children an LD_LIBRARY_PATH pointing at\n"
+            + "# their own bundled libraries, which stops ffmpeg loading the ones it needs.\n"
+            + "unset LD_LIBRARY_PATH\n"
+            + $"exec \"{realPath}\" \"$@\"\n";
+
+        File.WriteAllText(shimPath, script);
+        File.SetUnixFileMode(
+            shimPath,
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
+            | UnixFileMode.GroupRead | UnixFileMode.GroupExecute
+            | UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
     }
 
     // ffsubsync shells out to ffmpeg and ffprobe by name, and the Jellyfin docker images
@@ -328,16 +390,17 @@ public class EngineRunner
     // knows where its own build is, so borrow that rather than making people install
     // a second copy of ffmpeg. Engines that take an explicit ffmpeg path get told as well,
     // this is just so anything shelling out by name still works.
-    private void AddFfmpegToPath(ProcessStartInfo startInfo)
+    // Engines that look for ffmpeg on PATH rather than taking an explicit option get the
+    // same wrapper folder, so they behave the same way.
+    private void AddFfmpegToPath(ProcessStartInfo startInfo, string? ffmpegDirectory)
     {
-        var folder = GetFfmpegDirectory();
-        if (folder is null)
+        if (string.IsNullOrEmpty(ffmpegDirectory))
         {
             return;
         }
 
         var existing = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
-        startInfo.Environment["PATH"] = folder + Path.PathSeparator + existing;
+        startInfo.Environment["PATH"] = ffmpegDirectory + Path.PathSeparator + existing;
     }
 
     private static void TryKill(Process process)
