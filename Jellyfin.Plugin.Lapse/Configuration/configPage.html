@@ -8,107 +8,122 @@
 <div id="LapseConfigPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button,emby-select,emby-checkbox,emby-linkbutton">
     <div data-role="content">
         <div class="content-primary">
-            <h1>LAPSE</h1>
-            <p class="fieldDescription">Sync subtitles that have drifted out of time, either against a movie's own audio or against another subtitle file.</p>
 
-            <div class="verticalSection">
-                <h2>Engine <span id="lapseEngineBadge" class="lapseStatusPill lapseStatusPill-pending">Checking...</span></h2>
-                <p id="lapseEngineStatusText" class="fieldDescription">Checking...</p>
-                <button is="emby-button" type="button" id="btnDownloadEngine" class="raised button-submit block hide">
-                    <span>Download engine</span>
-                </button>
-            </div>
-
-            <div class="verticalSection hide" id="lapseQueueSection">
-                <h2>Sync queue</h2>
-                <p id="lapseQueueText" class="fieldDescription"></p>
-                <progress id="lapseQueueBar" max="100" value="0" style="width: 100%;"></progress>
-            </div>
-
-            <div class="verticalSection">
-                <h2>Bulk sync</h2>
-                <button is="emby-button" type="button" id="btnSyncLibrary" class="raised block">
-                    <span>Sync entire library</span>
-                </button>
-                <div class="selectContainer">
-                    <label class="selectLabel" for="lapseFolderSelect">Folder</label>
-                    <select is="emby-select" id="lapseFolderSelect" class="emby-select-withcolor emby-select"></select>
+            <div class="lapseTopBar">
+                <div class="lapseTopBarTitle">
+                    <h1>LAPSE</h1>
+                    <span class="fieldDescription">Sync subtitles that have drifted out of time</span>
                 </div>
-                <div style="display:flex; gap:.5em; flex-wrap: wrap;">
-                    <button is="emby-button" type="button" id="btnSyncFolder" class="raised">
-                        <span>Sync this folder</span>
-                    </button>
-                    <button is="emby-button" type="button" id="btnToggleSkipFolder" class="raised">
-                        <span>Skip this folder</span>
+                <div id="lapseEngineDots" class="lapseEngineDots"></div>
+            </div>
+
+            <div class="lapseQueueStrip hide" id="lapseQueueSection">
+                <div class="lapseQueueRow">
+                    <span id="lapseQueueText" class="fieldDescription"></span>
+                </div>
+                <progress id="lapseQueueBar" max="100" value="0"></progress>
+            </div>
+
+            <details class="lapseSection" id="lapseSectionEngines" open>
+                <summary class="lapseSectionHeader">
+                    <span class="lapseSectionTitle">Engines</span>
+                    <span class="lapseSectionHint" id="lapseEnginesHint"></span>
+                </summary>
+                <div class="lapseSectionBody">
+                    <div id="lapseEngineCards" class="lapseEngineCards"></div>
+                    <button is="emby-button" type="button" id="btnInstallAllEngines" class="raised lapseSmallButton">
+                        <span>Install all available</span>
                     </button>
                 </div>
-            </div>
+            </details>
 
-            <div class="verticalSection">
-                <h2>Movies</h2>
-                <div class="inputContainer">
-                    <input is="emby-input" id="lapseMovieSearch" type="text" placeholder="Search movies..." />
-                </div>
-                <div class="checkboxContainer checkboxContainer-withDescription">
-                    <label class="emby-checkbox-label">
-                        <input id="lapseIncludeAll" type="checkbox" is="emby-checkbox" />
-                        <span>Include all</span>
-                    </label>
-                    <div class="fieldDescription">Movies with no external subtitle are hidden by default to keep this list clean. Turn this on to show everything.</div>
-                </div>
-                <div id="lapseMovieList" class="paperList lapseMovieList"></div>
-            </div>
-
-            <div class="verticalSection">
-                <h2>Settings</h2>
-                <form id="lapseSettingsForm">
-                    <div class="inputContainer">
-                        <label class="inputLabel inputLabelUnfocused" for="lapseDefaultPenalty">Default penalty</label>
-                        <input is="emby-input" id="lapseDefaultPenalty" type="number" min="1" />
-                        <div class="fieldDescription">Higher values = fewer splits. Default 6 works well for most cases.</div>
+            <details class="lapseSection" id="lapseSectionMovies" open>
+                <summary class="lapseSectionHeader">
+                    <span class="lapseSectionTitle">Movies</span>
+                    <span class="lapseSectionHint" id="lapseMoviesHint"></span>
+                </summary>
+                <div class="lapseSectionBody">
+                    <div class="lapseFilterRow">
+                        <input is="emby-input" id="lapseMovieSearch" type="text" placeholder="Search movies..." />
+                        <label class="emby-checkbox-label lapseInlineCheck">
+                            <input id="lapseIncludeAll" type="checkbox" is="emby-checkbox" />
+                            <span>Include all</span>
+                        </label>
                     </div>
+                    <div class="fieldDescription lapseTightNote">Movies with no external subtitle are hidden by default.</div>
+                    <div id="lapseMovieList" class="paperList lapseMovieList"></div>
+                </div>
+            </details>
+
+            <details class="lapseSection" id="lapseSectionBulk">
+                <summary class="lapseSectionHeader">
+                    <span class="lapseSectionTitle">Bulk sync</span>
+                    <span class="lapseSectionHint">Whole library or one folder</span>
+                </summary>
+                <div class="lapseSectionBody">
+                    <div class="lapseButtonRow">
+                        <button is="emby-button" type="button" id="btnSyncLibrary" class="raised lapseSmallButton">
+                            <span>Sync entire library</span>
+                        </button>
+                    </div>
+                    <div class="lapseFilterRow">
+                        <select is="emby-select" id="lapseFolderSelect" class="emby-select-withcolor emby-select"></select>
+                    </div>
+                    <div class="lapseButtonRow">
+                        <button is="emby-button" type="button" id="btnSyncFolder" class="raised lapseSmallButton">
+                            <span>Sync this folder</span>
+                        </button>
+                        <button is="emby-button" type="button" id="btnToggleSkipFolder" class="raised lapseSmallButton">
+                            <span>Skip this folder</span>
+                        </button>
+                    </div>
+                </div>
+            </details>
+
+            <details class="lapseSection" id="lapseSectionSubToSub">
+                <summary class="lapseSectionHeader">
+                    <span class="lapseSectionTitle">Subtitle to subtitle</span>
+                    <span class="lapseSectionHint">Line up two subtitle files</span>
+                </summary>
+                <div class="lapseSectionBody">
                     <div class="inputContainer">
-                        <label class="inputLabel inputLabelUnfocused" for="lapseBinaryPath">Binary path override</label>
-                        <div style="display:flex; align-items:center;">
-                            <input is="emby-input" id="lapseBinaryPath" type="text" style="flex-grow:1;" />
-                            <button is="paper-icon-button-light" type="button" id="btnBrowseBinaryPath" title="Browse">
+                        <label class="inputLabel inputLabelUnfocused" for="lapseRefSubPath">Reference subtitle</label>
+                        <div class="lapsePathRow">
+                            <input is="emby-input" id="lapseRefSubPath" type="text" readonly />
+                            <button is="paper-icon-button-light" type="button" id="btnBrowseRefSub" title="Browse">
                                 <span class="material-icons search" aria-hidden="true"></span>
                             </button>
                         </div>
-                        <div class="fieldDescription">Leave empty to use the engine downloaded above.</div>
                     </div>
-                    <button is="emby-button" type="submit" class="raised button-submit block">
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="lapseInputSubPath">Input subtitle</label>
+                        <div class="lapsePathRow">
+                            <input is="emby-input" id="lapseInputSubPath" type="text" readonly />
+                            <button is="paper-icon-button-light" type="button" id="btnBrowseInputSub" title="Browse">
+                                <span class="material-icons search" aria-hidden="true"></span>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="fieldDescription lapseTightNote">Always runs standard mode with the default engine.</div>
+                    <button is="emby-button" type="button" id="btnSyncSubtitles" class="raised button-submit lapseSmallButton">
+                        <span>Sync</span>
+                    </button>
+                </div>
+            </details>
+
+            <details class="lapseSection" id="lapseSectionSettings">
+                <summary class="lapseSectionHeader">
+                    <span class="lapseSectionTitle">Settings</span>
+                    <span class="lapseSectionHint">Penalties and custom binary paths</span>
+                </summary>
+                <div class="lapseSectionBody">
+                    <div id="lapseEngineSettings"></div>
+                    <button is="emby-button" type="button" id="btnSaveSettings" class="raised button-submit lapseSmallButton">
                         <span>Save</span>
                     </button>
-                </form>
-            </div>
+                </div>
+            </details>
 
-            <div class="verticalSection">
-                <h2>Subtitle to subtitle sync</h2>
-                <p class="fieldDescription">Sync one subtitle file against another, without touching a movie.</p>
-                <div class="inputContainer">
-                    <label class="inputLabel inputLabelUnfocused" for="lapseRefSubPath">Reference subtitle</label>
-                    <div style="display:flex; align-items:center;">
-                        <input is="emby-input" id="lapseRefSubPath" type="text" readonly style="flex-grow:1;" />
-                        <button is="paper-icon-button-light" type="button" id="btnBrowseRefSub" title="Browse">
-                            <span class="material-icons search" aria-hidden="true"></span>
-                        </button>
-                    </div>
-                </div>
-                <div class="inputContainer">
-                    <label class="inputLabel inputLabelUnfocused" for="lapseInputSubPath">Input subtitle</label>
-                    <div style="display:flex; align-items:center;">
-                        <input is="emby-input" id="lapseInputSubPath" type="text" readonly style="flex-grow:1;" />
-                        <button is="paper-icon-button-light" type="button" id="btnBrowseInputSub" title="Browse">
-                            <span class="material-icons search" aria-hidden="true"></span>
-                        </button>
-                    </div>
-                </div>
-                <div class="fieldDescription">Syncing subtitle to subtitle always uses standard mode.</div>
-                <button is="emby-button" type="button" id="btnSyncSubtitles" class="raised button-submit block">
-                    <span>Sync</span>
-                </button>
-            </div>
         </div>
     </div>
     <script src="configurationpage?name=lapse-dashboard.js"></script>

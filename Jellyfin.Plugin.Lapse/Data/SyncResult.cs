@@ -48,4 +48,16 @@ public class SyncResult
     /// Gets or sets the error message when <see cref="Success"/> is false.
     /// </summary>
     public string? Error { get; set; }
+
+    /// <summary>
+    /// Gets or sets the id of the engine that ran this sync.
+    /// </summary>
+    public string? EngineId { get; set; }
+
+    /// <summary>
+    /// Gets or sets a short line of whatever the engine said. Used for engines where we
+    /// don't have a documented output format to pull exact numbers out of, so there's
+    /// still something meaningful to show the user.
+    /// </summary>
+    public string? EngineOutput { get; set; }
 }

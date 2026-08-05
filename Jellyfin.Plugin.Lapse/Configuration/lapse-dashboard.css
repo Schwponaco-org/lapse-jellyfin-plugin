@@ -1,14 +1,302 @@
 /* LAPSE Jellyfin Plugin
    Copyright (C) 2026 Rasmus Stisen Jensen (rs-jensen)
-   Licensed under GPL v3 - see LICENSE for details */
+   Licensed under GPL v3 - see LICENSE for details
 
-/* small colored pill next to each movie's name, so status is easy to scan at a glance */
+   Everything here leans on Jellyfin's own colours (currentColor and the --theme-*
+   variables) so the page follows whatever theme the user has picked. This file is
+   only about layout density, the top bar, and the engine cards. */
+
+/* --- top bar --- */
+
+.lapseTopBar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1em;
+    flex-wrap: wrap;
+    margin-bottom: .8em;
+}
+
+.lapseTopBarTitle h1 {
+    margin: 0 0 .1em 0;
+}
+
+.lapseEngineDots {
+    display: flex;
+    gap: .9em;
+    flex-wrap: wrap;
+    font-size: .85em;
+    opacity: .85;
+}
+
+.lapseEngineDot {
+    display: flex;
+    align-items: center;
+    gap: .35em;
+    white-space: nowrap;
+}
+
+.lapseEngineDot::before {
+    content: "";
+    width: .55em;
+    height: .55em;
+    border-radius: 50%;
+    background: currentColor;
+    opacity: .3;
+}
+
+.lapseEngineDot-ready::before {
+    background: #52b54b;
+    opacity: 1;
+}
+
+.lapseEngineDot-broken::before {
+    background: #d84343;
+    opacity: 1;
+}
+
+/* --- queue strip, sits under the top bar instead of taking a whole section --- */
+
+.lapseQueueStrip {
+    margin-bottom: 1em;
+    padding: .6em .8em;
+    border-radius: .3em;
+    background: rgba(127, 127, 127, .12);
+}
+
+.lapseQueueRow {
+    margin-bottom: .4em;
+}
+
+.lapseQueueStrip progress {
+    width: 100%;
+    height: .5em;
+    display: block;
+}
+
+/* --- collapsible sections --- */
+
+.lapseSection {
+    border-top: 1px solid rgba(127, 127, 127, .25);
+    padding: .1em 0;
+}
+
+.lapseSection:last-of-type {
+    border-bottom: 1px solid rgba(127, 127, 127, .25);
+}
+
+.lapseSectionHeader {
+    display: flex;
+    align-items: baseline;
+    gap: .7em;
+    padding: .75em .2em;
+    cursor: pointer;
+    list-style: none;
+    user-select: none;
+}
+
+/* swap the default triangle for one that points the way the section is going */
+.lapseSectionHeader::-webkit-details-marker {
+    display: none;
+}
+
+.lapseSectionHeader::before {
+    content: "\203A";
+    display: inline-block;
+    transition: transform .15s ease;
+    opacity: .6;
+    font-size: 1.2em;
+    line-height: 1;
+    width: .6em;
+}
+
+.lapseSection[open] > .lapseSectionHeader::before {
+    transform: rotate(90deg);
+}
+
+.lapseSectionHeader:hover {
+    background: rgba(127, 127, 127, .08);
+}
+
+.lapseSectionTitle {
+    font-size: 1.08em;
+    font-weight: 500;
+}
+
+.lapseSectionHint {
+    font-size: .85em;
+    opacity: .55;
+}
+
+.lapseSectionBody {
+    padding: .2em .2em 1.1em 1.4em;
+}
+
+/* --- engine cards --- */
+
+.lapseEngineCards {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(15em, 1fr));
+    gap: .7em;
+    margin-bottom: .9em;
+}
+
+.lapseEngineCard {
+    border: 1px solid rgba(127, 127, 127, .3);
+    border-radius: .35em;
+    padding: .7em .8em;
+    display: flex;
+    flex-direction: column;
+    gap: .45em;
+}
+
+.lapseEngineCard-default {
+    border-color: #52b54b;
+}
+
+.lapseEngineCard-unavailable {
+    opacity: .5;
+}
+
+.lapseEngineCardTop {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: .5em;
+}
+
+.lapseEngineName {
+    font-weight: 500;
+}
+
+.lapseEngineDesc {
+    font-size: .82em;
+    opacity: .65;
+    line-height: 1.35;
+}
+
+.lapseEngineChips {
+    display: flex;
+    gap: .3em;
+    flex-wrap: wrap;
+}
+
+.lapseChip {
+    font-size: .7em;
+    padding: .15em .5em;
+    border-radius: 1em;
+    background: rgba(127, 127, 127, .2);
+    white-space: nowrap;
+}
+
+.lapseChip-on {
+    background: rgba(82, 181, 75, .25);
+}
+
+.lapseEngineActions {
+    display: flex;
+    gap: .35em;
+    flex-wrap: wrap;
+    margin-top: .1em;
+}
+
+.lapseEngineError {
+    font-size: .78em;
+    color: #d84343;
+    line-height: 1.35;
+    word-break: break-word;
+}
+
+/* --- shared small bits --- */
+
+.lapseSmallButton {
+    padding: .4em .9em !important;
+    margin: 0 !important;
+    font-size: .9em;
+}
+
+.lapseButtonRow {
+    display: flex;
+    gap: .4em;
+    flex-wrap: wrap;
+    margin-bottom: .6em;
+}
+
+.lapseFilterRow {
+    display: flex;
+    gap: .7em;
+    align-items: center;
+    flex-wrap: wrap;
+    margin-bottom: .3em;
+}
+
+.lapseFilterRow input[type="text"] {
+    flex: 1 1 14em;
+    margin: 0 !important;
+}
+
+.lapseFilterRow select {
+    flex: 1 1 14em;
+}
+
+.lapseInlineCheck {
+    display: flex !important;
+    align-items: center;
+    gap: .3em;
+    white-space: nowrap;
+    margin: 0 !important;
+}
+
+.lapseTightNote {
+    margin: .1em 0 .7em 0;
+    font-size: .82em;
+}
+
+.lapsePathRow {
+    display: flex;
+    align-items: center;
+}
+
+.lapsePathRow input {
+    flex-grow: 1;
+}
+
+/* --- movie list --- */
+
+.lapseMovieList {
+    max-height: 24em;
+    overflow-y: auto;
+    border: 1px solid rgba(127, 127, 127, .2);
+    border-radius: .3em;
+}
+
+.lapseMovieRow {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: .5em;
+    flex-wrap: wrap;
+    padding: .35em .6em !important;
+}
+
+.lapseMovieRowActions {
+    display: flex;
+    gap: .25em;
+}
+
+.lapseMovieRowActions button {
+    padding: .25em .7em !important;
+    margin: 0 !important;
+    font-size: .82em;
+}
+
 .lapseStatusPill {
     display: inline-block;
-    padding: .15em .6em;
+    padding: .1em .55em;
     border-radius: 1em;
-    font-size: .8em;
+    font-size: .72em;
     margin-left: .5em;
+    vertical-align: middle;
 }
 
 .lapseStatusPill-pending {
@@ -27,27 +315,8 @@
     background: rgba(216, 67, 67, .3);
 }
 
-/* keep the movie list to a fixed height and scroll inside it, otherwise a big library
-   turns this page into an endless wall of rows */
-.lapseMovieList {
-    max-height: 28em;
-    overflow-y: auto;
-}
+/* --- dialogs, shared with the injected context menu --- */
 
-.lapseMovieRow {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: .5em;
-    flex-wrap: wrap;
-}
-
-.lapseMovieRowActions {
-    display: flex;
-    gap: .3em;
-}
-
-/* the little Sync / Advanced popup and the full advanced dialog both use this overlay */
 .lapseOverlay {
     position: fixed;
     inset: 0;
@@ -62,9 +331,9 @@
     background: var(--theme-body-background, #202124);
     color: inherit;
     border-radius: .3em;
-    padding: 1.5em;
+    padding: 1.4em;
     max-width: 90vw;
-    width: 22em;
+    width: 23em;
     max-height: 90vh;
     overflow-y: auto;
     box-shadow: 0 4px 24px rgba(0, 0, 0, .5);
@@ -84,7 +353,6 @@
     flex: 1;
 }
 
-/* full viewport iframe overlay used for the "Advanced" deep link into the dashboard */
 .lapseIframeOverlay {
     position: fixed;
     inset: 0;

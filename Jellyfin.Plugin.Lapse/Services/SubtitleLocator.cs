@@ -94,7 +94,12 @@ public class SubtitleLocator
         }
     }
 
-    private static bool IsSubtitleFile(string path)
+    /// <summary>
+    /// Checks whether a path looks like a subtitle file we can work with.
+    /// </summary>
+    /// <param name="path">The path to check.</param>
+    /// <returns>True if the extension is one of the subtitle formats we handle.</returns>
+    public static bool IsSubtitleFile(string path)
     {
         var extension = Path.GetExtension(path);
         foreach (var subtitleExtension in SubtitleExtensions)

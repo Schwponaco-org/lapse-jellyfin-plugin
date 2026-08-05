@@ -352,15 +352,22 @@
     function doSync(movieId, subtitlePath) {
         showLapseToast('Syncing...');
 
-        lapsePost('Lapse/Sync', { ItemId: movieId, Mode: 'Standard', Penalty: 0, SubtitlePath: subtitlePath }).then(function (result) {
+        // no EngineId here on purpose - the server picks whichever engine is set as the
+        // default, so the quick button stays a one press job
+        lapsePost('Lapse/Sync', { ItemId: movieId, Mode: 'Standard', SubtitlePath: subtitlePath }).then(function (result) {
             if (!result.Success) {
                 showLapseToast('Sync failed: ' + result.Error);
-            } else if (result.Mode === 'Standard') {
-                showLapseToast('Synced! offset=' + result.OffsetMs + 'ms');
-            } else if (result.Mode === 'Ols') {
-                showLapseToast('Synced! slope=' + result.Slope.toFixed(4) + ', intercept=' + result.Intercept.toFixed(2) + 's');
+                return;
+            }
+
+            if (result.Mode === 'Standard' && result.OffsetMs != null) {
+                showLapseToast('Synced! offset ' + result.OffsetMs + 'ms');
+            } else if (result.Mode === 'Ols' && result.Slope != null) {
+                showLapseToast('Synced! slope ' + result.Slope.toFixed(4) + ', intercept ' + result.Intercept.toFixed(2) + 's');
+            } else if (result.Mode === 'Split' && result.Penalty != null) {
+                showLapseToast('Synced! (split, penalty ' + result.Penalty + ')');
             } else {
-                showLapseToast('Synced! (split, penalty=' + result.Penalty + ')');
+                showLapseToast('Synced! ' + (result.EngineOutput || ''));
             }
         }).catch(function (err) {
             showLapseToast('Sync failed: ' + err.message);

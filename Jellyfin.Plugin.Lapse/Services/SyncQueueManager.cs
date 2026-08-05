@@ -9,7 +9,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Data.Enums;
 using Jellyfin.Plugin.Lapse.Data;
-using Jellyfin.Plugin.Lapse.Engine;
+using Jellyfin.Plugin.Lapse.Engines;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
 using Microsoft.Extensions.Logging;
@@ -19,14 +19,16 @@ namespace Jellyfin.Plugin.Lapse.Services;
 /// <summary>
 /// Runs bulk (and auto-sync) subtitle sync jobs one movie at a time in the background,
 /// so the dashboard doesn't have to wait around for a whole library to finish.
-/// Bulk and auto-sync jobs always run standard (OLS) mode against every external
-/// subtitle a movie has - there's no UI in the background path to pick mode/penalty/subtitle.
+/// Bulk and auto-sync jobs always run standard mode with the default engine against every
+/// external subtitle a movie has - there's no UI in the background path to pick
+/// engine/mode/penalty/subtitle.
 /// </summary>
 public class SyncQueueManager
 {
     private readonly ILibraryManager _libraryManager;
     private readonly SubtitleLocator _subtitleLocator;
-    private readonly LapseEngineClient _engineClient;
+    private readonly EngineRegistry _registry;
+    private readonly EngineRunner _runner;
     private readonly ILogger<SyncQueueManager> _logger;
     private readonly object _lock = new();
     private readonly List<QueueItem> _items = new();
@@ -39,17 +41,20 @@ public class SyncQueueManager
     /// </summary>
     /// <param name="libraryManager">Used to look up movies and folders.</param>
     /// <param name="subtitleLocator">Finds external subtitles for a movie.</param>
-    /// <param name="engineClient">Runs the actual LAPSE engine.</param>
+    /// <param name="registry">Used to pick the configured default engine.</param>
+    /// <param name="runner">Runs the engine.</param>
     /// <param name="logger">Logger.</param>
     public SyncQueueManager(
         ILibraryManager libraryManager,
         SubtitleLocator subtitleLocator,
-        LapseEngineClient engineClient,
+        EngineRegistry registry,
+        EngineRunner runner,
         ILogger<SyncQueueManager> logger)
     {
         _libraryManager = libraryManager;
         _subtitleLocator = subtitleLocator;
-        _engineClient = engineClient;
+        _registry = registry;
+        _runner = runner;
         _logger = logger;
     }
 
@@ -248,15 +253,18 @@ public class SyncQueueManager
         string? lastError = null;
         SyncResult? lastResult = null;
 
+        var engine = _registry.GetDefault();
+        var penalty = EngineRunner.ResolvePenalty(engine, null);
+
         foreach (var subtitle in subtitles)
         {
-            var result = await _engineClient.RunAsync(movie.Path, subtitle.Path, SyncMode.Standard, 0).ConfigureAwait(false);
+            var result = await _runner.RunAsync(engine, movie.Path, subtitle.Path, SyncMode.Standard, penalty).ConfigureAwait(false);
             lastResult = result;
 
             if (!result.Success)
             {
                 lastError = result.Error;
-                _logger.LogWarning("LAPSE sync failed for {Movie} ({Subtitle}): {Error}", movie.Name, subtitle.Path, result.Error);
+                _logger.LogWarning("Sync failed for {Movie} ({Subtitle}): {Error}", movie.Name, subtitle.Path, result.Error);
             }
         }
 

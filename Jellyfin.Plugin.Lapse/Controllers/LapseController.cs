@@ -11,7 +11,7 @@ using System.Net.Mime;
 using System.Threading.Tasks;
 using Jellyfin.Data.Enums;
 using Jellyfin.Plugin.Lapse.Data;
-using Jellyfin.Plugin.Lapse.Engine;
+using Jellyfin.Plugin.Lapse.Engines;
 using Jellyfin.Plugin.Lapse.Services;
 using MediaBrowser.Common.Api;
 using MediaBrowser.Controller.Entities;
@@ -33,8 +33,9 @@ public class LapseController : ControllerBase
 {
     private readonly ILibraryManager _libraryManager;
     private readonly SyncQueueManager _queueManager;
-    private readonly LapseEngineClient _engineClient;
-    private readonly EngineDownloadService _downloadService;
+    private readonly EngineRegistry _registry;
+    private readonly EngineRunner _runner;
+    private readonly EngineInstaller _installer;
     private readonly SubtitleLocator _subtitleLocator;
     private readonly SubtitleShifter _subtitleShifter;
 
@@ -43,22 +44,25 @@ public class LapseController : ControllerBase
     /// </summary>
     /// <param name="libraryManager">Used to look up movies and folders.</param>
     /// <param name="queueManager">Runs bulk/background sync jobs.</param>
-    /// <param name="engineClient">Runs single, synchronous engine calls.</param>
-    /// <param name="downloadService">Handles engine binary status/download.</param>
+    /// <param name="registry">The engines we know about.</param>
+    /// <param name="runner">Runs single, synchronous engine calls.</param>
+    /// <param name="installer">Downloads and installs engines.</param>
     /// <param name="subtitleLocator">Finds external subtitles for a movie.</param>
     /// <param name="subtitleShifter">Nudges subtitle timings by hand.</param>
     public LapseController(
         ILibraryManager libraryManager,
         SyncQueueManager queueManager,
-        LapseEngineClient engineClient,
-        EngineDownloadService downloadService,
+        EngineRegistry registry,
+        EngineRunner runner,
+        EngineInstaller installer,
         SubtitleLocator subtitleLocator,
         SubtitleShifter subtitleShifter)
     {
         _libraryManager = libraryManager;
         _queueManager = queueManager;
-        _engineClient = engineClient;
-        _downloadService = downloadService;
+        _registry = registry;
+        _runner = runner;
+        _installer = installer;
         _subtitleLocator = subtitleLocator;
         _subtitleShifter = subtitleShifter;
     }
@@ -129,15 +133,15 @@ public class LapseController : ControllerBase
             return NotFound("Movie not found, or it has no video file");
         }
 
-        var subtitlePath = request.SubtitlePath;
-        if (string.IsNullOrWhiteSpace(subtitlePath))
+        var subtitles = _subtitleLocator.GetExternalSubtitles(movie);
+        if (subtitles.Count == 0)
         {
-            var subtitles = _subtitleLocator.GetExternalSubtitles(movie);
-            if (subtitles.Count == 0)
-            {
-                return BadRequest("This movie has no external subtitle to sync");
-            }
+            return BadRequest("This movie has no external subtitle to sync");
+        }
 
+        string subtitlePath;
+        if (string.IsNullOrWhiteSpace(request.SubtitlePath))
+        {
             if (subtitles.Count > 1)
             {
                 return BadRequest("This movie has more than one external subtitle - pick one with subtitlePath");
@@ -145,8 +149,31 @@ public class LapseController : ControllerBase
 
             subtitlePath = subtitles[0].Path;
         }
+        else
+        {
+            // Only ever write to a subtitle the library actually knows about for this
+            // movie, and use the library's own copy of the path rather than the one from
+            // the request, so this can't be talked into rewriting some other file.
+            var match = subtitles.Find(s => string.Equals(s.Path, request.SubtitlePath, StringComparison.Ordinal));
+            if (match is null)
+            {
+                return BadRequest("That subtitle doesn't belong to this movie");
+            }
 
-        var result = await _engineClient.RunAsync(movie.Path, subtitlePath, request.Mode, request.Penalty).ConfigureAwait(false);
+            subtitlePath = match.Path;
+        }
+
+        var engine = _registry.Resolve(request.EngineId);
+
+        // Don't let a caller ask for something the chosen engine can't do. The dashboard
+        // already greys these out, but the API shouldn't rely on the UI behaving.
+        if (!SupportsMode(engine, request.Mode))
+        {
+            return BadRequest($"{engine.Descriptor.DisplayName} doesn't support {request.Mode} alignment");
+        }
+
+        var penalty = EngineRunner.ResolvePenalty(engine, request.Penalty);
+        var result = await _runner.RunAsync(engine, movie.Path, subtitlePath, request.Mode, penalty).ConfigureAwait(false);
 
         SyncQueueManager.SaveRecord(
             request.ItemId,
@@ -239,32 +266,136 @@ public class LapseController : ControllerBase
     }
 
     /// <summary>
-    /// Gets whether the engine binary is downloaded and ready to use.
+    /// Gets every engine the plugin knows about, whether it's usable, and what it can do.
     /// </summary>
-    /// <returns>Engine status.</returns>
-    [HttpGet("Lapse/Engine/Status")]
-    public async Task<ActionResult<EngineStatus>> GetEngineStatus()
+    /// <returns>One entry per engine.</returns>
+    [HttpGet("Lapse/Engines")]
+    public async Task<ActionResult<List<EngineInfo>>> GetEngines()
     {
-        return await _downloadService.GetStatusAsync().ConfigureAwait(false);
+        var config = Plugin.Instance!.Configuration;
+        var defaultId = _registry.GetDefault().Descriptor.Id;
+        var result = new List<EngineInfo>();
+
+        foreach (var engine in _registry.All)
+        {
+            var descriptor = engine.Descriptor;
+            var settings = config.GetEngineSettings(descriptor.Id);
+            var path = _runner.ResolvePath(engine);
+            var installed = System.IO.File.Exists(path);
+
+            result.Add(new EngineInfo
+            {
+                Id = descriptor.Id,
+                DisplayName = descriptor.DisplayName,
+                Description = descriptor.Description,
+                ProjectUrl = descriptor.ProjectUrl,
+                Installed = installed,
+                Path = path,
+                IsDefault = string.Equals(descriptor.Id, defaultId, StringComparison.OrdinalIgnoreCase),
+                DownloadSupported = EngineRunner.GetDownloadUrl(engine) is not null,
+                RunCheckError = installed ? await _runner.CheckRunnableAsync(engine).ConfigureAwait(false) : null,
+                SupportsStandard = descriptor.Capabilities.SupportsStandard,
+                SupportsOls = descriptor.Capabilities.SupportsOls,
+                SupportsSplit = descriptor.Capabilities.SupportsSplit,
+                SupportsPenalty = descriptor.Capabilities.SupportsPenalty,
+                Penalty = EngineRunner.ResolvePenalty(engine, null),
+                MinPenalty = descriptor.Capabilities.MinPenalty,
+                MaxPenalty = descriptor.Capabilities.MaxPenalty,
+                PathOverride = settings.PathOverride
+            });
+        }
+
+        return result;
     }
 
     /// <summary>
-    /// Downloads the LAPSE engine binary for this server's OS/architecture.
+    /// Downloads and installs one engine.
     /// </summary>
-    /// <returns>Ok, or a 400 explaining why it couldn't be downloaded.</returns>
-    [HttpPost("Lapse/Engine/Download")]
+    /// <param name="engineId">Which engine.</param>
+    /// <returns>Ok, or a 400 explaining why it couldn't be installed.</returns>
+    [HttpPost("Lapse/Engines/{engineId}/Install")]
     [Authorize(Policy = Policies.RequiresElevation)]
-    public async Task<ActionResult> DownloadEngine()
+    public async Task<ActionResult> InstallEngine([FromRoute] string engineId)
     {
+        var engine = _registry.Find(engineId);
+        if (engine is null)
+        {
+            return NotFound($"No engine called '{engineId}'");
+        }
+
         try
         {
-            await _downloadService.DownloadAsync().ConfigureAwait(false);
+            await _installer.InstallAsync(engine).ConfigureAwait(false);
             return Ok();
         }
         catch (Exception ex) when (ex is HttpRequestException or NotSupportedException or IOException)
         {
             return BadRequest(ex.Message);
         }
+    }
+
+    /// <summary>
+    /// Installs every engine that has a build for this machine. Engines that don't are
+    /// skipped rather than failing the whole thing.
+    /// </summary>
+    /// <returns>A short summary of what happened per engine.</returns>
+    [HttpPost("Lapse/Engines/InstallAll")]
+    [Authorize(Policy = Policies.RequiresElevation)]
+    public async Task<ActionResult> InstallAllEngines()
+    {
+        var results = new Dictionary<string, string>();
+
+        foreach (var engine in _registry.All)
+        {
+            if (EngineRunner.GetDownloadUrl(engine) is null)
+            {
+                results[engine.Descriptor.Id] = "skipped, no build for this architecture";
+                continue;
+            }
+
+            try
+            {
+                await _installer.InstallAsync(engine).ConfigureAwait(false);
+                results[engine.Descriptor.Id] = "installed";
+            }
+            catch (Exception ex) when (ex is HttpRequestException or NotSupportedException or IOException)
+            {
+                results[engine.Descriptor.Id] = "failed: " + ex.Message;
+            }
+        }
+
+        return Ok(results);
+    }
+
+    /// <summary>
+    /// Sets which engine syncs use when they don't ask for a specific one.
+    /// </summary>
+    /// <param name="engineId">Which engine.</param>
+    /// <returns>Ok.</returns>
+    [HttpPost("Lapse/Engines/{engineId}/Default")]
+    [Authorize(Policy = Policies.RequiresElevation)]
+    public ActionResult SetDefaultEngine([FromRoute] string engineId)
+    {
+        var engine = _registry.Find(engineId);
+        if (engine is null)
+        {
+            return NotFound($"No engine called '{engineId}'");
+        }
+
+        Plugin.Instance!.Configuration.DefaultEngineId = engine.Descriptor.Id;
+        Plugin.Instance!.SaveConfiguration();
+        return Ok();
+    }
+
+    private static bool SupportsMode(IEngine engine, SyncMode mode)
+    {
+        var capabilities = engine.Descriptor.Capabilities;
+        return mode switch
+        {
+            SyncMode.Ols => capabilities.SupportsOls,
+            SyncMode.Split => capabilities.SupportsSplit,
+            _ => capabilities.SupportsStandard
+        };
     }
 
     /// <summary>
@@ -311,20 +442,39 @@ public class LapseController : ControllerBase
     }
 
     /// <summary>
-    /// Syncs one subtitle file against another, always in standard (OLS) mode.
+    /// Syncs one subtitle file against another, always in standard mode.
     /// </summary>
     /// <param name="request">Reference and input subtitle paths.</param>
     /// <returns>The engine result.</returns>
     [HttpPost("Lapse/SyncSubtitles")]
     [Authorize(Policy = Policies.RequiresElevation)]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Security",
+        "CA3003:Review code for file path injection vulnerabilities",
+        Justification = "Picking two arbitrary subtitle files is the whole point of this endpoint. It's admin only, and both paths are checked to be existing subtitle files first.")]
     public async Task<ActionResult<SyncResult>> SyncSubtitles([FromBody] SubtitleSyncRequest request)
     {
-        if (string.IsNullOrWhiteSpace(request.ReferencePath) || string.IsNullOrWhiteSpace(request.InputPath))
+        if (request is null || string.IsNullOrWhiteSpace(request.ReferencePath) || string.IsNullOrWhiteSpace(request.InputPath))
         {
             return BadRequest("Both a reference and an input subtitle path are required");
         }
 
-        var result = await _engineClient.RunSubtitleToSubtitleAsync(request.ReferencePath, request.InputPath).ConfigureAwait(false);
+        // This feature is meant to point at any two files you like, so unlike the movie
+        // sync there's no library item to check them against. Still worth insisting both
+        // are real subtitle files, so a typo can't turn this into "overwrite that file".
+        if (!SubtitleLocator.IsSubtitleFile(request.ReferencePath) || !SubtitleLocator.IsSubtitleFile(request.InputPath))
+        {
+            return BadRequest("Both paths need to be subtitle files (.srt, .ass, .ssa or .vtt)");
+        }
+
+        if (!System.IO.File.Exists(request.ReferencePath) || !System.IO.File.Exists(request.InputPath))
+        {
+            return BadRequest("One of those subtitle files doesn't exist");
+        }
+
+        var engine = _registry.Resolve(request.EngineId);
+        var penalty = EngineRunner.ResolvePenalty(engine, null);
+        var result = await _runner.RunAsync(engine, request.ReferencePath, request.InputPath, SyncMode.Standard, penalty).ConfigureAwait(false);
         return result;
     }
 

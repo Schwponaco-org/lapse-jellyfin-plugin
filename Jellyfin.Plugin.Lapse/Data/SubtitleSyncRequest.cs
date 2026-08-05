@@ -10,6 +10,11 @@ namespace Jellyfin.Plugin.Lapse.Data;
 public class SubtitleSyncRequest
 {
     /// <summary>
+    /// Gets or sets which engine to use. Leave empty to use the configured default.
+    /// </summary>
+    public string? EngineId { get; set; }
+
+    /// <summary>
     /// Gets or sets the path to the subtitle file used as the reference (the one that's correct).
     /// </summary>
     public string ReferencePath { get; set; } = string.Empty;

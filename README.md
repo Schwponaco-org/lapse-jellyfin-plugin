@@ -2,7 +2,7 @@
 
 Jellyfin plugin that fixes subtitles which have drifted out of time. It lines them up against the movie's own audio, or against another subtitle file.
 
-**This repo is only the Jellyfin plugin.** The alignment engine it drives lives in a separate project, [rs-jensen/lapse](https://github.com/rs-jensen/lapse), and is not bundled here. The plugin downloads the engine for you from that project's releases, or you can point it at your own build.
+**This repo is only the Jellyfin plugin.** The alignment engines it drives are separate projects and none of them are bundled here. The plugin downloads them for you from their own releases, or you can point it at builds you made yourself. See [Engines](#engines) for what's supported.
 
 ## Installing
 
@@ -14,7 +14,7 @@ Jellyfin plugin that fixes subtitles which have drifted out of time. It lines th
 
 2. Open the **Catalog** tab, find LAPSE, and install it.
 3. Restart Jellyfin.
-4. Open the LAPSE plugin page and hit **Download engine** in the Engine section.
+4. Open the LAPSE plugin page and install an engine from the **Engines** section.
 
 Needs Jellyfin 10.11 or newer.
 
@@ -24,7 +24,7 @@ Needs Jellyfin 10.11 or newer.
 
 **A dashboard page** with:
 
-- Engine download and a status badge telling you whether the engine actually works
+- Install any of the supported engines, pick a default, and see at a glance which ones actually work
 - Every movie in your library with its sync status, searchable, so you can sync one without hunting through menus
 - Bulk sync for a whole library or a single folder, with a progress bar
 - Skip flags for movies or folders you never want touched
@@ -34,25 +34,33 @@ Needs Jellyfin 10.11 or newer.
 
 **Manual fine tuning.** If a sync gets close but is still slightly off, the Advanced dialog has a box where you can shift the subtitle by a number of seconds. Minus makes subtitles show up earlier, plus makes them show up later. This one does not involve the engine at all, so it works even if the engine is not set up. Handles `.srt` and `.vtt`.
 
+## Engines
+
+The plugin can drive three different sync engines. Install whichever you want from the dashboard, set one as the default, and the quick Sync button and bulk sync will use it.
+
+| Engine | Standard | Standard OLS | Split | Notes |
+|---|---|---|---|---|
+| [LAPSE](https://github.com/rs-jensen/lapse) | yes | yes | yes | The only one with OLS. Linux amd64 and arm64. |
+| [alass](https://github.com/kaegi/alass) | yes | no | yes | Good at uneven drift. Penalty runs 0 to 1000. **x86_64 only.** |
+| [ffsubsync](https://github.com/smacke/ffsubsync) | yes | no | no | Also corrects framerate mismatches. Linux x86_64 and arm64. |
+
+Modes an engine cannot do are shown greyed out rather than hidden, so it is clear the engine is the reason.
+
+Engines install into your Jellyfin data folder under `lapse/engines/<engine>`. If a project has no build for your server (alass on ARM, say), build it yourself and point the **Binary path override** in Settings at it.
+
 ## Alignment modes
 
-**Standard** finds a single best constant offset for the whole file and shifts everything by it. This is the default, it is what the quick Sync button uses, and it is what subtitle to subtitle sync always uses.
+**Standard** finds a single best constant offset for the whole file and shifts everything by it. This is the default, what the quick Sync button uses, and what subtitle to subtitle sync always uses. Every engine supports it.
 
-**Standard OLS** fits one slope and intercept across the whole file with ordinary least squares, instead of a flat offset. Worth trying if Standard doesn't quite land.
+**Standard OLS** fits a slope and intercept across the whole file instead of a flat offset. LAPSE only.
 
-**Split** lets the engine break the subtitle into sections that each get their own timing. Useful when a subtitle drifts unevenly, for example if it was made for a cut with different ad breaks. The penalty value controls how eager it is to add splits. Higher means fewer splits, and 6 is a good starting point.
+**Split** breaks the subtitle into sections that each get their own timing, for subtitles that drift unevenly. The penalty controls how eager it is to add splits, higher means fewer. The scale differs per engine, so the dashboard shows each engine's own range and default.
 
-## The engine
+### If an engine will not start
 
-The plugin looks for the engine binary in your Jellyfin data folder, under `lapse/engines/lapse`. The Download engine button fetches the right build for your server from the [engine releases](https://github.com/rs-jensen/lapse/releases/latest).
+The Engines section shows the actual error when a binary is installed but cannot run. The usual cause is a missing shared library. Either use a build with its dependencies statically linked, or install the missing libraries in your container.
 
-Only Linux builds (amd64 and arm64) are published. On anything else, build the engine yourself and set the **Binary path override** in the plugin settings.
-
-### If the engine will not start
-
-The Engine section shows a red "Not working" badge with the actual error when the binary is there but cannot run. The usual cause is a missing shared library. The engine links against libavcodec, libavformat, libavutil, libfvad and libfftw3, and the official Jellyfin Docker images do not ship all of those. Either use an engine build that has its dependencies statically linked, or install the missing libraries in your container.
-
-The manual fine tuning feature keeps working regardless, since it only rewrites timestamps.
+The manual fine tuning feature keeps working regardless, since it only rewrites timestamps and never touches an engine.
 
 ## Building from source
 

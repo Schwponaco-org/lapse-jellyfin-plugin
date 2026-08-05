@@ -34,6 +34,10 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
     {
         Instance = this;
 
+        // Carry any settings from the single-engine days onto the LAPSE engine entry so
+        // upgrading doesn't quietly drop a configured binary path or penalty.
+        Configuration.MigrateLegacySettings();
+
         var indexPath = Path.Combine(applicationPaths.WebPath, "index.html");
         try
         {

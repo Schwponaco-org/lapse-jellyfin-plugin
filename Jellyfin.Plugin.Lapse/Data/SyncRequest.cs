@@ -17,6 +17,11 @@ public class SyncRequest
     public Guid ItemId { get; set; }
 
     /// <summary>
+    /// Gets or sets which engine to use. Leave empty to use the configured default.
+    /// </summary>
+    public string? EngineId { get; set; }
+
+    /// <summary>
     /// Gets or sets the alignment mode to use.
     /// </summary>
     public SyncMode Mode { get; set; } = SyncMode.Standard;

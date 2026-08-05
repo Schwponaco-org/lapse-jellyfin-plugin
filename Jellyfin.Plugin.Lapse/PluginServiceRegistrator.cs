@@ -3,7 +3,7 @@
 // Licensed under GPL v3 - see LICENSE for details
 
 using System.Net.Http.Headers;
-using Jellyfin.Plugin.Lapse.Engine;
+using Jellyfin.Plugin.Lapse.Engines;
 using Jellyfin.Plugin.Lapse.Services;
 using MediaBrowser.Controller;
 using MediaBrowser.Controller.Plugins;
@@ -25,8 +25,9 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
             c.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("Jellyfin-Plugin-Lapse", "1.0"));
         });
 
-        serviceCollection.AddSingleton<LapseEngineClient>();
-        serviceCollection.AddSingleton<EngineDownloadService>();
+        serviceCollection.AddSingleton<EngineRegistry>();
+        serviceCollection.AddSingleton<EngineRunner>();
+        serviceCollection.AddSingleton<EngineInstaller>();
         serviceCollection.AddSingleton<SubtitleLocator>();
         serviceCollection.AddSingleton<SubtitleShifter>();
         serviceCollection.AddSingleton<SyncQueueManager>();
