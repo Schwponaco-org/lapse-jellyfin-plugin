@@ -20,12 +20,17 @@ public class SyncResult
     public SyncMode Mode { get; set; }
 
     /// <summary>
-    /// Gets or sets the slope, only set for OLS runs.
+    /// Gets or sets the constant offset in milliseconds, only set for Standard (nosplit) runs.
+    /// </summary>
+    public int? OffsetMs { get; set; }
+
+    /// <summary>
+    /// Gets or sets the slope, only set for Standard OLS runs.
     /// </summary>
     public double? Slope { get; set; }
 
     /// <summary>
-    /// Gets or sets the intercept in seconds, only set for OLS runs.
+    /// Gets or sets the intercept in seconds, only set for Standard OLS runs.
     /// </summary>
     public double? Intercept { get; set; }
 

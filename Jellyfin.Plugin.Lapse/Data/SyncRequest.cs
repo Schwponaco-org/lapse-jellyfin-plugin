@@ -19,7 +19,7 @@ public class SyncRequest
     /// <summary>
     /// Gets or sets the alignment mode to use.
     /// </summary>
-    public SyncMode Mode { get; set; } = SyncMode.Ols;
+    public SyncMode Mode { get; set; } = SyncMode.Standard;
 
     /// <summary>
     /// Gets or sets the penalty value. Only used when <see cref="Mode"/> is Split.

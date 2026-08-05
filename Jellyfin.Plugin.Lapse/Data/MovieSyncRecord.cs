@@ -43,12 +43,17 @@ public class MovieSyncRecord
     public int? Penalty { get; set; }
 
     /// <summary>
-    /// Gets or sets the slope from the last OLS sync.
+    /// Gets or sets the constant offset (in milliseconds) from the last Standard sync.
+    /// </summary>
+    public int? OffsetMs { get; set; }
+
+    /// <summary>
+    /// Gets or sets the slope from the last Standard OLS sync.
     /// </summary>
     public double? Slope { get; set; }
 
     /// <summary>
-    /// Gets or sets the intercept (in seconds) from the last OLS sync.
+    /// Gets or sets the intercept (in seconds) from the last Standard OLS sync.
     /// </summary>
     public double? Intercept { get; set; }
 }

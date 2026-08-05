@@ -250,7 +250,7 @@ public class SyncQueueManager
 
         foreach (var subtitle in subtitles)
         {
-            var result = await _engineClient.RunAsync(movie.Path, subtitle.Path, SyncMode.Ols, 0).ConfigureAwait(false);
+            var result = await _engineClient.RunAsync(movie.Path, subtitle.Path, SyncMode.Standard, 0).ConfigureAwait(false);
             lastResult = result;
 
             if (!result.Success)
@@ -306,6 +306,7 @@ public class SyncQueueManager
         record.LastError = error;
         record.Mode = result?.Mode;
         record.Penalty = result?.Penalty;
+        record.OffsetMs = result?.OffsetMs;
         record.Slope = result?.Slope;
         record.Intercept = result?.Intercept;
 

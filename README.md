@@ -36,7 +36,9 @@ Needs Jellyfin 10.11 or newer.
 
 ## Alignment modes
 
-**Standard** works out one timing correction for the whole file. This is what you want most of the time, and it is what the quick Sync button uses.
+**Standard** finds a single best constant offset for the whole file and shifts everything by it. This is the default, it is what the quick Sync button uses, and it is what subtitle to subtitle sync always uses.
+
+**Standard OLS** fits one slope and intercept across the whole file with ordinary least squares, instead of a flat offset. Worth trying if Standard doesn't quite land.
 
 **Split** lets the engine break the subtitle into sections that each get their own timing. Useful when a subtitle drifts unevenly, for example if it was made for a cut with different ad breaks. The penalty value controls how eager it is to add splits. Higher means fewer splits, and 6 is a good starting point.
 

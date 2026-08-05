@@ -256,7 +256,7 @@
 
     function runSync(view, itemId, name, subtitlePath) {
         Dashboard.showLoadingMsg();
-        lapsePost('Lapse/Sync', { ItemId: itemId, Mode: 'Ols', Penalty: 0, SubtitlePath: subtitlePath }).then(function (result) {
+        lapsePost('Lapse/Sync', { ItemId: itemId, Mode: 'Standard', Penalty: 0, SubtitlePath: subtitlePath }).then(function (result) {
             Dashboard.hideLoadingMsg();
             showSyncResultAlert(name, result);
             refreshMovieList(view);
@@ -302,7 +302,9 @@
             return;
         }
 
-        if (result.Mode === 'Ols') {
+        if (result.Mode === 'Standard') {
+            Dashboard.alert(name + ': synced (offset=' + result.OffsetMs + 'ms)');
+        } else if (result.Mode === 'Ols') {
             Dashboard.alert(name + ': synced (slope=' + result.Slope.toFixed(4) + ', intercept=' + result.Intercept.toFixed(2) + 's)');
         } else {
             Dashboard.alert(name + ': synced (split, penalty=' + result.Penalty + ')');
@@ -346,7 +348,8 @@
             '  <div class="selectContainer">' +
             '    <label class="selectLabel">Mode</label>' +
             '    <select is="emby-select" id="lapseAdvMode" class="emby-select-withcolor emby-select">' +
-            '      <option value="Ols">Standard</option>' +
+            '      <option value="Standard">Standard</option>' +
+            '      <option value="Ols">Standard OLS</option>' +
             '      <option value="Split">Split</option>' +
             '    </select>' +
             '  </div>' +

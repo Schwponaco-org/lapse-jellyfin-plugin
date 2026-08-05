@@ -352,11 +352,15 @@
     function doSync(movieId, subtitlePath) {
         showLapseToast('Syncing...');
 
-        lapsePost('Lapse/Sync', { ItemId: movieId, Mode: 'Ols', Penalty: 0, SubtitlePath: subtitlePath }).then(function (result) {
-            if (result.Success) {
+        lapsePost('Lapse/Sync', { ItemId: movieId, Mode: 'Standard', Penalty: 0, SubtitlePath: subtitlePath }).then(function (result) {
+            if (!result.Success) {
+                showLapseToast('Sync failed: ' + result.Error);
+            } else if (result.Mode === 'Standard') {
+                showLapseToast('Synced! offset=' + result.OffsetMs + 'ms');
+            } else if (result.Mode === 'Ols') {
                 showLapseToast('Synced! slope=' + result.Slope.toFixed(4) + ', intercept=' + result.Intercept.toFixed(2) + 's');
             } else {
-                showLapseToast('Sync failed: ' + result.Error);
+                showLapseToast('Synced! (split, penalty=' + result.Penalty + ')');
             }
         }).catch(function (err) {
             showLapseToast('Sync failed: ' + err.message);

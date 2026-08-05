@@ -17,12 +17,18 @@ using Microsoft.Extensions.Logging;
 namespace Jellyfin.Plugin.Lapse.Engine;
 
 /// <summary>
-/// Runs the LAPSE engine binary and reads back what it printed.
+/// Runs the LAPSE engine binary and reads back what it printed. The engine's own CLI is
+/// "lapse &lt;video_or_subtitle&gt; &lt;subtitle&gt; [ols|nosplit|split] [penalty]" - the
+/// mode argument decides which of the three output formats we get back.
 /// </summary>
 public partial class LapseEngineClient
 {
-    // Matches: Done (OLS): slope=1.0021 intercept=0.42s -> /path/to/out.srt
-    [GeneratedRegex(@"^Done \(OLS\): slope=(?<slope>[-0-9.eE+]+) intercept=(?<intercept>[-0-9.eE+]+)s -> (?<path>.+)$", RegexOptions.Multiline)]
+    // Matches: Done (nosplit): offset=1250ms -> /path/to/out.srt
+    [GeneratedRegex(@"^Done \(nosplit\): offset=(?<offset>-?[0-9]+)ms -> (?<path>.+)$", RegexOptions.Multiline)]
+    private static partial Regex NosplitOutputRegex();
+
+    // Matches: Done (ols): slope=1.0021 intercept=0.42s -> /path/to/out.srt
+    [GeneratedRegex(@"^Done \(ols\): slope=(?<slope>[-0-9.eE+]+) intercept=(?<intercept>[-0-9.eE+]+)s -> (?<path>.+)$", RegexOptions.Multiline)]
     private static partial Regex OlsOutputRegex();
 
     // Matches: Done (split, p=6): /path/to/out.srt
@@ -144,7 +150,7 @@ public partial class LapseEngineClient
     /// </summary>
     /// <param name="videoOrSubtitlePath">Path to the video (or reference subtitle) file.</param>
     /// <param name="subtitlePath">Path to the subtitle that needs to be lined up.</param>
-    /// <param name="mode">Standard (OLS) or split alignment.</param>
+    /// <param name="mode">Standard, Standard OLS, or split alignment.</param>
     /// <param name="penalty">Penalty value, only used for split mode.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The parsed result.</returns>
@@ -155,35 +161,38 @@ public partial class LapseEngineClient
         int penalty,
         CancellationToken cancellationToken = default)
     {
-        var args = new[] { videoOrSubtitlePath, subtitlePath };
-        var penaltyArg = mode == SyncMode.Split ? penalty : (int?)null;
-
-        var (stdout, stderr, exitCode) = await RunProcessAsync(args, penaltyArg, cancellationToken).ConfigureAwait(false);
+        var (stdout, stderr, exitCode) = await RunProcessAsync(videoOrSubtitlePath, subtitlePath, mode, penalty, cancellationToken).ConfigureAwait(false);
 
         return ParseOutput(stdout, stderr, exitCode, mode);
     }
 
     /// <summary>
-    /// Syncs one subtitle file against another. Always standard (OLS) mode, no penalty.
+    /// Syncs one subtitle file against another. Always Standard mode, no penalty.
     /// </summary>
     /// <param name="referencePath">The subtitle that's already correctly timed.</param>
     /// <param name="inputPath">The subtitle that needs to be lined up.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The parsed result.</returns>
-    public async Task<SyncResult> RunSubtitleToSubtitleAsync(
+    public Task<SyncResult> RunSubtitleToSubtitleAsync(
         string referencePath,
         string inputPath,
         CancellationToken cancellationToken = default)
     {
-        var args = new[] { referencePath, inputPath };
-        var (stdout, stderr, exitCode) = await RunProcessAsync(args, null, cancellationToken).ConfigureAwait(false);
-
-        return ParseOutput(stdout, stderr, exitCode, SyncMode.Ols);
+        return RunAsync(referencePath, inputPath, SyncMode.Standard, 0, cancellationToken);
     }
 
+    private static string ModeArgument(SyncMode mode) => mode switch
+    {
+        SyncMode.Ols => "ols",
+        SyncMode.Split => "split",
+        _ => "nosplit"
+    };
+
     private async Task<(string Stdout, string Stderr, int ExitCode)> RunProcessAsync(
-        string[] args,
-        int? penalty,
+        string videoOrSubtitlePath,
+        string subtitlePath,
+        SyncMode mode,
+        int penalty,
         CancellationToken cancellationToken)
     {
         var enginePath = ResolveEnginePath();
@@ -203,14 +212,13 @@ public partial class LapseEngineClient
             CreateNoWindow = true
         };
 
-        foreach (var arg in args)
-        {
-            startInfo.ArgumentList.Add(arg);
-        }
+        startInfo.ArgumentList.Add(videoOrSubtitlePath);
+        startInfo.ArgumentList.Add(subtitlePath);
+        startInfo.ArgumentList.Add(ModeArgument(mode));
 
-        if (penalty.HasValue)
+        if (mode == SyncMode.Split)
         {
-            startInfo.ArgumentList.Add(penalty.Value.ToString(CultureInfo.InvariantCulture));
+            startInfo.ArgumentList.Add(penalty.ToString(CultureInfo.InvariantCulture));
         }
 
         _logger.LogInformation("Running LAPSE engine: {Path} {Args}", enginePath, string.Join(' ', startInfo.ArgumentList));
@@ -250,6 +258,18 @@ public partial class LapseEngineClient
             var error = string.IsNullOrWhiteSpace(stderr) ? $"Engine exited with code {exitCode}" : stderr.Trim();
             _logger.LogWarning("LAPSE engine failed: {Error}", error);
             return new SyncResult { Success = false, Mode = requestedMode, Error = error };
+        }
+
+        var nosplitMatch = NosplitOutputRegex().Match(stdout);
+        if (nosplitMatch.Success)
+        {
+            return new SyncResult
+            {
+                Success = true,
+                Mode = SyncMode.Standard,
+                OffsetMs = int.Parse(nosplitMatch.Groups["offset"].Value, CultureInfo.InvariantCulture),
+                OutputPath = nosplitMatch.Groups["path"].Value.Trim()
+            };
         }
 
         var olsMatch = OlsOutputRegex().Match(stdout);
