@@ -40,7 +40,7 @@ The plugin can drive three different sync engines. Install whichever you want fr
 
 | Engine | Standard | Standard OLS | Split | Notes |
 |---|---|---|---|---|
-| [LAPSE](https://github.com/rs-jensen/lapse) | yes | yes | yes | The only one with OLS. Linux amd64 and arm64. |
+| [LAPSE](https://github.com/rs-jensen/lapse) | yes | yes | yes | Linux amd64 and arm64. |
 | [alass](https://github.com/kaegi/alass) | yes | no | yes | Good at uneven drift. Penalty runs 0 to 1000. **x86_64 only.** |
 | [ffsubsync](https://github.com/smacke/ffsubsync) | yes | no | no | Also corrects framerate mismatches. Linux x86_64 and arm64. |
 
