@@ -60,7 +60,9 @@ public partial class AlassEngine : IEngine
         }
         else
         {
-            args.Add("--no-splits");
+            // singular. alass's own README writes this as --no-splits, which the binary
+            // rejects, so this comes from the argument definitions in its source instead.
+            args.Add("--no-split");
         }
 
         return args;

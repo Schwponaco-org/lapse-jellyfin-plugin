@@ -11,6 +11,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.Lapse.Data;
 using MediaBrowser.Common.Configuration;
+using MediaBrowser.Controller.MediaEncoding;
 using Microsoft.Extensions.Logging;
 
 namespace Jellyfin.Plugin.Lapse.Engines;
@@ -24,6 +25,7 @@ public class EngineRunner
 {
     private readonly IApplicationPaths _applicationPaths;
     private readonly EngineRegistry _registry;
+    private readonly IMediaEncoder _mediaEncoder;
     private readonly ILogger<EngineRunner> _logger;
 
     /// <summary>
@@ -31,11 +33,17 @@ public class EngineRunner
     /// </summary>
     /// <param name="applicationPaths">Used to find where engines get installed.</param>
     /// <param name="registry">The known engines.</param>
+    /// <param name="mediaEncoder">Used to find the ffmpeg Jellyfin already ships.</param>
     /// <param name="logger">Logger.</param>
-    public EngineRunner(IApplicationPaths applicationPaths, EngineRegistry registry, ILogger<EngineRunner> logger)
+    public EngineRunner(
+        IApplicationPaths applicationPaths,
+        EngineRegistry registry,
+        IMediaEncoder mediaEncoder,
+        ILogger<EngineRunner> logger)
     {
         _applicationPaths = applicationPaths;
         _registry = registry;
+        _mediaEncoder = mediaEncoder;
         _logger = logger;
     }
 
@@ -259,6 +267,8 @@ public class EngineRunner
             startInfo.ArgumentList.Add(arg);
         }
 
+        AddFfmpegToPath(startInfo);
+
         _logger.LogInformation("Running engine: {Path} {Args}", enginePath, string.Join(' ', startInfo.ArgumentList));
 
         using var process = new Process { StartInfo = startInfo };
@@ -287,6 +297,39 @@ public class EngineRunner
         await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
 
         return (stdoutBuilder.ToString(), stderrBuilder.ToString(), process.ExitCode);
+    }
+
+    // ffsubsync shells out to ffmpeg and ffprobe by name, and the Jellyfin docker images
+    // don't have either on PATH - they live in the jellyfin-ffmpeg folder instead. Without
+    // this ffsubsync dies with "No such file or directory: 'ffmpeg'". Jellyfin already
+    // knows where its own build is, so borrow that rather than making people install
+    // a second copy of ffmpeg.
+    private void AddFfmpegToPath(ProcessStartInfo startInfo)
+    {
+        var folders = new List<string>();
+
+        foreach (var toolPath in new[] { _mediaEncoder.EncoderPath, _mediaEncoder.ProbePath })
+        {
+            if (string.IsNullOrWhiteSpace(toolPath))
+            {
+                continue;
+            }
+
+            var folder = Path.GetDirectoryName(toolPath);
+            if (!string.IsNullOrEmpty(folder) && Directory.Exists(folder) && !folders.Contains(folder))
+            {
+                folders.Add(folder);
+            }
+        }
+
+        if (folders.Count == 0)
+        {
+            return;
+        }
+
+        var existing = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+        folders.Add(existing);
+        startInfo.Environment["PATH"] = string.Join(Path.PathSeparator, folders);
     }
 
     private static void TryKill(Process process)

@@ -66,6 +66,16 @@ public class EngineInstaller
 
         var targetPath = _runner.GetInstalledPath(engine);
         var engineFolder = Path.GetDirectoryName(targetPath)!;
+
+        // Before there were several engines, LAPSE's binary was a file sitting directly at
+        // engines/lapse. Now that path needs to be the engine's folder, so an old install
+        // blocks the new one with "the file already exists". Clear the stale binary out.
+        if (File.Exists(engineFolder))
+        {
+            _logger.LogInformation("Removing old style engine binary at {Path} to make room for the new layout", engineFolder);
+            File.Delete(engineFolder);
+        }
+
         Directory.CreateDirectory(engineFolder);
 
         _logger.LogInformation("Installing {Engine} from {Url}", engine.Descriptor.DisplayName, url);
