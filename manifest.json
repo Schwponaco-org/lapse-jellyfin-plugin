@@ -6,6 +6,7 @@
     "description": "Lines up subtitles against a movie's audio or against another subtitle file, using the LAPSE alignment engine. Adds a Sync Subtitles button to the movie context menu, a dashboard for bulk syncing and engine setup, auto sync for newly added movies, and manual fine tuning for when a sync lands close but not perfect.",
     "owner": "rs-jensen",
     "category": "General",
+    "imageUrl": "https://raw.githubusercontent.com/rs-jensen/lapse-jellyfin-plugin/main/Jellyfin.Plugin.Lapse/Configuration/LAPSE.png",
     "versions": [
       {
         "version": "1.3.3.0",
