@@ -3,8 +3,14 @@
    Licensed under GPL v3 - see LICENSE for details
 
    Everything here leans on Jellyfin's own colours (currentColor and the --theme-*
-   variables) so the page follows whatever theme the user has picked. This file is
-   only about layout density, the top bar, and the engine cards. */
+   variables) so the page follows whatever theme the user has picked. Where an accent
+   is genuinely needed it's Jellyfin's own blue, taken from --accent-color when the
+   theme exposes it and falling back to the stock #00A4DC otherwise. Status is said in
+   words rather than shown as a coloured dot. */
+
+.lapseSection {
+    --lapse-accent: var(--accent-color, #00A4DC);
+}
 
 /* --- top bar --- */
 
@@ -21,7 +27,7 @@
     margin: 0 0 .1em 0;
 }
 
-.lapseEngineDots {
+.lapseEngineStates {
     display: flex;
     gap: .9em;
     flex-wrap: wrap;
@@ -29,30 +35,19 @@
     opacity: .85;
 }
 
-.lapseEngineDot {
+.lapseEngineState {
     display: flex;
     align-items: center;
     gap: .35em;
     white-space: nowrap;
 }
 
-.lapseEngineDot::before {
-    content: "";
-    width: .55em;
-    height: .55em;
-    border-radius: 50%;
-    background: currentColor;
-    opacity: .3;
+.lapseEngineState-broken {
+    color: #d84343;
 }
 
-.lapseEngineDot-ready::before {
-    background: #52b54b;
-    opacity: 1;
-}
-
-.lapseEngineDot-broken::before {
-    background: #d84343;
-    opacity: 1;
+.lapseMuted {
+    opacity: .6;
 }
 
 /* --- queue strip, sits under the top bar instead of taking a whole section --- */
@@ -132,30 +127,63 @@
     padding: .2em .2em 1.1em 1.4em;
 }
 
+/* --- sub-sections inside Advanced ---
+   Same markup and behaviour as a top level section, just quieter, so the Advanced
+   section reads as a folder of settings rather than another wall of them. */
+
+.lapseAdvancedBody {
+    padding-bottom: .4em;
+}
+
+.lapseSubSection {
+    border-top: 1px solid rgba(127, 127, 127, .18);
+}
+
+.lapseSubSection-last {
+    border-bottom: 1px solid rgba(127, 127, 127, .18);
+}
+
+.lapseSubSection > .lapseSectionHeader {
+    padding: .55em .2em;
+}
+
+.lapseSubSection > .lapseSectionHeader .lapseSectionTitle {
+    font-size: .96em;
+    font-weight: 400;
+}
+
+.lapseSubSection > .lapseSectionHeader::before {
+    font-size: 1em;
+}
+
+.lapseSubSection > .lapseSectionBody {
+    padding: .1em .2em .9em 1.2em;
+}
+
 /* --- engine cards --- */
 
 .lapseEngineCards {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(15em, 1fr));
-    gap: .7em;
+    gap: .6em;
     margin-bottom: .9em;
 }
 
 .lapseEngineCard {
     border: 1px solid rgba(127, 127, 127, .3);
     border-radius: .35em;
-    padding: .7em .8em;
+    padding: .6em .7em;
     display: flex;
     flex-direction: column;
-    gap: .45em;
+    gap: .35em;
 }
 
 .lapseEngineCard-default {
-    border-color: #52b54b;
+    border-color: var(--lapse-accent, #00A4DC);
 }
 
 .lapseEngineCard-unavailable {
-    opacity: .5;
+    opacity: .75;
 }
 
 .lapseEngineCardTop {
@@ -169,10 +197,19 @@
     font-weight: 500;
 }
 
+.lapseEngineStateLabel {
+    font-size: .78em;
+}
+
 .lapseEngineDesc {
     font-size: .82em;
     opacity: .65;
     line-height: 1.35;
+}
+
+.lapseEngineVersion {
+    font-size: .76em;
+    opacity: .55;
 }
 
 .lapseEngineChips {
@@ -190,7 +227,7 @@
 }
 
 .lapseChip-on {
-    background: rgba(82, 181, 75, .25);
+    background: rgba(0, 164, 220, .25);
 }
 
 .lapseEngineActions {
@@ -200,11 +237,76 @@
     margin-top: .1em;
 }
 
+.lapseAutoUpdateRow {
+    font-size: .8em;
+}
+
 .lapseEngineError {
     font-size: .78em;
     color: #d84343;
     line-height: 1.35;
     word-break: break-word;
+}
+
+/* Not an error - this is the "there's no build for your OS, here's what to do instead"
+   note, which is the most useful thing on the card for anyone not on Linux. */
+.lapseEngineNotice {
+    font-size: .78em;
+    line-height: 1.4;
+    word-break: break-word;
+    border-left: 2px solid var(--lapse-accent, #00A4DC);
+    padding-left: .6em;
+    opacity: .85;
+}
+
+/* --- libraries --- */
+
+.lapseLibraryList {
+    border: 1px solid rgba(127, 127, 127, .2);
+    border-radius: .3em;
+    margin-bottom: .8em;
+}
+
+.lapseLibraryRow {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: .8em;
+    flex-wrap: wrap;
+    padding: .5em .7em;
+    border-bottom: 1px solid rgba(127, 127, 127, .15);
+}
+
+.lapseLibraryRow:last-child {
+    border-bottom: 0;
+}
+
+.lapseLibraryMain {
+    display: flex;
+    align-items: center;
+    gap: .6em;
+    flex-wrap: wrap;
+}
+
+.lapseLibraryName {
+    font-weight: 500;
+}
+
+.lapseLibraryType {
+    font-size: .78em;
+}
+
+.lapseLibrarySchedule {
+    display: flex;
+    align-items: center;
+    gap: .5em;
+    flex-wrap: wrap;
+}
+
+.lapseLibrarySchedule select,
+.lapseLibrarySchedule input[type="time"] {
+    margin: 0 !important;
+    min-width: 8em;
 }
 
 /* --- shared small bits --- */
@@ -236,7 +338,7 @@
 }
 
 .lapseFilterRow select {
-    flex: 1 1 14em;
+    flex: 0 1 12em;
 }
 
 .lapseInlineCheck {
@@ -245,6 +347,13 @@
     gap: .3em;
     white-space: nowrap;
     margin: 0 !important;
+}
+
+.lapseStackedCheck {
+    display: flex !important;
+    align-items: center;
+    gap: .4em;
+    margin: .3em 0 .6em 0 !important;
 }
 
 .lapseTightNote {
@@ -261,16 +370,48 @@
     flex-grow: 1;
 }
 
-/* --- movie list --- */
+.lapseRadioGroup {
+    display: flex;
+    flex-direction: column;
+    gap: .4em;
+    margin-bottom: 1em;
+}
 
-.lapseMovieList {
-    max-height: 24em;
+.lapseRadioRow {
+    display: flex;
+    align-items: flex-start;
+    gap: .5em;
+    cursor: pointer;
+}
+
+.lapseRadioRow input[type="radio"] {
+    margin-top: .25em;
+    accent-color: var(--lapse-accent, #00A4DC);
+}
+
+.lapseRadioLabel {
+    display: flex;
+    flex-direction: column;
+}
+
+.lapseEngineSettingBlock {
+    margin-bottom: 1.2em;
+}
+
+.lapseEngineSettingName {
+    margin-bottom: .3em;
+}
+
+/* --- item list --- */
+
+.lapseItemList {
+    max-height: 26em;
     overflow-y: auto;
     border: 1px solid rgba(127, 127, 127, .2);
     border-radius: .3em;
 }
 
-.lapseMovieRow {
+.lapseItemRow {
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -279,12 +420,18 @@
     padding: .35em .6em !important;
 }
 
-.lapseMovieRowActions {
+.lapseItemMeta,
+.lapseItemError {
+    font-size: .78em;
+    opacity: .7;
+}
+
+.lapseItemRowActions {
     display: flex;
     gap: .25em;
 }
 
-.lapseMovieRowActions button {
+.lapseItemRowActions button {
     padding: .25em .7em !important;
     margin: 0 !important;
     font-size: .82em;
@@ -304,11 +451,12 @@
 }
 
 .lapseStatusPill-synced {
-    background: rgba(82, 181, 75, .3);
+    background: rgba(0, 164, 220, .3);
 }
 
 .lapseStatusPill-skipped {
-    background: rgba(255, 193, 7, .3);
+    background: rgba(150, 150, 150, .18);
+    border: 1px solid rgba(127, 127, 127, .4);
 }
 
 .lapseStatusPill-failed {
@@ -333,7 +481,7 @@
     border-radius: .3em;
     padding: 1.4em;
     max-width: 90vw;
-    width: 23em;
+    width: 24em;
     max-height: 90vh;
     overflow-y: auto;
     box-shadow: 0 4px 24px rgba(0, 0, 0, .5);
@@ -341,6 +489,11 @@
 
 .lapseDialogCard h3 {
     margin-top: 0;
+}
+
+.lapseDialogRule {
+    margin: 1.2em 0;
+    opacity: .2;
 }
 
 .lapseDialogButtons {
@@ -351,6 +504,16 @@
 
 .lapseDialogButtons button {
     flex: 1;
+}
+
+.lapseNudgeRow {
+    display: flex;
+    gap: .5em;
+    align-items: center;
+}
+
+.lapseNudgeRow input {
+    flex-grow: 1;
 }
 
 .lapseIframeOverlay {

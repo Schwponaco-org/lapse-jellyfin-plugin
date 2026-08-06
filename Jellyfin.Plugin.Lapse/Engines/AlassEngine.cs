@@ -29,13 +29,19 @@ public partial class AlassEngine : IEngine
         DisplayName = "alass",
         Description = "Handles subtitles that drift unevenly, for example around ad breaks. No OLS mode.",
         ProjectUrl = "https://github.com/kaegi/alass",
+        GitHubRepo = "kaegi/alass",
+        BuildGuideUrl = "https://github.com/kaegi/alass#installation",
         ExecutableName = "alass",
-        Packaging = EnginePackaging.RawBinary,
-        Amd64Url = "https://github.com/kaegi/alass/releases/latest/download/alass-linux64",
+        LinuxAmd64 = new EngineDownload(
+            "https://github.com/kaegi/alass/releases/latest/download/alass-linux64",
+            EnginePackaging.RawBinary),
+        WindowsAmd64 = new EngineDownload(
+            "https://github.com/kaegi/alass/releases/latest/download/alass-windows64.zip",
+            EnginePackaging.Zip),
 
-        // alass only publishes an x86_64 build, so there's deliberately no arm64 URL here.
-        // The installer turns that into a clear "no build for this architecture" message.
-        Arm64Url = null,
+        // alass only publishes x86_64 builds, so there's deliberately no arm64 or macOS
+        // entry here. The installer turns that into a clear "no build for this machine"
+        // message with a link to the build instructions.
         Capabilities = new EngineCapabilities
         {
             SupportsStandard = true,
@@ -49,14 +55,17 @@ public partial class AlassEngine : IEngine
     };
 
     /// <inheritdoc />
-    public IReadOnlyList<string> BuildArguments(string referencePath, string inputPath, string outputPath, SyncMode mode, int penalty, string? ffmpegDirectory)
-    {
-        var args = new List<string> { referencePath, inputPath, outputPath };
+    public bool NeedsSeededOutput(EngineRuntimeInfo runtime) => false;
 
-        if (mode == SyncMode.Split)
+    /// <inheritdoc />
+    public IReadOnlyList<string> BuildArguments(EngineRunOptions options)
+    {
+        var args = new List<string> { options.ReferencePath, options.InputPath, options.OutputPath };
+
+        if (options.Mode == SyncMode.Split)
         {
             args.Add("--split-penalty");
-            args.Add(penalty.ToString(CultureInfo.InvariantCulture));
+            args.Add(options.Penalty.ToString(CultureInfo.InvariantCulture));
         }
         else
         {

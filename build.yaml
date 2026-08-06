@@ -7,9 +7,11 @@ framework: "net9.0"
 overview: "Sync subtitles to audio (or subtitle to subtitle) using the LAPSE engine"
 description: >
   LAPSE lines up subtitles that have drifted out of sync, either against the
-  movie's own audio or against another subtitle file. Adds a "Sync Subtitles"
-  button to the movie context menu, a dashboard page for bulk syncing a
-  whole library or folder, and auto-syncs new movies as they get added.
+  item's own audio or against another subtitle file. Adds "Sync Subtitles" and
+  "Sync All Subtitles to Reference" to the context menu on films, episodes and
+  loose videos, a dashboard for per-library settings, schedules, bulk syncing
+  and engine management, and optional subtitle translation through Google
+  Translate or a self-hosted Lingarr.
 category: "General"
 owner: "rs-jensen"
 artifacts:

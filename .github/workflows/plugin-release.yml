@@ -93,6 +93,11 @@ jobs:
           SOURCE_URL="https://github.com/${{ github.repository }}/releases/download/${{ steps.vars.outputs.tag }}/${{ steps.vars.outputs.zip }}"
           TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
+          # Pinned to this tag rather than main, so the catalog thumbnail always points at
+          # a commit that actually has the file, instead of whatever main happens to be
+          # (which briefly didn't have it at all, and could change shape again later).
+          IMAGE_URL="https://raw.githubusercontent.com/${{ github.repository }}/${{ steps.vars.outputs.tag }}/Jellyfin.Plugin.Lapse/Configuration/LAPSE.png"
+
           # Newest version goes first. Drop any existing entry for the same version so
           # re-running a tag replaces it instead of listing it twice.
           jq --arg version "${{ steps.vars.outputs.version }}" \
@@ -100,7 +105,9 @@ jobs:
              --arg url "$SOURCE_URL" \
              --arg checksum "${{ steps.package.outputs.checksum }}" \
              --arg timestamp "$TIMESTAMP" \
-             '.[0].versions = ([{
+             --arg image "$IMAGE_URL" \
+             '.[0].imageUrl = $image
+              | .[0].versions = ([{
                 version: $version,
                 changelog: "See the release notes on GitHub.",
                 targetAbi: $abi,

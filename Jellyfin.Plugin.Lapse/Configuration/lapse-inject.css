@@ -28,6 +28,12 @@
     margin-top: 0;
 }
 
+.lapseDialogCard .fieldDescription {
+    font-size: .85em;
+    opacity: .7;
+    line-height: 1.4;
+}
+
 .lapseDialogButtons {
     display: flex;
     gap: .5em;

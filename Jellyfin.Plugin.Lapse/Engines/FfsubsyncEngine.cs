@@ -31,10 +31,24 @@ public partial class FfsubsyncEngine : IEngine
         DisplayName = "ffsubsync",
         Description = "Shifts the whole subtitle and can fix a framerate mismatch. No split alignment.",
         ProjectUrl = "https://github.com/smacke/ffsubsync",
+        GitHubRepo = "smacke/ffsubsync",
+        BuildGuideUrl = "https://github.com/smacke/ffsubsync#installation",
         ExecutableName = "ffsubsync",
-        Packaging = EnginePackaging.TarGz,
-        Amd64Url = "https://github.com/smacke/ffsubsync/releases/latest/download/linux-x86_64.tar.gz",
-        Arm64Url = "https://github.com/smacke/ffsubsync/releases/latest/download/linux-arm64.tar.gz",
+        LinuxAmd64 = new EngineDownload(
+            "https://github.com/smacke/ffsubsync/releases/latest/download/linux-x86_64.tar.gz",
+            EnginePackaging.TarGz),
+        LinuxArm64 = new EngineDownload(
+            "https://github.com/smacke/ffsubsync/releases/latest/download/linux-arm64.tar.gz",
+            EnginePackaging.TarGz),
+        WindowsAmd64 = new EngineDownload(
+            "https://github.com/smacke/ffsubsync/releases/latest/download/windows-x86_64.zip",
+            EnginePackaging.Zip),
+        MacAmd64 = new EngineDownload(
+            "https://github.com/smacke/ffsubsync/releases/latest/download/macos-x86_64.tar.gz",
+            EnginePackaging.TarGz),
+        MacArm64 = new EngineDownload(
+            "https://github.com/smacke/ffsubsync/releases/latest/download/macos-arm64.tar.gz",
+            EnginePackaging.TarGz),
         Capabilities = new EngineCapabilities
         {
             SupportsStandard = true,
@@ -48,17 +62,20 @@ public partial class FfsubsyncEngine : IEngine
     };
 
     /// <inheritdoc />
-    public IReadOnlyList<string> BuildArguments(string referencePath, string inputPath, string outputPath, SyncMode mode, int penalty, string? ffmpegDirectory)
+    public bool NeedsSeededOutput(EngineRuntimeInfo runtime) => false;
+
+    /// <inheritdoc />
+    public IReadOnlyList<string> BuildArguments(EngineRunOptions options)
     {
-        var args = new List<string> { referencePath, "-i", inputPath, "-o", outputPath };
+        var args = new List<string> { options.ReferencePath, "-i", options.InputPath, "-o", options.OutputPath };
 
         // ffsubsync runs ffmpeg and ffprobe itself. Telling it exactly which folder to
         // look in is steadier than hoping PATH resolves to the same build, since the
         // Jellyfin images keep their ffmpeg somewhere PATH doesn't cover.
-        if (!string.IsNullOrEmpty(ffmpegDirectory))
+        if (!string.IsNullOrEmpty(options.FfmpegDirectory))
         {
             args.Add("--ffmpeg-path");
-            args.Add(ffmpegDirectory);
+            args.Add(options.FfmpegDirectory);
         }
 
         return args;
