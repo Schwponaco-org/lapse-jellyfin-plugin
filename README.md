@@ -70,17 +70,6 @@ dotnet build --configuration Release
 
 Copy `Jellyfin.Plugin.Lapse.dll` from `Jellyfin.Plugin.Lapse/bin/Release/net9.0/` into a `LAPSE` folder inside your Jellyfin `plugins` directory, then restart the server.
 
-## Releasing
-
-Tag a commit and push the tag:
-
-```
-git tag v1.0.0
-git push origin v1.0.0
-```
-
-The release workflow builds the plugin, zips it, attaches it to a GitHub release, and adds the new version to `manifest.json` on `main`. Anyone subscribed to the manifest URL then sees the update in Jellyfin.
-
 ## License
 
 GPL v3. See [LICENSE](LICENSE).
