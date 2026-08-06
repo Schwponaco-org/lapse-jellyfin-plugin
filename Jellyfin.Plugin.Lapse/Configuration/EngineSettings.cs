@@ -2,6 +2,8 @@
 // Copyright (C) 2026 Rasmus Stisen Jensen (rs-jensen)
 // Licensed under GPL v3 - see LICENSE for details
 
+using System;
+
 namespace Jellyfin.Plugin.Lapse.Configuration;
 
 /// <summary>
@@ -26,4 +28,28 @@ public class EngineSettings
     /// engine's own default, which matters because the scales differ wildly between them.
     /// </summary>
     public int? Penalty { get; set; }
+
+    /// <summary>
+    /// Gets or sets the release tag of the copy the plugin installed, e.g. "v1.0.7". Null
+    /// when the engine was never installed through the plugin (a hand built binary behind
+    /// a path override, say), in which case there's nothing to compare a release against.
+    /// </summary>
+    public string? InstalledVersion { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether the daily task may replace this engine's
+    /// binary when a newer release shows up.
+    /// </summary>
+    public bool AutoUpdate { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets when the plugin last asked GitHub what the newest release was. Used to
+    /// keep the dashboard from hammering the API on every page load.
+    /// </summary>
+    public DateTime? LastUpdateCheckUtc { get; set; }
+
+    /// <summary>
+    /// Gets or sets the newest release tag seen at <see cref="LastUpdateCheckUtc"/>.
+    /// </summary>
+    public string? LatestKnownVersion { get; set; }
 }

@@ -6,7 +6,6 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
-using MediaBrowser.Controller.Entities.Movies;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Model.Entities;
 using Microsoft.Extensions.Hosting;
@@ -15,9 +14,9 @@ using Microsoft.Extensions.Logging;
 namespace Jellyfin.Plugin.Lapse.Services;
 
 /// <summary>
-/// Watches for new movies getting added to the library and queues them up for a sync,
+/// Watches for new items getting added to a library and queues them up for a sync,
 /// same as the classic intro-skipper auto-detect hook. Debounced with a timer so a big
-/// library scan that adds a bunch of movies at once doesn't kick off a sync per movie
+/// library scan that adds a bunch of items at once doesn't kick off a sync per item
 /// the instant each one shows up, before its subtitles have even settled.
 /// </summary>
 public sealed class AutoSyncHostedService : IHostedService, IDisposable
@@ -25,21 +24,28 @@ public sealed class AutoSyncHostedService : IHostedService, IDisposable
     private static readonly TimeSpan DebounceDelay = TimeSpan.FromSeconds(30);
 
     private readonly ILibraryManager _libraryManager;
+    private readonly LibraryService _libraryService;
     private readonly SyncQueueManager _queueManager;
     private readonly ILogger<AutoSyncHostedService> _logger;
     private readonly Timer _debounceTimer;
     private readonly object _lock = new();
-    private readonly HashSet<Guid> _pendingMovieIds = new();
+    private readonly HashSet<Guid> _pendingItemIds = new();
 
     /// <summary>
     /// Initializes a new instance of the <see cref="AutoSyncHostedService"/> class.
     /// </summary>
     /// <param name="libraryManager">Used to subscribe to ItemAdded and look items back up.</param>
-    /// <param name="queueManager">Where newly added movies get queued for syncing.</param>
+    /// <param name="libraryService">Decides whether an item's library is turned on.</param>
+    /// <param name="queueManager">Where newly added items get queued for syncing.</param>
     /// <param name="logger">Logger.</param>
-    public AutoSyncHostedService(ILibraryManager libraryManager, SyncQueueManager queueManager, ILogger<AutoSyncHostedService> logger)
+    public AutoSyncHostedService(
+        ILibraryManager libraryManager,
+        LibraryService libraryService,
+        SyncQueueManager queueManager,
+        ILogger<AutoSyncHostedService> logger)
     {
         _libraryManager = libraryManager;
+        _libraryService = libraryService;
         _queueManager = queueManager;
         _logger = logger;
         _debounceTimer = new Timer(OnTimerElapsed, null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
@@ -69,14 +75,17 @@ public sealed class AutoSyncHostedService : IHostedService, IDisposable
     {
         var item = itemChangeEventArgs.Item;
 
-        if (item is not Movie || item.LocationType == LocationType.Virtual)
+        // The library check happens on the timer rather than here: during a scan the item's
+        // parents aren't always wired up yet, so asking which library it's in this early
+        // can come back empty for something that is perfectly fine 30 seconds later.
+        if (item.LocationType == LocationType.Virtual || !LibraryService.IsSyncableKind(item))
         {
             return;
         }
 
         lock (_lock)
         {
-            _pendingMovieIds.Add(item.Id);
+            _pendingItemIds.Add(item.Id);
         }
 
         _debounceTimer.Change(DebounceDelay, Timeout.InfiniteTimeSpan);
@@ -84,23 +93,29 @@ public sealed class AutoSyncHostedService : IHostedService, IDisposable
 
     private void OnTimerElapsed(object? state)
     {
-        List<Guid> movieIds;
+        List<Guid> itemIds;
         lock (_lock)
         {
-            movieIds = new List<Guid>(_pendingMovieIds);
-            _pendingMovieIds.Clear();
+            itemIds = new List<Guid>(_pendingItemIds);
+            _pendingItemIds.Clear();
         }
 
-        foreach (var movieId in movieIds)
+        foreach (var itemId in itemIds)
         {
-            var movie = _libraryManager.GetItemById(movieId);
-            if (movie is null)
+            var item = _libraryManager.GetItemById(itemId);
+            if (item is null)
             {
                 continue;
             }
 
-            _logger.LogInformation("Auto-sync queuing newly added movie: {Movie}", movie.Name);
-            _queueManager.EnqueueMovie(movie);
+            if (!_libraryService.IsEligible(item))
+            {
+                _logger.LogDebug("Auto-sync skipping {Item}, its library is turned off or it's on the skip list", item.Name);
+                continue;
+            }
+
+            _logger.LogInformation("Auto-sync queuing newly added item: {Item}", SyncQueueManager.DescribeItem(item));
+            _queueManager.EnqueueItem(item);
         }
     }
 }

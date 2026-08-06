@@ -7,7 +7,6 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using Jellyfin.Data.Enums;
 using Jellyfin.Plugin.Lapse.Data;
 using Jellyfin.Plugin.Lapse.Engines;
 using MediaBrowser.Controller.Entities;
@@ -17,15 +16,16 @@ using Microsoft.Extensions.Logging;
 namespace Jellyfin.Plugin.Lapse.Services;
 
 /// <summary>
-/// Runs bulk (and auto-sync) subtitle sync jobs one movie at a time in the background,
+/// Runs bulk (and auto-sync) subtitle sync jobs one item at a time in the background,
 /// so the dashboard doesn't have to wait around for a whole library to finish.
 /// Bulk and auto-sync jobs always run standard mode with the default engine against every
-/// external subtitle a movie has - there's no UI in the background path to pick
+/// external subtitle an item has - there's no UI in the background path to pick
 /// engine/mode/penalty/subtitle.
 /// </summary>
 public class SyncQueueManager
 {
     private readonly ILibraryManager _libraryManager;
+    private readonly LibraryService _libraryService;
     private readonly SubtitleLocator _subtitleLocator;
     private readonly EngineRegistry _registry;
     private readonly EngineRunner _runner;
@@ -39,19 +39,22 @@ public class SyncQueueManager
     /// <summary>
     /// Initializes a new instance of the <see cref="SyncQueueManager"/> class.
     /// </summary>
-    /// <param name="libraryManager">Used to look up movies and folders.</param>
-    /// <param name="subtitleLocator">Finds external subtitles for a movie.</param>
+    /// <param name="libraryManager">Used to look up items.</param>
+    /// <param name="libraryService">Works out which items are eligible.</param>
+    /// <param name="subtitleLocator">Finds external subtitles for an item.</param>
     /// <param name="registry">Used to pick the configured default engine.</param>
     /// <param name="runner">Runs the engine.</param>
     /// <param name="logger">Logger.</param>
     public SyncQueueManager(
         ILibraryManager libraryManager,
+        LibraryService libraryService,
         SubtitleLocator subtitleLocator,
         EngineRegistry registry,
         EngineRunner runner,
         ILogger<SyncQueueManager> logger)
     {
         _libraryManager = libraryManager;
+        _libraryService = libraryService;
         _subtitleLocator = subtitleLocator;
         _registry = registry;
         _runner = runner;
@@ -59,7 +62,21 @@ public class SyncQueueManager
     }
 
     /// <summary>
-    /// Gets a value indicating whether a movie or folder id is skipped (either directly,
+    /// Gets a value indicating whether anything is queued or running right now.
+    /// </summary>
+    public bool IsBusy
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _pending.Count > 0 || _items.Any(i => i.Status == QueueItemStatus.Running);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Gets a value indicating whether an item or folder id is skipped (either directly,
     /// or because one of its ancestor folders is skipped).
     /// </summary>
     /// <param name="item">The item to check.</param>
@@ -104,54 +121,128 @@ public class SyncQueueManager
     }
 
     /// <summary>
-    /// Starts a bulk sync job for every movie in every library. Does nothing (and returns
+    /// Starts a bulk sync job across every enabled library. Does nothing (and returns
     /// false) if a job is already running, since we only ever run one at a time.
     /// </summary>
     /// <returns>True if a new job was started.</returns>
     public bool EnqueueLibrary()
     {
-        var movies = GetMovies(null);
-        return StartBulkJob(movies);
+        return StartBulkJob(_libraryService.GetItems());
     }
 
     /// <summary>
-    /// Starts a bulk sync job for every movie under one folder.
+    /// Starts a bulk sync job for every syncable item under one library or folder.
     /// </summary>
-    /// <param name="folderId">The folder to sync.</param>
+    /// <param name="folderId">The library or folder to sync.</param>
     /// <returns>True if a new job was started.</returns>
     public bool EnqueueFolder(Guid folderId)
     {
-        var movies = GetMovies(folderId);
-        return StartBulkJob(movies);
+        return StartBulkJob(_libraryService.GetItems(folderId));
     }
 
     /// <summary>
-    /// Adds one movie to whatever's already queued, starting the worker if it isn't running.
-    /// Used by auto-sync when a new movie shows up. Skipped movies are silently ignored.
+    /// Adds one item to whatever's already queued, starting the worker if it isn't
+    /// running. Used by auto-sync when something new shows up, and by the scheduled task.
+    /// Skipped items are silently ignored.
     /// </summary>
-    /// <param name="movie">The movie to sync.</param>
-    public void EnqueueMovie(BaseItem movie)
+    /// <param name="item">The item to sync.</param>
+    public void EnqueueItem(BaseItem item)
     {
-        if (IsSkipped(movie))
+        if (IsSkipped(item))
         {
             return;
         }
 
         lock (_lock)
         {
-            if (!_queuedIds.Add(movie.Id))
+            if (!_queuedIds.Add(item.Id))
             {
                 return;
             }
 
-            _pending.Enqueue(movie.Id);
-            _items.Add(new QueueItem { ItemId = movie.Id, Name = movie.Name ?? "Unknown" });
+            _pending.Enqueue(item.Id);
+            _items.Add(new QueueItem { ItemId = item.Id, Name = DescribeItem(item) });
         }
 
         EnsureWorkerRunning();
     }
 
-    private bool StartBulkJob(IReadOnlyList<BaseItem> movies)
+    /// <summary>
+    /// Queues a batch of items and waits for all of them to finish, reporting progress as
+    /// it goes. This is what the scheduled task uses, since Jellyfin's task runner wants
+    /// a task that stays alive for as long as the work does.
+    /// </summary>
+    /// <param name="items">The items to sync.</param>
+    /// <param name="progress">Progress reporter, 0 to 100.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>How many items were synced without an error.</returns>
+    public async Task<int> RunBatchAsync(
+        IReadOnlyList<BaseItem> items,
+        IProgress<double>? progress,
+        CancellationToken cancellationToken)
+    {
+        var succeeded = 0;
+
+        lock (_lock)
+        {
+            // a scheduled run is a fresh job, so don't carry the last one's rows along -
+            // the dashboard's progress strip reads this list and a whole library's worth
+            // of finished items would otherwise pile up until the server restarts
+            if (_pending.Count == 0 && !_items.Any(i => i.Status == QueueItemStatus.Running))
+            {
+                _items.Clear();
+                _queuedIds.Clear();
+            }
+        }
+
+        for (var i = 0; i < items.Count; i++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var item = items[i];
+            lock (_lock)
+            {
+                if (_items.All(existing => existing.ItemId != item.Id))
+                {
+                    _items.Add(new QueueItem { ItemId = item.Id, Name = DescribeItem(item) });
+                }
+            }
+
+            if (await ProcessOneAsync(item.Id, cancellationToken).ConfigureAwait(false))
+            {
+                succeeded++;
+            }
+
+            progress?.Report((i + 1) * 100.0 / items.Count);
+        }
+
+        return succeeded;
+    }
+
+    /// <summary>
+    /// Builds a name for the queue list that says enough to tell items apart. Episodes get
+    /// their series and episode number, since "Episode 3" on its own is useless.
+    /// </summary>
+    /// <param name="item">The item.</param>
+    /// <returns>A display name.</returns>
+    public static string DescribeItem(BaseItem item)
+    {
+        var name = item.Name ?? "Unknown";
+
+        if (item is MediaBrowser.Controller.Entities.TV.Episode episode)
+        {
+            var series = episode.SeriesName;
+            var numbers = episode.ParentIndexNumber.HasValue && episode.IndexNumber.HasValue
+                ? $"S{episode.ParentIndexNumber:00}E{episode.IndexNumber:00} "
+                : string.Empty;
+
+            return string.IsNullOrEmpty(series) ? numbers + name : $"{series} - {numbers}{name}";
+        }
+
+        return name;
+    }
+
+    private bool StartBulkJob(IReadOnlyList<BaseItem> items)
     {
         lock (_lock)
         {
@@ -163,38 +254,21 @@ public class SyncQueueManager
             _items.Clear();
             _queuedIds.Clear();
 
-            foreach (var movie in movies)
+            foreach (var item in items)
             {
-                _queuedIds.Add(movie.Id);
-                _pending.Enqueue(movie.Id);
-                _items.Add(new QueueItem { ItemId = movie.Id, Name = movie.Name ?? "Unknown" });
+                _queuedIds.Add(item.Id);
+                _pending.Enqueue(item.Id);
+                _items.Add(new QueueItem { ItemId = item.Id, Name = DescribeItem(item) });
             }
         }
 
-        if (movies.Count == 0)
+        if (items.Count == 0)
         {
             return false;
         }
 
         EnsureWorkerRunning();
         return true;
-    }
-
-    private List<BaseItem> GetMovies(Guid? folderId)
-    {
-        var query = new InternalItemsQuery
-        {
-            IncludeItemTypes = new[] { BaseItemKind.Movie },
-            Recursive = true,
-            IsVirtualItem = false
-        };
-
-        if (folderId.HasValue)
-        {
-            query.ParentId = folderId.Value;
-        }
-
-        return _libraryManager.GetItemList(query).Where(m => !IsSkipped(m)).ToList();
     }
 
     private void EnsureWorkerRunning()
@@ -226,28 +300,28 @@ public class SyncQueueManager
                 _queuedIds.Remove(itemId);
             }
 
-            await ProcessOneAsync(itemId).ConfigureAwait(false);
+            await ProcessOneAsync(itemId, CancellationToken.None).ConfigureAwait(false);
         }
     }
 
-    private async Task ProcessOneAsync(Guid itemId)
+    private async Task<bool> ProcessOneAsync(Guid itemId, CancellationToken cancellationToken)
     {
         SetItemStatus(itemId, QueueItemStatus.Running);
 
-        var movie = _libraryManager.GetItemById(itemId);
-        if (movie is null || string.IsNullOrEmpty(movie.Path))
+        var item = _libraryManager.GetItemById(itemId);
+        if (item is null || string.IsNullOrEmpty(item.Path))
         {
-            SaveRecord(itemId, MovieSyncStatus.Failed, "Movie not found or has no video file");
+            SaveRecord(itemId, MovieSyncStatus.Failed, "Item not found or has no video file");
             SetItemStatus(itemId, QueueItemStatus.Failed);
-            return;
+            return false;
         }
 
-        var subtitles = _subtitleLocator.GetExternalSubtitles(movie);
+        var subtitles = _subtitleLocator.GetExternalSubtitles(item);
         if (subtitles.Count == 0)
         {
             SaveRecord(itemId, MovieSyncStatus.Failed, "No external subtitle found");
             SetItemStatus(itemId, QueueItemStatus.Failed);
-            return;
+            return false;
         }
 
         string? lastError = null;
@@ -258,19 +332,22 @@ public class SyncQueueManager
 
         foreach (var subtitle in subtitles)
         {
-            var result = await _runner.RunAsync(engine, movie.Path, subtitle.Path, SyncMode.Standard, penalty).ConfigureAwait(false);
+            var result = await _runner
+                .RunAsync(engine, item.Path, subtitle.Path, SyncMode.Standard, penalty, outputMode: null, destinationOverride: null, cancellationToken)
+                .ConfigureAwait(false);
             lastResult = result;
 
             if (!result.Success)
             {
                 lastError = result.Error;
-                _logger.LogWarning("Sync failed for {Movie} ({Subtitle}): {Error}", movie.Name, subtitle.Path, result.Error);
+                _logger.LogWarning("Sync failed for {Item} ({Subtitle}): {Error}", item.Name, subtitle.Path, result.Error);
             }
         }
 
         var status = lastError is null ? MovieSyncStatus.Synced : MovieSyncStatus.Failed;
         SaveRecord(itemId, status, lastError, lastResult);
         SetItemStatus(itemId, status == MovieSyncStatus.Synced ? QueueItemStatus.Done : QueueItemStatus.Failed);
+        return status == MovieSyncStatus.Synced;
     }
 
     private void SetItemStatus(Guid itemId, QueueItemStatus status)
@@ -286,10 +363,10 @@ public class SyncQueueManager
     }
 
     /// <summary>
-    /// Saves (or updates) a movie's sync record and persists the plugin config to disk.
+    /// Saves (or updates) an item's sync record and persists the plugin config to disk.
     /// Shared by the background queue and the controller's synchronous single-item sync.
     /// </summary>
-    /// <param name="itemId">The movie.</param>
+    /// <param name="itemId">The item.</param>
     /// <param name="status">The new status.</param>
     /// <param name="error">Error message, if the sync failed.</param>
     /// <param name="result">The engine result, if there is one.</param>

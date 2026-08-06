@@ -40,9 +40,22 @@ public class SyncResult
     public int? Penalty { get; set; }
 
     /// <summary>
+    /// Gets or sets how much of the subtitle ended up sitting on speech, 0 to 1. Newer
+    /// LAPSE builds report this; anything below about 0.5 usually means the subtitle and
+    /// the video aren't the same content. Null when the engine didn't say.
+    /// </summary>
+    public double? Confidence { get; set; }
+
+    /// <summary>
     /// Gets or sets the path to the synced subtitle file the engine wrote out.
     /// </summary>
     public string? OutputPath { get; set; }
+
+    /// <summary>
+    /// Gets or sets the path of the backup that was taken before overwriting, if the
+    /// output mode asked for one.
+    /// </summary>
+    public string? BackupPath { get; set; }
 
     /// <summary>
     /// Gets or sets the error message when <see cref="Success"/> is false.

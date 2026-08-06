@@ -5,7 +5,6 @@
 using System;
 using System.Diagnostics;
 using System.IO;
-using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -19,12 +18,13 @@ namespace Jellyfin.Plugin.Lapse.Engines;
 /// <summary>
 /// Runs whichever engine it's handed. Everything that isn't engine specific lives here:
 /// working out the binary path, starting the process, and getting the output safely
-/// onto disk.
+/// onto disk in whichever shape the output mode asks for.
 /// </summary>
 public class EngineRunner
 {
     private readonly IApplicationPaths _applicationPaths;
     private readonly EngineRegistry _registry;
+    private readonly EngineCapabilityProbe _probe;
     private readonly IMediaEncoder _mediaEncoder;
     private readonly ILogger<EngineRunner> _logger;
 
@@ -33,16 +33,19 @@ public class EngineRunner
     /// </summary>
     /// <param name="applicationPaths">Used to find where engines get installed.</param>
     /// <param name="registry">The known engines.</param>
+    /// <param name="probe">Asks the installed binary which flags it understands.</param>
     /// <param name="mediaEncoder">Used to find the ffmpeg Jellyfin already ships.</param>
     /// <param name="logger">Logger.</param>
     public EngineRunner(
         IApplicationPaths applicationPaths,
         EngineRegistry registry,
+        EngineCapabilityProbe probe,
         IMediaEncoder mediaEncoder,
         ILogger<EngineRunner> logger)
     {
         _applicationPaths = applicationPaths;
         _registry = registry;
+        _probe = probe;
         _mediaEncoder = mediaEncoder;
         _logger = logger;
     }
@@ -59,7 +62,7 @@ public class EngineRunner
     /// <returns>Full path to the binary.</returns>
     public string GetInstalledPath(IEngine engine)
     {
-        return Path.Combine(EnginesFolder, engine.Descriptor.Id, engine.Descriptor.ExecutableName);
+        return Path.Combine(EnginesFolder, engine.Descriptor.Id, engine.Descriptor.GetExecutableFileName());
     }
 
     /// <summary>
@@ -81,16 +84,24 @@ public class EngineRunner
     }
 
     /// <summary>
-    /// Gets the URL to download an engine from for this machine, or null if the project
-    /// doesn't publish a build for this architecture.
+    /// Asks the installed binary what it supports.
     /// </summary>
     /// <param name="engine">The engine.</param>
-    /// <returns>The download URL, or null.</returns>
-    public static string? GetDownloadUrl(IEngine engine)
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>What that binary can do.</returns>
+    public Task<EngineRuntimeInfo> GetRuntimeInfoAsync(IEngine engine, CancellationToken cancellationToken = default)
     {
-        return RuntimeInformation.OSArchitecture == Architecture.Arm64
-            ? engine.Descriptor.Arm64Url
-            : engine.Descriptor.Amd64Url;
+        return _probe.ProbeAsync(ResolvePath(engine), cancellationToken);
+    }
+
+    /// <summary>
+    /// Gets whether there's a build of this engine for the machine the server runs on.
+    /// </summary>
+    /// <param name="engine">The engine.</param>
+    /// <returns>True if the Install button can do anything.</returns>
+    public static bool HasDownload(IEngine engine)
+    {
+        return engine.Descriptor.GetDownloadForThisMachine() is not null;
     }
 
     /// <summary>
@@ -109,6 +120,57 @@ public class EngineRunner
 
         var configured = Plugin.Instance?.Configuration.GetEngineSettings(engine.Descriptor.Id).Penalty;
         return configured ?? engine.Descriptor.Capabilities.DefaultPenalty;
+    }
+
+    /// <summary>
+    /// Works out where a synced subtitle should end up under a given output mode. The
+    /// sidecar modes put it next to the original with the configured suffix inserted, so
+    /// Movie.en.srt becomes Movie.en.shifted.srt and Jellyfin picks it up as an extra
+    /// track on its next scan.
+    /// </summary>
+    /// <param name="subtitlePath">The subtitle that's being synced.</param>
+    /// <param name="mode">The output mode.</param>
+    /// <returns>Where to write the result.</returns>
+    public static string ResolveDestination(string subtitlePath, OutputMode mode)
+    {
+        if (mode is OutputMode.OverwriteWithBackup or OutputMode.OverwriteNoBackup)
+        {
+            return subtitlePath;
+        }
+
+        var suffix = Plugin.Instance?.Configuration.SidecarSuffix;
+        if (string.IsNullOrWhiteSpace(suffix))
+        {
+            suffix = ".shifted";
+        }
+
+        if (!suffix.StartsWith('.'))
+        {
+            suffix = "." + suffix;
+        }
+
+        var directory = Path.GetDirectoryName(subtitlePath) ?? string.Empty;
+        var extension = Path.GetExtension(subtitlePath);
+        var stem = Path.GetFileNameWithoutExtension(subtitlePath);
+
+        // syncing a file that's already a sidecar shouldn't stack another suffix onto it
+        if (stem.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+        {
+            stem = stem[..^suffix.Length];
+        }
+
+        return Path.Combine(directory, stem + suffix + extension);
+    }
+
+    /// <summary>
+    /// Gets the output mode a run should use, preferring what the caller asked for over
+    /// what's configured.
+    /// </summary>
+    /// <param name="requested">What the request asked for, if anything.</param>
+    /// <returns>The output mode.</returns>
+    public static OutputMode ResolveOutputMode(OutputMode? requested)
+    {
+        return requested ?? Plugin.Instance?.Configuration.OutputMode ?? OutputMode.OverwriteWithBackup;
     }
 
     /// <summary>
@@ -169,27 +231,33 @@ public class EngineRunner
     }
 
     /// <summary>
-    /// Runs a sync. Writes to a temp file next to the target and only moves it over the
-    /// original once the engine succeeded and actually produced something, so a failed or
+    /// Runs a sync. The engine always writes to a temporary file, which only gets moved
+    /// into place once the run succeeded and actually produced something, so a failed or
     /// half finished run can't destroy a working subtitle.
     /// </summary>
     /// <param name="engine">Which engine to run.</param>
     /// <param name="referencePath">Video or reference subtitle to line up against.</param>
-    /// <param name="subtitlePath">The subtitle to fix, edited in place on success.</param>
+    /// <param name="subtitlePath">The subtitle to fix.</param>
     /// <param name="mode">Alignment mode.</param>
     /// <param name="penalty">Penalty for split mode.</param>
+    /// <param name="outputMode">Where the result should land, or null for the configured default.</param>
+    /// <param name="destinationOverride">An explicit file to write to, which wins over the
+    /// output mode's own choice of destination. The mode still decides whether a file
+    /// already sitting at that path gets backed up first.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The parsed result.</returns>
     [System.Diagnostics.CodeAnalysis.SuppressMessage(
         "Security",
         "CA3003:Review code for file path injection vulnerabilities",
-        Justification = "Callers validate paths before getting here: movie syncs only accept a subtitle the library lists for that item, and subtitle to subtitle sync checks both paths are existing subtitle files.")]
+        Justification = "Callers validate paths before getting here: item syncs only accept a subtitle the library lists for that item, and subtitle to subtitle sync checks both paths are existing subtitle files.")]
     public async Task<SyncResult> RunAsync(
         IEngine engine,
         string referencePath,
         string subtitlePath,
         SyncMode mode,
         int penalty,
+        OutputMode? outputMode = null,
+        string? destinationOverride = null,
         CancellationToken cancellationToken = default)
     {
         var enginePath = ResolvePath(engine);
@@ -204,11 +272,17 @@ public class EngineRunner
             };
         }
 
+        var runtime = await _probe.ProbeAsync(enginePath, cancellationToken).ConfigureAwait(false);
+        var resolvedOutputMode = ResolveOutputMode(outputMode);
+        var destination = string.IsNullOrWhiteSpace(destinationOverride)
+            ? ResolveDestination(subtitlePath, resolvedOutputMode)
+            : destinationOverride;
+
         var workPath = subtitlePath + ".lapse-tmp" + Path.GetExtension(subtitlePath);
 
         try
         {
-            if (engine.Descriptor.EditsInPlace)
+            if (engine.NeedsSeededOutput(runtime))
             {
                 // this engine rewrites whatever file it's pointed at, so give it a copy to
                 // chew on. For the others we leave the work path missing on purpose, so
@@ -217,7 +291,17 @@ public class EngineRunner
             }
 
             var ffmpegDirectory = GetFfmpegDirectory();
-            var args = engine.BuildArguments(referencePath, subtitlePath, workPath, mode, penalty, ffmpegDirectory);
+            var args = engine.BuildArguments(new EngineRunOptions
+            {
+                ReferencePath = referencePath,
+                InputPath = subtitlePath,
+                OutputPath = workPath,
+                Mode = mode,
+                Penalty = penalty,
+                FfmpegDirectory = ffmpegDirectory,
+                Runtime = runtime
+            });
+
             var (stdout, stderr, exitCode) = await RunProcessAsync(enginePath, args, ffmpegDirectory, cancellationToken).ConfigureAwait(false);
 
             var result = engine.ParseResult(stdout, stderr, exitCode, mode, penalty);
@@ -236,17 +320,55 @@ public class EngineRunner
                 return result;
             }
 
-            File.Move(workPath, subtitlePath, overwrite: true);
-            result.OutputPath = subtitlePath;
+            result.BackupPath = TakeBackup(destination, resolvedOutputMode);
+            File.Move(workPath, destination, overwrite: true);
+            result.OutputPath = destination;
             return result;
         }
         finally
         {
-            if (File.Exists(workPath))
+            CleanUp(workPath);
+        }
+    }
+
+    // Older LAPSE builds always write a .bak next to the file they edit, and the file they
+    // edit is our temporary work file, so that backup is junk. Newer builds take
+    // --no-backup and never write it. Either way, nothing of ours should be left behind.
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Security",
+        "CA3003:Review code for file path injection vulnerabilities",
+        Justification = "This only ever deletes the temporary work file RunAsync just created from an already validated subtitle path.")]
+    private static void CleanUp(string workPath)
+    {
+        foreach (var path in new[] { workPath, workPath + ".bak" })
+        {
+            if (File.Exists(path))
             {
-                File.Delete(workPath);
+                File.Delete(path);
             }
         }
+    }
+
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Security",
+        "CA3003:Review code for file path injection vulnerabilities",
+        Justification = "The destination comes from RunAsync, which derives it from a subtitle path the caller already validated.")]
+    private static string? TakeBackup(string destination, OutputMode mode)
+    {
+        if (mode is not (OutputMode.OverwriteWithBackup or OutputMode.SidecarWithBackup))
+        {
+            return null;
+        }
+
+        // nothing to preserve the first time a sidecar gets written
+        if (!File.Exists(destination))
+        {
+            return null;
+        }
+
+        var backupPath = destination + ".bak";
+        File.Copy(destination, backupPath, overwrite: true);
+        return backupPath;
     }
 
     private async Task<(string Stdout, string Stderr, int ExitCode)> RunProcessAsync(
@@ -304,12 +426,13 @@ public class EngineRunner
     /// <summary>
     /// Gets the folder engines should use to find ffmpeg and ffprobe.
     ///
-    /// This hands back a folder of tiny wrapper scripts rather than Jellyfin's real ffmpeg
-    /// folder, because of how ffsubsync is packaged. It's a PyInstaller bundle, and
-    /// PyInstaller points LD_LIBRARY_PATH at its own unpacked copy of everything. Any
-    /// process it starts inherits that, so ffmpeg and ffprobe end up trying to load
-    /// PyInstaller's libraries instead of their own and fall over with an unhelpful
-    /// "ffprobe error". The wrappers clear that variable and then run the real binary.
+    /// On Linux this hands back a folder of tiny wrapper scripts rather than Jellyfin's
+    /// real ffmpeg folder, because of how ffsubsync is packaged. It's a PyInstaller
+    /// bundle, and PyInstaller points LD_LIBRARY_PATH at its own unpacked copy of
+    /// everything. Any process it starts inherits that, so ffmpeg and ffprobe end up
+    /// trying to load PyInstaller's libraries instead of their own and fall over with an
+    /// unhelpful "ffprobe error". The wrappers clear that variable and then run the real
+    /// binary. Windows and macOS don't have the problem, so they get the real folder.
     /// </summary>
     /// <returns>The folder to point engines at, or null if ffmpeg couldn't be found.</returns>
     public string? GetFfmpegDirectory()
@@ -320,7 +443,8 @@ public class EngineRunner
         // ffprobe normally sits next to ffmpeg, so fall back to looking there for it
         if (probePath is null && encoderPath is not null)
         {
-            var sibling = Path.Combine(Path.GetDirectoryName(encoderPath)!, "ffprobe");
+            var probeName = OperatingSystem.IsWindows() ? "ffprobe.exe" : "ffprobe";
+            var sibling = Path.Combine(Path.GetDirectoryName(encoderPath)!, probeName);
             probePath = File.Exists(sibling) ? sibling : null;
         }
 
@@ -390,9 +514,7 @@ public class EngineRunner
     // knows where its own build is, so borrow that rather than making people install
     // a second copy of ffmpeg. Engines that take an explicit ffmpeg path get told as well,
     // this is just so anything shelling out by name still works.
-    // Engines that look for ffmpeg on PATH rather than taking an explicit option get the
-    // same wrapper folder, so they behave the same way.
-    private void AddFfmpegToPath(ProcessStartInfo startInfo, string? ffmpegDirectory)
+    private static void AddFfmpegToPath(ProcessStartInfo startInfo, string? ffmpegDirectory)
     {
         if (string.IsNullOrEmpty(ffmpegDirectory))
         {

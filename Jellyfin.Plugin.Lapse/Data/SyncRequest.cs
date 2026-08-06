@@ -32,8 +32,13 @@ public class SyncRequest
     public int Penalty { get; set; }
 
     /// <summary>
-    /// Gets or sets which external subtitle file to sync. Only required when the movie
+    /// Gets or sets which external subtitle file to sync. Only required when the item
     /// has more than one, otherwise the only one found gets used automatically.
     /// </summary>
     public string? SubtitlePath { get; set; }
+
+    /// <summary>
+    /// Gets or sets where the result should land, or null for the configured default.
+    /// </summary>
+    public OutputMode? OutputMode { get; set; }
 }

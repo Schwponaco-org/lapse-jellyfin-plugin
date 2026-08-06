@@ -21,15 +21,19 @@ public interface IEngine
     /// <summary>
     /// Builds the command line arguments for one run.
     /// </summary>
-    /// <param name="referencePath">The video (or reference subtitle) to line up against.</param>
-    /// <param name="inputPath">The subtitle that needs fixing.</param>
-    /// <param name="outputPath">Where the fixed subtitle should be written.</param>
-    /// <param name="mode">Which alignment mode to use.</param>
-    /// <param name="penalty">Penalty value, only meaningful for split mode.</param>
-    /// <param name="ffmpegDirectory">Folder holding Jellyfin's ffmpeg and ffprobe, or null if
-    /// it couldn't be found. Engines that shell out to ffmpeg can point themselves at it.</param>
+    /// <param name="options">Paths, mode, and what the installed binary supports.</param>
     /// <returns>The arguments, in order.</returns>
-    IReadOnlyList<string> BuildArguments(string referencePath, string inputPath, string outputPath, SyncMode mode, int penalty, string? ffmpegDirectory);
+    IReadOnlyList<string> BuildArguments(EngineRunOptions options);
+
+    /// <summary>
+    /// Says whether the runner has to copy the input subtitle to the output path before
+    /// starting the engine. Engines that rewrite the file they're pointed at need that;
+    /// engines that take a real output argument don't, and for those an untouched output
+    /// path keeps "did the engine actually write anything" a meaningful check.
+    /// </summary>
+    /// <param name="runtime">What the installed binary supports.</param>
+    /// <returns>True if the output file needs seeding with a copy of the input.</returns>
+    bool NeedsSeededOutput(EngineRuntimeInfo runtime);
 
     /// <summary>
     /// Reads whatever the engine printed and works out what happened.

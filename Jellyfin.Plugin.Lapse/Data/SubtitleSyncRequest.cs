@@ -23,4 +23,17 @@ public class SubtitleSyncRequest
     /// Gets or sets the path to the subtitle file that needs to be lined up.
     /// </summary>
     public string InputPath { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Gets or sets where the result should land, or null for the configured default.
+    /// Ignored when <see cref="OutputPath"/> names a file to write.
+    /// </summary>
+    public OutputMode? OutputMode { get; set; }
+
+    /// <summary>
+    /// Gets or sets an explicit file to write the synced subtitle to, leaving the input
+    /// alone. Null overwrites the input the way the output mode says. This is what the
+    /// dashboard's "write the result to a new file" option sends.
+    /// </summary>
+    public string? OutputPath { get; set; }
 }

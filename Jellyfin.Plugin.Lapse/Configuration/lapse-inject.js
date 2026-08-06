@@ -20,6 +20,11 @@
         'download', 'moveup', 'movedown', 'open', 'openalbum'
     ];
 
+    // Everything with a video file worth lining subtitles up against. Used to be Movie
+    // only; libraries of any type can be turned on in the dashboard now, so the menu has
+    // to offer the same thing for episodes and loose videos.
+    var SYNCABLE_TYPES = ['Movie', 'Episode', 'Video', 'MusicVideo'];
+
     var pendingCardContext = null;
 
     function log(message) {
@@ -91,10 +96,10 @@
 
         setTimeout(function () {
             toast.remove();
-        }, 4000);
+        }, 6000);
     }
 
-    // --- figure out which movie the open action sheet belongs to ---
+    // --- figure out which item the open action sheet belongs to ---
 
     // jellyfin-web has changed how it routes between versions (old hash-based routing
     // like #!/details?id=xxx, newer versions using a real path/query string instead),
@@ -146,14 +151,14 @@
         log('remembered card context: id=' + pendingCardContext.id + ' type=' + pendingCardContext.type);
     }
 
-    function resolveMovieContext() {
+    function resolveItemContext() {
         // grid/list card menus: we already know the id and type from the click itself
         if (pendingCardContext && (Date.now() - pendingCardContext.timestamp) < 1500) {
             log('using remembered card context');
             return Promise.resolve(pendingCardContext);
         }
 
-        // movie details page menu: no card involved, but the id is somewhere in the url
+        // details page menu: no card involved, but the id is somewhere in the url
         var locationId = getIdFromLocation();
         if (!locationId) {
             log('no card context and no id found in the url (' + window.location.href + ')');
@@ -170,7 +175,7 @@
         });
     }
 
-    // --- detect the action sheet and add our button to it ---
+    // --- detect the action sheet and add our buttons to it ---
 
     // just for the console log, doesn't gate anything anymore - different jellyfin-web
     // versions use different action ids so this isn't reliable enough to block on.
@@ -185,10 +190,28 @@
         return false;
     }
 
-    function addSyncButton(sheet, movieId) {
+    function makeMenuButton(dataId, label, onClick) {
+        var button = document.createElement('button');
+        button.setAttribute('is', 'emby-button');
+        button.type = 'button';
+        button.className = 'listItem listItem-button actionSheetMenuItem lapseSyncButton';
+        button.setAttribute('data-id', dataId);
+        button.innerHTML =
+            '<span class="actionsheetMenuItemIcon listItemIcon listItemIcon-transparent material-icons subtitles" aria-hidden="true"></span>' +
+            '<div class="listItemBody actionsheetListItemBody">' +
+            '<div class="listItemBodyText actionSheetItemText">' + escapeHtml(label) + '</div>' +
+            '</div>';
+
+        // no stopPropagation here on purpose: let the sheet's own click handler close
+        // the dialog like normal, it just won't recognize our data-id and will no-op
+        button.addEventListener('click', onClick);
+        return button;
+    }
+
+    function addSyncButtons(sheet, itemId) {
         var scroller = sheet.querySelector('.actionSheetScroller');
         if (!scroller) {
-            log('sheet has no .actionSheetScroller, cannot add the button (jellyfin-web markup may have changed)');
+            log('sheet has no .actionSheetScroller, cannot add the buttons (jellyfin-web markup may have changed)');
             return;
         }
 
@@ -196,25 +219,15 @@
             return;
         }
 
-        var button = document.createElement('button');
-        button.setAttribute('is', 'emby-button');
-        button.type = 'button';
-        button.className = 'listItem listItem-button actionSheetMenuItem lapseSyncButton';
-        button.setAttribute('data-id', 'lapse-sync-subtitles');
-        button.innerHTML =
-            '<span class="actionsheetMenuItemIcon listItemIcon listItemIcon-transparent material-icons subtitles" aria-hidden="true"></span>' +
-            '<div class="listItemBody actionsheetListItemBody">' +
-            '<div class="listItemBodyText actionSheetItemText">Sync Subtitles</div>' +
-            '</div>';
+        scroller.appendChild(makeMenuButton('lapse-sync-subtitles', 'Sync Subtitles', function () {
+            openSyncPopup(itemId);
+        }));
 
-        // no stopPropagation here on purpose: let the sheet's own click handler close
-        // the dialog like normal, it just won't recognize our data-id and will no-op
-        button.addEventListener('click', function () {
-            openSyncPopup(movieId);
-        });
+        scroller.appendChild(makeMenuButton('lapse-sync-all-subtitles', 'Sync All Subtitles to Reference', function () {
+            openReferencePopup(itemId);
+        }));
 
-        scroller.appendChild(button);
-        log('added the Sync Subtitles button for movie ' + movieId);
+        log('added the LAPSE buttons for item ' + itemId);
     }
 
     function handleActionSheetOpened(sheet) {
@@ -224,22 +237,22 @@
 
         log('action sheet opened, looks like an item menu: ' + looksLikeItemContextMenu(sheet));
 
-        resolveMovieContext().then(function (context) {
+        resolveItemContext().then(function (context) {
             if (!context) {
-                log('could not figure out which item this menu belongs to, not adding the button');
+                log('could not figure out which item this menu belongs to, not adding the buttons');
                 return;
             }
 
-            if (context.type !== 'Movie') {
-                log('item is a ' + context.type + ', not a Movie, not adding the button');
+            if (SYNCABLE_TYPES.indexOf(context.type) === -1) {
+                log('item is a ' + context.type + ', which LAPSE has nothing to do with, not adding the buttons');
                 return;
             }
 
             // the sheet may already be gone by the time an async lookup resolves
             if (document.body.contains(sheet)) {
-                addSyncButton(sheet, context.id);
+                addSyncButtons(sheet, context.id);
             } else {
-                log('sheet closed before we could add the button');
+                log('sheet closed before we could add the buttons');
             }
         });
     }
@@ -284,7 +297,13 @@
         return overlay;
     }
 
-    function openSyncPopup(movieId) {
+    function subtitleOptionsHtml(subtitles) {
+        return subtitles.map(function (s) {
+            return '<option value="' + escapeHtml(s.Path) + '">' + escapeHtml(s.DisplayName) + '</option>';
+        }).join('');
+    }
+
+    function openSyncPopup(itemId) {
         var overlay = openOverlay(
             '<h3>Sync Subtitles</h3>' +
             '<div class="lapseDialogButtons">' +
@@ -294,44 +313,42 @@
 
         overlay.querySelector('#lapsePopupSync').addEventListener('click', function () {
             overlay.remove();
-            runQuickSync(movieId);
+            runQuickSync(itemId);
         });
 
         overlay.querySelector('#lapsePopupAdvanced').addEventListener('click', function () {
             overlay.remove();
-            openAdvancedOverlay(movieId);
+            openAdvancedOverlay(itemId);
         });
     }
 
-    function runQuickSync(movieId) {
+    function runQuickSync(itemId) {
         showLapseToast('Checking subtitles...');
 
-        lapseGet('Lapse/Movies/' + movieId + '/Subtitles').then(function (subtitles) {
+        lapseGet('Lapse/Items/' + itemId + '/Subtitles').then(function (subtitles) {
             if (subtitles.length === 0) {
-                showLapseToast('No external subtitle found for this movie.');
+                showLapseToast('No external subtitle found for this item.');
                 return;
             }
 
             if (subtitles.length === 1) {
-                doSync(movieId, subtitles[0].Path);
+                doSync(itemId, subtitles[0].Path);
                 return;
             }
 
-            openSubtitlePickerPopup(movieId, subtitles);
+            openSubtitlePickerPopup(itemId, subtitles);
         }).catch(function (err) {
             showLapseToast('Could not check subtitles: ' + err.message);
         });
     }
 
-    function openSubtitlePickerPopup(movieId, subtitles) {
-        var options = subtitles.map(function (s) {
-            return '<option value="' + escapeHtml(s.Path) + '">' + escapeHtml(s.DisplayName) + '</option>';
-        }).join('');
-
+    function openSubtitlePickerPopup(itemId, subtitles) {
         var overlay = openOverlay(
             '<h3>Pick a subtitle</h3>' +
             '<div class="selectContainer">' +
-            '<select is="emby-select" id="lapsePickerSelect" class="emby-select-withcolor emby-select">' + options + '</select>' +
+            '<select is="emby-select" id="lapsePickerSelect" class="emby-select-withcolor emby-select">' +
+            subtitleOptionsHtml(subtitles) +
+            '</select>' +
             '</div>' +
             '<div class="lapseDialogButtons">' +
             '<button is="emby-button" type="button" class="raised" id="lapsePickerCancel"><span>Cancel</span></button>' +
@@ -345,41 +362,108 @@
         overlay.querySelector('#lapsePickerSync').addEventListener('click', function () {
             var path = overlay.querySelector('#lapsePickerSelect').value;
             overlay.remove();
-            doSync(movieId, path);
+            doSync(itemId, path);
         });
     }
 
-    function doSync(movieId, subtitlePath) {
+    function describeResult(result) {
+        var parts = [];
+
+        if (result.Mode === 'Standard' && result.OffsetMs != null) {
+            parts.push('offset ' + result.OffsetMs + 'ms');
+        } else if (result.Mode === 'Ols' && result.Slope != null) {
+            parts.push('slope ' + result.Slope.toFixed(4) + ', intercept ' + result.Intercept.toFixed(2) + 's');
+        } else if (result.Mode === 'Split' && result.Penalty != null) {
+            parts.push('split, penalty ' + result.Penalty);
+        } else if (result.EngineOutput) {
+            parts.push(result.EngineOutput);
+        }
+
+        if (result.Confidence != null) {
+            parts.push('confidence ' + Math.round(result.Confidence * 100) + '%');
+        }
+
+        return parts.join(', ') || 'done';
+    }
+
+    function doSync(itemId, subtitlePath) {
         showLapseToast('Syncing...');
 
         // no EngineId here on purpose - the server picks whichever engine is set as the
         // default, so the quick button stays a one press job
-        lapsePost('Lapse/Sync', { ItemId: movieId, Mode: 'Standard', SubtitlePath: subtitlePath }).then(function (result) {
+        lapsePost('Lapse/Sync', { ItemId: itemId, Mode: 'Standard', SubtitlePath: subtitlePath }).then(function (result) {
             if (!result.Success) {
                 showLapseToast('Sync failed: ' + result.Error);
                 return;
             }
 
-            if (result.Mode === 'Standard' && result.OffsetMs != null) {
-                showLapseToast('Synced! offset ' + result.OffsetMs + 'ms');
-            } else if (result.Mode === 'Ols' && result.Slope != null) {
-                showLapseToast('Synced! slope ' + result.Slope.toFixed(4) + ', intercept ' + result.Intercept.toFixed(2) + 's');
-            } else if (result.Mode === 'Split' && result.Penalty != null) {
-                showLapseToast('Synced! (split, penalty ' + result.Penalty + ')');
-            } else {
-                showLapseToast('Synced! ' + (result.EngineOutput || ''));
-            }
+            showLapseToast('Synced! ' + describeResult(result));
         }).catch(function (err) {
             showLapseToast('Sync failed: ' + err.message);
         });
     }
 
-    function openAdvancedOverlay(movieId) {
+    // --- "Sync All Subtitles to Reference" ---
+
+    function openReferencePopup(itemId) {
+        showLapseToast('Checking subtitles...');
+
+        lapseGet('Lapse/Items/' + itemId + '/Subtitles').then(function (subtitles) {
+            if (subtitles.length < 2) {
+                showLapseToast('This item needs at least two external subtitles for that.');
+                return;
+            }
+
+            var overlay = openOverlay(
+                '<h3>Sync All Subtitles to Reference</h3>' +
+                '<p class="fieldDescription">Pick the subtitle that is already correct. Every other subtitle on this item gets lined up against it.</p>' +
+                '<div class="selectContainer">' +
+                '<select is="emby-select" id="lapseRefSelect" class="emby-select-withcolor emby-select">' +
+                subtitleOptionsHtml(subtitles) +
+                '</select>' +
+                '</div>' +
+                '<div class="lapseDialogButtons">' +
+                '<button is="emby-button" type="button" class="raised" id="lapseRefCancel"><span>Cancel</span></button>' +
+                '<button is="emby-button" type="button" class="raised button-submit" id="lapseRefSync"><span>Sync</span></button>' +
+                '</div>');
+
+            overlay.querySelector('#lapseRefCancel').addEventListener('click', function () {
+                overlay.remove();
+            });
+
+            overlay.querySelector('#lapseRefSync').addEventListener('click', function () {
+                var referencePath = overlay.querySelector('#lapseRefSelect').value;
+                overlay.remove();
+                doSyncAll(itemId, referencePath, subtitles.length - 1);
+            });
+        }).catch(function (err) {
+            showLapseToast('Could not check subtitles: ' + err.message);
+        });
+    }
+
+    function doSyncAll(itemId, referencePath, count) {
+        showLapseToast('Syncing ' + count + ' subtitle' + (count === 1 ? '' : 's') + ' to the reference...');
+
+        lapsePost('Lapse/SyncAllSubtitles', {
+            ItemId: itemId,
+            ReferencePath: referencePath,
+            Mode: 'Standard'
+        }).then(function (result) {
+            var failed = result.Results.length - result.SucceededCount;
+            showLapseToast(failed === 0
+                ? ('Synced all ' + result.SucceededCount + ' subtitles to the reference.')
+                : (result.SucceededCount + ' of ' + result.Results.length + ' synced, ' + failed + ' failed. See the LAPSE dashboard for details.'));
+        }).catch(function (err) {
+            showLapseToast('Sync failed: ' + err.message);
+        });
+    }
+
+    function openAdvancedOverlay(itemId) {
         // has to be the SPA route (/web/#/configurationpage?...), not the bare
         // configurationpage?name=... resource - loaded on its own like that, the config
         // page has no ApiClient/Dashboard at all, those only exist once jellyfin-web's
         // own app shell has booted, which is what the #/ route inside the iframe gets us
-        var iframeSrc = '/web/#/configurationpage?name=LAPSE&movieId=' + encodeURIComponent(movieId) + '&autoAdvanced=1';
+        var iframeSrc = '/web/#/configurationpage?name=LAPSE&itemId=' + encodeURIComponent(itemId) + '&autoAdvanced=1';
 
         var overlay = document.createElement('div');
         overlay.className = 'lapseIframeOverlay';
