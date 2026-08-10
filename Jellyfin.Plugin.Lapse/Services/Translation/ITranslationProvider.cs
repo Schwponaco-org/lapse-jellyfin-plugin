@@ -23,6 +23,13 @@ public class TranslatedLine
     /// Gets or sets the language the provider says it detected, when it says anything.
     /// </summary>
     public string? DetectedSourceLanguage { get; set; }
+
+    /// <summary>
+    /// Gets or sets how sure the provider says it is, 0 to 1, when it reports anything at
+    /// all. Only MyMemory does; for the rest this stays null and the plugin scores the
+    /// line itself.
+    /// </summary>
+    public double? Confidence { get; set; }
 }
 
 /// <summary>
@@ -39,6 +46,18 @@ public interface ITranslationProvider
     /// Gets the display name for messages.
     /// </summary>
     string DisplayName { get; }
+
+    /// <summary>
+    /// Gets how much setting up this provider needs, which is what the dashboard orders
+    /// and groups the list by: 0 works with no configuration at all, 1 needs a self
+    /// hosted service pointed at, 2 needs a cloud API key.
+    /// </summary>
+    int Tier { get; }
+
+    /// <summary>
+    /// Gets a line explaining what this provider is and what it wants, for the dashboard.
+    /// </summary>
+    string Summary { get; }
 
     /// <summary>
     /// Checks the plugin has what this provider needs to work.

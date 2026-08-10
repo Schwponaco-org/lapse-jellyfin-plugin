@@ -119,6 +119,12 @@ public class EngineInfo
     public bool UpdateAvailable { get; set; }
 
     /// <summary>
+    /// Gets or sets a value indicating whether the engine is installed but neither the
+    /// recorded release tag nor the binary itself could say which version it is.
+    /// </summary>
+    public bool VersionUnknown { get; set; }
+
+    /// <summary>
     /// Gets or sets a value indicating whether the daily task may update this engine.
     /// </summary>
     public bool AutoUpdate { get; set; }

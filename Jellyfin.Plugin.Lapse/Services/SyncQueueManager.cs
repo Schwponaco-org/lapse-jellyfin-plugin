@@ -35,6 +35,9 @@ public class SyncQueueManager
     private readonly Queue<Guid> _pending = new();
     private readonly HashSet<Guid> _queuedIds = new();
     private Task? _worker;
+    private string? _jobName;
+    private string? _unitName;
+    private string? _referenceKey;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="SyncQueueManager"/> class.
@@ -115,6 +118,8 @@ public class SyncQueueManager
                 Total = _items.Count,
                 Completed = _items.Count(i => i.Status is QueueItemStatus.Done or QueueItemStatus.Failed),
                 CurrentItemName = current?.Name,
+                JobName = _jobName,
+                UnitName = _unitName,
                 Items = new List<QueueItem>(_items)
             };
         }
@@ -141,6 +146,23 @@ public class SyncQueueManager
     }
 
     /// <summary>
+    /// Starts a bulk sync job over a specific set of items, which is how a whole series
+    /// or season gets synced. Optionally lines every item's subtitles up against one of
+    /// its own tracks instead of against the audio.
+    /// </summary>
+    /// <param name="items">The items to sync.</param>
+    /// <param name="jobName">What to call this job in the progress readout.</param>
+    /// <param name="unitName">What one item is, singular, e.g. "episode".</param>
+    /// <param name="referenceKey">The reference track key from
+    /// <see cref="SeriesSyncService.GetReferenceOptions"/>, or null to sync against the
+    /// audio as usual.</param>
+    /// <returns>True if a new job was started.</returns>
+    public bool EnqueueItems(IReadOnlyList<BaseItem> items, string jobName, string unitName, string? referenceKey = null)
+    {
+        return StartBulkJob(items, jobName, unitName, referenceKey);
+    }
+
+    /// <summary>
     /// Adds one item to whatever's already queued, starting the worker if it isn't
     /// running. Used by auto-sync when something new shows up, and by the scheduled task.
     /// Skipped items are silently ignored.
@@ -155,6 +177,15 @@ public class SyncQueueManager
 
         lock (_lock)
         {
+            if (_pending.Count == 0 && !_items.Any(i => i.Status == QueueItemStatus.Running))
+            {
+                // nothing is running, so this is the start of a fresh job - don't inherit
+                // the reference track or the name of whatever ran last
+                _referenceKey = null;
+                _jobName = null;
+                _unitName = "item";
+            }
+
             if (!_queuedIds.Add(item.Id))
             {
                 return;
@@ -192,6 +223,9 @@ public class SyncQueueManager
             {
                 _items.Clear();
                 _queuedIds.Clear();
+                _referenceKey = null;
+                _jobName = "Scheduled sync";
+                _unitName = "item";
             }
         }
 
@@ -220,6 +254,21 @@ public class SyncQueueManager
     }
 
     /// <summary>
+    /// Explains a result the plugin deliberately threw away, for the item list.
+    /// </summary>
+    /// <param name="result">The low-confidence result.</param>
+    /// <returns>A line saying what happened and why.</returns>
+    public static string DescribeSkip(SyncResult result)
+    {
+        var threshold = Plugin.Instance?.Configuration.SyncConfidenceThreshold ?? 50;
+        var confidence = result.Confidence.HasValue
+            ? (int)Math.Round(result.Confidence.Value * 100)
+            : 0;
+
+        return $"Left the original alone: the engine only reached {confidence}% confidence, under the {threshold}% threshold.";
+    }
+
+    /// <summary>
     /// Builds a name for the queue list that says enough to tell items apart. Episodes get
     /// their series and episode number, since "Episode 3" on its own is useless.
     /// </summary>
@@ -242,7 +291,11 @@ public class SyncQueueManager
         return name;
     }
 
-    private bool StartBulkJob(IReadOnlyList<BaseItem> items)
+    private bool StartBulkJob(
+        IReadOnlyList<BaseItem> items,
+        string? jobName = null,
+        string? unitName = null,
+        string? referenceKey = null)
     {
         lock (_lock)
         {
@@ -253,6 +306,9 @@ public class SyncQueueManager
 
             _items.Clear();
             _queuedIds.Clear();
+            _jobName = jobName;
+            _unitName = unitName ?? "item";
+            _referenceKey = referenceKey;
 
             foreach (var item in items)
             {
@@ -325,15 +381,42 @@ public class SyncQueueManager
         }
 
         string? lastError = null;
+        string? lastSkip = null;
         SyncResult? lastResult = null;
+        var syncedPaths = new List<string>();
 
         var engine = _registry.GetDefault();
         var penalty = EngineRunner.ResolvePenalty(engine, null);
 
+        // A reference job lines each item's other subtitles up against one of its own,
+        // rather than against the audio. Much faster, and more accurate as long as the
+        // reference track really is correct.
+        var referenceKey = _referenceKey;
+        SubtitleOption? reference = null;
+
+        if (referenceKey is not null)
+        {
+            reference = SeriesSyncService.MatchReference(item, subtitles, referenceKey);
+            if (reference is null)
+            {
+                SaveRecord(itemId, MovieSyncStatus.Failed, $"No '{referenceKey}' subtitle on this item to line the others up against");
+                SetItemStatus(itemId, QueueItemStatus.Failed);
+                return false;
+            }
+        }
+
         foreach (var subtitle in subtitles)
         {
+            if (reference is not null && string.Equals(subtitle.Path, reference.Path, StringComparison.Ordinal))
+            {
+                // never sync the reference against itself
+                continue;
+            }
+
+            var referencePath = reference?.Path ?? item.Path;
+
             var result = await _runner
-                .RunAsync(engine, item.Path, subtitle.Path, SyncMode.Standard, penalty, outputMode: null, destinationOverride: null, cancellationToken)
+                .RunAsync(engine, referencePath, subtitle.Path, SyncMode.Standard, penalty, outputMode: null, destinationOverride: null, cancellationToken)
                 .ConfigureAwait(false);
             lastResult = result;
 
@@ -342,12 +425,39 @@ public class SyncQueueManager
                 lastError = result.Error;
                 _logger.LogWarning("Sync failed for {Item} ({Subtitle}): {Error}", item.Name, subtitle.Path, result.Error);
             }
+            else if (result.Skipped)
+            {
+                lastSkip = DescribeSkip(result);
+            }
+            else
+            {
+                // Only a subtitle we actually rewrote counts. A failure and a deliberate
+                // low-confidence skip both leave the file as it was, so neither of them
+                // should make the item look any more synced than it was before.
+                syncedPaths.Add(subtitle.Path);
+            }
         }
 
-        var status = lastError is null ? MovieSyncStatus.Synced : MovieSyncStatus.Failed;
-        SaveRecord(itemId, status, lastError, lastResult);
-        SetItemStatus(itemId, status == MovieSyncStatus.Synced ? QueueItemStatus.Done : QueueItemStatus.Failed);
-        return status == MovieSyncStatus.Synced;
+        if (lastError is not null)
+        {
+            SaveRecord(itemId, MovieSyncStatus.Failed, lastError, lastResult, syncedPaths);
+            SetItemStatus(itemId, QueueItemStatus.Failed);
+            return false;
+        }
+
+        if (lastSkip is not null)
+        {
+            // The run worked, we just deliberately didn't write anything. Calling that
+            // "Synced" would be a lie about what's on disk, and calling it "Failed" would
+            // be a lie about the engine, so it stays pending with the reason attached.
+            SaveRecord(itemId, MovieSyncStatus.Pending, lastSkip, lastResult, syncedPaths);
+            SetItemStatus(itemId, QueueItemStatus.Done);
+            return true;
+        }
+
+        SaveRecord(itemId, MovieSyncStatus.Synced, null, lastResult, syncedPaths);
+        SetItemStatus(itemId, QueueItemStatus.Done);
+        return true;
     }
 
     private void SetItemStatus(Guid itemId, QueueItemStatus status)
@@ -370,7 +480,15 @@ public class SyncQueueManager
     /// <param name="status">The new status.</param>
     /// <param name="error">Error message, if the sync failed.</param>
     /// <param name="result">The engine result, if there is one.</param>
-    public static void SaveRecord(Guid itemId, MovieSyncStatus status, string? error, SyncResult? result = null)
+    /// <param name="syncedPaths">The subtitle files that actually got written. Only these
+    /// count towards the item being synced, which is what lets an item with four
+    /// subtitles and one synced track report as partially synced instead of done.</param>
+    public static void SaveRecord(
+        Guid itemId,
+        MovieSyncStatus status,
+        string? error,
+        SyncResult? result = null,
+        IEnumerable<string>? syncedPaths = null)
     {
         var plugin = Plugin.Instance;
         if (plugin is null)
@@ -384,6 +502,24 @@ public class SyncQueueManager
         {
             record = new MovieSyncRecord { ItemId = itemId };
             records.Add(record);
+        }
+
+        if (syncedPaths is not null)
+        {
+            foreach (var path in syncedPaths)
+            {
+                var existing = record.SyncedSubtitles
+                    .FirstOrDefault(s => string.Equals(s.Path, path, StringComparison.Ordinal));
+
+                if (existing is null)
+                {
+                    record.SyncedSubtitles.Add(new SubtitleSyncRecord { Path = path, LastSyncUtc = DateTime.UtcNow });
+                }
+                else
+                {
+                    existing.LastSyncUtc = DateTime.UtcNow;
+                }
+            }
         }
 
         record.Status = status;

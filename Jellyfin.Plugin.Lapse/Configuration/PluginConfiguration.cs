@@ -63,9 +63,34 @@ public class PluginConfiguration : BasePluginConfiguration
     public string SidecarSuffix { get; set; } = ".shifted";
 
     /// <summary>
+    /// Gets or sets what happens when the engine finishes but isn't confident about the
+    /// result. Keeping the original is the default: a low score usually means the
+    /// subtitle isn't for this video at all.
+    /// </summary>
+    public LowConfidenceAction LowConfidenceAction { get; set; } = LowConfidenceAction.KeepOriginal;
+
+    /// <summary>
+    /// Gets or sets the confidence (0-100) a sync has to reach before it counts as good.
+    /// Engines that don't report a confidence at all are never held to this.
+    /// </summary>
+    public int SyncConfidenceThreshold { get; set; } = 50;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether the daily task keeps every installed
+    /// engine up to date. Engines that aren't installed are left alone either way.
+    /// </summary>
+    public bool AutoUpdateEngines { get; set; } = true;
+
+    /// <summary>
     /// Gets or sets the Google Cloud Translation API key.
     /// </summary>
     public string? GoogleTranslateApiKey { get; set; }
+
+    /// <summary>
+    /// Gets or sets the DeepL API key. Free tier keys end in ":fx" and go to a different
+    /// host, which the provider works out from the key itself.
+    /// </summary>
+    public string? DeepLApiKey { get; set; }
 
     /// <summary>
     /// Gets or sets the base URL of a self hosted Lingarr, e.g. http://lingarr:9876.
@@ -79,9 +104,25 @@ public class PluginConfiguration : BasePluginConfiguration
     public string? LingarrApiKey { get; set; }
 
     /// <summary>
-    /// Gets or sets which provider a translation job uses when it doesn't name one.
+    /// Gets or sets the base URL of a self hosted LibreTranslate, e.g. http://libretranslate:5000.
     /// </summary>
-    public TranslationProvider DefaultTranslationProvider { get; set; } = TranslationProvider.Google;
+    public string? LibreTranslateBaseUrl { get; set; }
+
+    /// <summary>
+    /// Gets or sets the LibreTranslate API key. Only needed when that instance asks for one.
+    /// </summary>
+    public string? LibreTranslateApiKey { get; set; }
+
+    /// <summary>
+    /// Gets or sets which provider a translation job uses when it doesn't name one.
+    /// MyMemory needs no setting up at all, so it's the one that works on a fresh install.
+    /// </summary>
+    public TranslationProvider DefaultTranslationProvider { get; set; } = TranslationProvider.MyMemory;
+
+    /// <summary>
+    /// Gets or sets how subtitles are restyled during playback.
+    /// </summary>
+    public SubtitleAppearance SubtitleAppearance { get; set; } = new();
 
     /// <summary>
     /// Gets or sets the default confidence threshold (0-100) for translation jobs.
@@ -185,5 +226,14 @@ public class PluginConfiguration : BasePluginConfiguration
         {
             SidecarSuffix = ".shifted";
         }
+
+        // Config written before SubtitleAppearance existed deserializes it as null, and
+        // every read of it assumes there's an object there.
+        if (SubtitleAppearance is null)
+        {
+            SubtitleAppearance = new SubtitleAppearance();
+        }
+
+        SyncConfidenceThreshold = Math.Clamp(SyncConfidenceThreshold, 0, 100);
     }
 }

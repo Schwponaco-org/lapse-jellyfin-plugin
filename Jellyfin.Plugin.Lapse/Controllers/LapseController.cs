@@ -15,6 +15,7 @@ using Jellyfin.Plugin.Lapse.Data;
 using Jellyfin.Plugin.Lapse.Engines;
 using Jellyfin.Plugin.Lapse.Services;
 using Jellyfin.Plugin.Lapse.Services.Translation;
+using Jellyfin.Plugin.Lapse.Web;
 using MediaBrowser.Common.Api;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
@@ -43,6 +44,7 @@ public class LapseController : ControllerBase
     private readonly SubtitleLocator _subtitleLocator;
     private readonly SubtitleShifter _subtitleShifter;
     private readonly TranslationService _translationService;
+    private readonly SeriesSyncService _seriesSyncService;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="LapseController"/> class.
@@ -57,6 +59,7 @@ public class LapseController : ControllerBase
     /// <param name="subtitleLocator">Finds external subtitles for an item.</param>
     /// <param name="subtitleShifter">Nudges subtitle timings by hand.</param>
     /// <param name="translationService">Translates subtitle files.</param>
+    /// <param name="seriesSyncService">Expands a series or season into its episodes.</param>
     public LapseController(
         ILibraryManager libraryManager,
         LibraryService libraryService,
@@ -67,7 +70,8 @@ public class LapseController : ControllerBase
         EngineUpdater updater,
         SubtitleLocator subtitleLocator,
         SubtitleShifter subtitleShifter,
-        TranslationService translationService)
+        TranslationService translationService,
+        SeriesSyncService seriesSyncService)
     {
         _libraryManager = libraryManager;
         _libraryService = libraryService;
@@ -79,6 +83,7 @@ public class LapseController : ControllerBase
         _subtitleLocator = subtitleLocator;
         _subtitleShifter = subtitleShifter;
         _translationService = translationService;
+        _seriesSyncService = seriesSyncService;
     }
 
     // ---------------------------------------------------------------- status and items
@@ -98,9 +103,15 @@ public class LapseController : ControllerBase
         foreach (var item in _libraryService.GetItems(includeSkipped: true))
         {
             var record = config.MovieRecords.FirstOrDefault(r => r.ItemId == item.Id);
-            var status = SyncQueueManager.IsSkipped(item)
-                ? MovieSyncStatus.Skipped
-                : record?.Status ?? MovieSyncStatus.Pending;
+            var subtitles = _subtitleLocator.GetExternalSubtitles(item);
+
+            // How many of the subtitles this item has right now have actually been
+            // synced. Anything the record claims about a file that is no longer there
+            // doesn't count, so a replaced subtitle correctly drops back to unsynced.
+            var syncedCount = record is null
+                ? 0
+                : subtitles.Count(s => record.SyncedSubtitles
+                    .Any(r => string.Equals(r.Path, s.Path, StringComparison.Ordinal)));
 
             var libraryId = _libraryService.GetLibraryIdFor(item, libraryIds);
 
@@ -111,14 +122,54 @@ public class LapseController : ControllerBase
                 ItemType = item.GetBaseItemKind().ToString(),
                 LibraryId = libraryId,
                 LibraryName = libraryId.HasValue && libraryNames.TryGetValue(libraryId.Value, out var name) ? name : null,
-                Status = status,
+                Status = ResolveDisplayStatus(item, record, subtitles.Count, syncedCount),
                 LastSyncUtc = record?.LastSyncUtc,
                 LastError = record?.LastError,
-                SubtitleCount = _subtitleLocator.GetExternalSubtitles(item).Count
+                SubtitleCount = subtitles.Count,
+                SyncedSubtitleCount = syncedCount
             });
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Works out what to show against an item.
+    ///
+    /// This is derived from which subtitle files have actually been synced rather than
+    /// from a flag on the record. A flag couldn't tell a fully synced item from one where
+    /// a single track out of four was done, and it couldn't tell either of those from a
+    /// record left behind by an older install - which is why a fresh install used to show
+    /// a whole library as synced without a single sync having been run.
+    /// </summary>
+    /// <param name="item">The item.</param>
+    /// <param name="record">Its sync record, if it has one.</param>
+    /// <param name="subtitleCount">How many external subtitles it has now.</param>
+    /// <param name="syncedCount">How many of those have been synced.</param>
+    /// <returns>The status to show.</returns>
+    private static MovieSyncStatus ResolveDisplayStatus(
+        BaseItem item,
+        MovieSyncRecord? record,
+        int subtitleCount,
+        int syncedCount)
+    {
+        if (SyncQueueManager.IsSkipped(item))
+        {
+            return MovieSyncStatus.Skipped;
+        }
+
+        // A failure is worth surfacing even when an earlier run had got some tracks done.
+        if (record?.Status == MovieSyncStatus.Failed && syncedCount < subtitleCount)
+        {
+            return MovieSyncStatus.Failed;
+        }
+
+        if (syncedCount == 0)
+        {
+            return MovieSyncStatus.Pending;
+        }
+
+        return syncedCount >= subtitleCount ? MovieSyncStatus.Synced : MovieSyncStatus.PartiallySynced;
     }
 
     /// <summary>
@@ -137,6 +188,30 @@ public class LapseController : ControllerBase
         }
 
         return _subtitleLocator.GetExternalSubtitles(item);
+    }
+
+    /// <summary>
+    /// Gets the first cue out of one of an item's subtitles, so the shift dialog can show
+    /// what an offset would do to a line rather than describing it in the abstract.
+    /// </summary>
+    /// <param name="itemId">The item.</param>
+    /// <param name="path">The subtitle file.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The first cue, or 404 if there isn't one.</returns>
+    [HttpGet("Lapse/Items/{itemId}/Subtitles/FirstCue")]
+    public async Task<ActionResult<SubtitlePreview>> GetFirstCue(
+        [FromRoute] Guid itemId,
+        [FromQuery] string path,
+        CancellationToken cancellationToken)
+    {
+        var match = FindSubtitle(itemId, path);
+        if (match is null)
+        {
+            return NotFound("That subtitle doesn't belong to this item");
+        }
+
+        var preview = await SubtitleShifter.ReadFirstCueAsync(match.Path, cancellationToken).ConfigureAwait(false);
+        return preview is null ? NotFound("That subtitle has no cues in it") : preview;
     }
 
     // ---------------------------------------------------------------------- syncing
@@ -204,11 +279,24 @@ public class LapseController : ControllerBase
 
         SyncQueueManager.SaveRecord(
             request.ItemId,
-            result.Success ? MovieSyncStatus.Synced : MovieSyncStatus.Failed,
-            result.Error,
-            result);
+            ResolveRecordStatus(result),
+            result.Success && result.Skipped ? SyncQueueManager.DescribeSkip(result) : result.Error,
+            result,
+            result.Success && !result.Skipped ? new[] { subtitlePath } : null);
 
         return result;
+    }
+
+    // A result the plugin deliberately didn't write isn't a success on disk and isn't an
+    // engine failure either, so it goes back to pending with the reason attached.
+    private static MovieSyncStatus ResolveRecordStatus(SyncResult result)
+    {
+        if (!result.Success)
+        {
+            return MovieSyncStatus.Failed;
+        }
+
+        return result.Skipped ? MovieSyncStatus.Pending : MovieSyncStatus.Synced;
     }
 
     /// <summary>
@@ -272,11 +360,20 @@ public class LapseController : ControllerBase
             });
         }
 
+        // The reference itself is correct by definition - that's why it was picked - so it
+        // counts as synced alongside everything that was lined up against it.
+        var writtenPaths = result.Results
+            .Where(o => o.Result is { Success: true, Skipped: false })
+            .Select(o => o.Path)
+            .Append(reference.Path)
+            .ToList();
+
         SyncQueueManager.SaveRecord(
             request.ItemId,
             result.SucceededCount == others.Count ? MovieSyncStatus.Synced : MovieSyncStatus.Failed,
             result.SucceededCount == others.Count ? null : "Some subtitles failed to sync against the reference",
-            result.Results.LastOrDefault()?.Result);
+            result.Results.LastOrDefault()?.Result,
+            writtenPaths);
 
         return result;
     }
@@ -304,13 +401,139 @@ public class LapseController : ControllerBase
     }
 
     /// <summary>
-    /// Gets the current bulk sync queue progress, for the dashboard's progress bar.
+    /// Gets the current bulk sync queue progress, for the dashboard's progress bar and
+    /// the context menu's "X / Y episodes processed" readout.
     /// </summary>
     /// <returns>Queue snapshot.</returns>
     [HttpGet("Lapse/Queue")]
     public ActionResult<QueueSnapshot> GetQueue()
     {
         return _queueManager.GetSnapshot();
+    }
+
+    /// <summary>
+    /// Gets the subtitle tracks that exist across the episodes of a series or season, for
+    /// the "sync all to reference" picker. A single episode's reference is one file; a
+    /// series' reference has to be a track that means the same thing on every episode.
+    /// </summary>
+    /// <param name="itemId">The series or season.</param>
+    /// <returns>One option per track, most widely available first.</returns>
+    [HttpGet("Lapse/Series/{itemId}/ReferenceOptions")]
+    public ActionResult<List<ReferenceOption>> GetSeriesReferenceOptions([FromRoute] Guid itemId)
+    {
+        var item = _libraryManager.GetItemById(itemId);
+        if (item is null)
+        {
+            return NotFound("Item not found");
+        }
+
+        if (!SeriesSyncService.IsSeriesOrSeason(item))
+        {
+            return BadRequest("That item isn't a series or a season");
+        }
+
+        return _seriesSyncService.GetReferenceOptions(item);
+    }
+
+    /// <summary>
+    /// Starts a background job syncing every episode under a series or season. Runs
+    /// through the same queue as a bulk sync, so progress comes back from GET Lapse/Queue
+    /// rather than this call sitting there until a whole show is done.
+    /// </summary>
+    /// <param name="request">The series or season, and optionally a reference track.</param>
+    /// <returns>How many episodes were queued, or 409 if a job is already running.</returns>
+    [HttpPost("Lapse/Series/Sync")]
+    [Authorize(Policy = Policies.RequiresElevation)]
+    public ActionResult SyncSeries([FromBody] SeriesSyncRequest request)
+    {
+        var item = _libraryManager.GetItemById(request.ItemId);
+        if (item is null)
+        {
+            return NotFound("Item not found");
+        }
+
+        if (!SeriesSyncService.IsSeriesOrSeason(item))
+        {
+            return BadRequest("That item isn't a series or a season");
+        }
+
+        var episodes = _seriesSyncService.GetEpisodes(item)
+            .Where(_libraryService.IsEligible)
+            .ToList();
+
+        if (episodes.Count == 0)
+        {
+            return Conflict("No episodes here are eligible for syncing - check the library is turned on and nothing is skipped");
+        }
+
+        var referenceKey = string.IsNullOrWhiteSpace(request.ReferenceKey) ? null : request.ReferenceKey.Trim();
+
+        if (!_queueManager.EnqueueItems(episodes, item.Name ?? "Series", "episode", referenceKey))
+        {
+            return Conflict("A sync job is already running");
+        }
+
+        return Accepted(new { Queued = episodes.Count });
+    }
+
+    /// <summary>
+    /// Lists the series in one library, for the dashboard's season picker.
+    /// </summary>
+    /// <param name="libraryId">The library.</param>
+    /// <returns>One entry per series.</returns>
+    [HttpGet("Lapse/Libraries/{libraryId}/Series")]
+    public ActionResult<List<FolderEntry>> GetSeriesInLibrary([FromRoute] Guid libraryId)
+    {
+        return _seriesSyncService.GetSeries(libraryId)
+            .Select(series => new FolderEntry { ItemId = series.Id, Name = series.Name ?? "Unknown" })
+            .ToList();
+    }
+
+    /// <summary>
+    /// Lists the seasons of one series, for the dashboard's season picker.
+    /// </summary>
+    /// <param name="itemId">The series.</param>
+    /// <returns>One entry per season.</returns>
+    [HttpGet("Lapse/Series/{itemId}/Seasons")]
+    public ActionResult<List<FolderEntry>> GetSeasons([FromRoute] Guid itemId)
+    {
+        var item = _libraryManager.GetItemById(itemId);
+        if (item is null)
+        {
+            return NotFound("Item not found");
+        }
+
+        return _seriesSyncService.GetSeasons(item)
+            .Select(season => new FolderEntry { ItemId = season.Id, Name = season.Name ?? "Unknown" })
+            .ToList();
+    }
+
+    /// <summary>
+    /// Starts a sync of every series in one library, one episode at a time.
+    /// </summary>
+    /// <param name="libraryId">The library.</param>
+    /// <returns>How many episodes were queued, or 409 if a job is already running.</returns>
+    [HttpPost("Lapse/Libraries/{libraryId}/SyncAllSeries")]
+    [Authorize(Policy = Policies.RequiresElevation)]
+    public ActionResult SyncAllSeries([FromRoute] Guid libraryId)
+    {
+        var episodes = _libraryService.GetItems(libraryId)
+            .Where(_libraryService.IsEligible)
+            .ToList();
+
+        if (episodes.Count == 0)
+        {
+            return Conflict("Nothing in that library is eligible for syncing");
+        }
+
+        var name = _libraryService.GetLibraries().FirstOrDefault(l => l.ItemId == libraryId)?.Name ?? "Library";
+
+        if (!_queueManager.EnqueueItems(episodes, name, "episode"))
+        {
+            return Conflict("A sync job is already running");
+        }
+
+        return Accepted(new { Queued = episodes.Count });
     }
 
     /// <summary>
@@ -364,13 +587,24 @@ public class LapseController : ControllerBase
         var config = Plugin.Instance!.Configuration;
         var names = _libraryService.GetLibraries().ToDictionary(l => l.ItemId, l => l.Name);
 
+        if (request?.Libraries is null || request.Libraries.Count == 0)
+        {
+            return BadRequest("No libraries were sent, so there was nothing to save");
+        }
+
         foreach (var entry in request.Libraries)
         {
             var library = config.GetLibraryConfig(entry.ItemId);
             var wasScheduled = library.ScheduleEnabled;
+            var oldFrequency = library.ScheduleFrequency;
+            var oldDay = library.ScheduleDay;
+            var oldTime = library.ScheduleTime;
 
             library.Enabled = entry.Enabled;
             library.ScheduleEnabled = entry.ScheduleEnabled;
+            library.ScheduleFrequency = Enum.TryParse<ScheduleFrequency>(entry.ScheduleFrequency, out var frequency)
+                ? frequency
+                : ScheduleFrequency.Daily;
             library.ScheduleDay = Enum.TryParse<DayOfWeek>(entry.ScheduleDay, out var day) ? day : null;
             library.ScheduleTime = string.IsNullOrWhiteSpace(entry.ScheduleTime) ? "03:00" : entry.ScheduleTime;
 
@@ -379,9 +613,13 @@ public class LapseController : ControllerBase
                 library.Name = name;
             }
 
-            // turning a schedule on should let it fire at the next slot, even if this
-            // library ran within the last few hours under its old settings
-            if (!wasScheduled && library.ScheduleEnabled)
+            // A schedule that was just turned on, or retimed, should be free to fire at
+            // its next slot rather than being held back by when the old one last ran.
+            var changed = library.ScheduleFrequency != oldFrequency
+                || library.ScheduleDay != oldDay
+                || !string.Equals(library.ScheduleTime, oldTime, StringComparison.Ordinal);
+
+            if ((!wasScheduled && library.ScheduleEnabled) || changed)
             {
                 library.LastScheduledRunUtc = null;
             }
@@ -441,6 +679,15 @@ public class LapseController : ControllerBase
                 ? await _runner.GetRuntimeInfoAsync(engine).ConfigureAwait(false)
                 : EngineRuntimeInfo.Unknown;
 
+            // What's on disk, from whichever source can answer: the release tag recorded
+            // at install time first, then whatever the binary says about itself. An
+            // engine that was installed before versions were recorded, or while GitHub
+            // was unreachable, still gets a version out of this rather than showing
+            // nothing and refusing to update.
+            var installedVersion = installed
+                ? await _updater.ResolveInstalledVersionAsync(engine).ConfigureAwait(false)
+                : null;
+
             result.Add(new EngineInfo
             {
                 Id = descriptor.Id,
@@ -463,12 +710,15 @@ public class LapseController : ControllerBase
                 MinPenalty = descriptor.Capabilities.MinPenalty,
                 MaxPenalty = descriptor.Capabilities.MaxPenalty,
                 PathOverride = settings.PathOverride,
-                InstalledVersion = installed ? settings.InstalledVersion : null,
+                InstalledVersion = installedVersion,
                 LatestVersion = settings.LatestKnownVersion,
+                VersionUnknown = installed && installedVersion is null,
                 UpdateAvailable = installed
                     && downloadable
-                    && GitHubReleaseClient.IsNewer(settings.InstalledVersion, settings.LatestKnownVersion),
-                AutoUpdate = settings.AutoUpdate,
+                    && settings.LatestKnownVersion is not null
+                    && (installedVersion is null
+                        || GitHubReleaseClient.IsNewer(installedVersion, settings.LatestKnownVersion)),
+                AutoUpdate = config.AutoUpdateEngines,
                 ReportedVersion = runtime.Version,
                 DiscoveredFlags = runtime.Probed ? runtime.Flags : null,
                 CapabilitySource = runtime.Source,
@@ -554,22 +804,17 @@ public class LapseController : ControllerBase
     }
 
     /// <summary>
-    /// Turns auto-update on or off for one engine.
+    /// Turns automatic engine updates on or off for the whole server. There used to be
+    /// one of these per engine, which meant four switches to answer one question.
+    /// Engines that aren't installed are ignored by the update task either way.
     /// </summary>
-    /// <param name="engineId">Which engine.</param>
-    /// <param name="enabled">Whether the daily task may update it.</param>
+    /// <param name="enabled">Whether the daily task keeps installed engines up to date.</param>
     /// <returns>Ok.</returns>
-    [HttpPost("Lapse/Engines/{engineId}/AutoUpdate")]
+    [HttpPost("Lapse/Engines/AutoUpdate")]
     [Authorize(Policy = Policies.RequiresElevation)]
-    public ActionResult SetEngineAutoUpdate([FromRoute] string engineId, [FromQuery] bool enabled)
+    public ActionResult SetEngineAutoUpdate([FromQuery] bool enabled)
     {
-        var engine = _registry.Find(engineId);
-        if (engine is null)
-        {
-            return NotFound($"No engine called '{engineId}'");
-        }
-
-        Plugin.Instance!.Configuration.GetEngineSettings(engine.Descriptor.Id).AutoUpdate = enabled;
+        Plugin.Instance!.Configuration.AutoUpdateEngines = enabled;
         Plugin.Instance!.SaveConfiguration();
         return Ok();
     }
@@ -642,13 +887,20 @@ public class LapseController : ControllerBase
         {
             OutputMode = config.OutputMode,
             SidecarSuffix = config.SidecarSuffix,
+            LowConfidenceAction = config.LowConfidenceAction,
+            SyncConfidenceThreshold = config.SyncConfidenceThreshold,
+            AutoUpdateEngines = config.AutoUpdateEngines,
             GoogleTranslateApiKey = config.GoogleTranslateApiKey,
+            DeepLApiKey = config.DeepLApiKey,
             LingarrBaseUrl = config.LingarrBaseUrl,
             LingarrApiKey = config.LingarrApiKey,
+            LibreTranslateBaseUrl = config.LibreTranslateBaseUrl,
+            LibreTranslateApiKey = config.LibreTranslateApiKey,
             DefaultTranslationProvider = config.DefaultTranslationProvider,
             TranslationConfidenceThreshold = config.TranslationConfidenceThreshold,
             TranslationIncludeMetadataHeader = config.TranslationIncludeMetadataHeader,
-            TranslationKeepLowConfidenceOriginal = config.TranslationKeepLowConfidenceOriginal
+            TranslationKeepLowConfidenceOriginal = config.TranslationKeepLowConfidenceOriginal,
+            SubtitleAppearance = config.SubtitleAppearance
         };
 
         foreach (var engine in _registry.All)
@@ -658,12 +910,40 @@ public class LapseController : ControllerBase
             {
                 EngineId = engine.Descriptor.Id,
                 PathOverride = engineSettings.PathOverride,
-                Penalty = engineSettings.Penalty,
-                AutoUpdate = engineSettings.AutoUpdate
+                Penalty = engineSettings.Penalty
             });
         }
 
         return settings;
+    }
+
+    /// <summary>
+    /// Gets just the subtitle appearance settings. Separate from the rest because the
+    /// injected script needs these on every page load for any signed in user, not only
+    /// for an admin sitting on the dashboard.
+    /// </summary>
+    /// <returns>The appearance settings.</returns>
+    [HttpGet("Lapse/Appearance")]
+    public ActionResult<SubtitleAppearance> GetAppearance()
+    {
+        return Plugin.Instance!.Configuration.SubtitleAppearance;
+    }
+
+    /// <summary>
+    /// Says whether the plugin is actually reaching the web client, which is what decides
+    /// whether the sync entries show up in an item's context menu at all.
+    /// </summary>
+    /// <returns>The injection status.</returns>
+    [HttpGet("Lapse/Diagnostics")]
+    public ActionResult<object> GetDiagnostics()
+    {
+        return new
+        {
+            InjectionMethod = WebClientInjection.Method.ToString(),
+            WebClientInjection.Problem,
+            WebClientInjection.WebPath,
+            Platform = EngineInstaller.DetectedOsArch
+        };
     }
 
     /// <summary>
@@ -679,13 +959,32 @@ public class LapseController : ControllerBase
 
         config.OutputMode = settings.OutputMode;
         config.SidecarSuffix = string.IsNullOrWhiteSpace(settings.SidecarSuffix) ? ".shifted" : settings.SidecarSuffix.Trim();
+        config.LowConfidenceAction = settings.LowConfidenceAction;
+        config.SyncConfidenceThreshold = Math.Clamp(settings.SyncConfidenceThreshold, 0, 100);
+        config.AutoUpdateEngines = settings.AutoUpdateEngines;
         config.GoogleTranslateApiKey = Blank(settings.GoogleTranslateApiKey);
+        config.DeepLApiKey = Blank(settings.DeepLApiKey);
         config.LingarrBaseUrl = Blank(settings.LingarrBaseUrl);
         config.LingarrApiKey = Blank(settings.LingarrApiKey);
+        config.LibreTranslateBaseUrl = Blank(settings.LibreTranslateBaseUrl);
+        config.LibreTranslateApiKey = Blank(settings.LibreTranslateApiKey);
         config.DefaultTranslationProvider = settings.DefaultTranslationProvider;
         config.TranslationConfidenceThreshold = Math.Clamp(settings.TranslationConfidenceThreshold, 0, 100);
         config.TranslationIncludeMetadataHeader = settings.TranslationIncludeMetadataHeader;
         config.TranslationKeepLowConfidenceOriginal = settings.TranslationKeepLowConfidenceOriginal;
+
+        if (settings.SubtitleAppearance is not null)
+        {
+            var appearance = settings.SubtitleAppearance;
+            config.SubtitleAppearance = new SubtitleAppearance
+            {
+                Enabled = appearance.Enabled,
+                FontSizePx = Math.Clamp(appearance.FontSizePx, 8, 200),
+                TextColor = NormalizeColor(appearance.TextColor, SubtitleAppearance.DefaultTextColor),
+                BackgroundColor = NormalizeColor(appearance.BackgroundColor, SubtitleAppearance.DefaultBackgroundColor),
+                BackgroundEnabled = appearance.BackgroundEnabled
+            };
+        }
 
         foreach (var entry in settings.Engines)
         {
@@ -697,7 +996,6 @@ public class LapseController : ControllerBase
             var engineSettings = config.GetEngineSettings(entry.EngineId);
             engineSettings.PathOverride = Blank(entry.PathOverride);
             engineSettings.Penalty = entry.Penalty;
-            engineSettings.AutoUpdate = entry.AutoUpdate;
         }
 
         Plugin.Instance!.SaveConfiguration();
@@ -739,7 +1037,10 @@ public class LapseController : ControllerBase
     }
 
     /// <summary>
-    /// Gets the translation providers and whether each one is configured well enough to use.
+    /// Gets the translation providers, in the order they should be offered: the one that
+    /// needs no setting up first, then the self hosted ones, then the ones wanting a
+    /// cloud API key. Anything not configured comes back with the reason, so the
+    /// dashboard can grey it out and the per-job dropdown can leave it out entirely.
     /// </summary>
     /// <returns>One entry per provider.</returns>
     [HttpGet("Lapse/Translate/Providers")]
@@ -748,12 +1049,19 @@ public class LapseController : ControllerBase
         var defaultProvider = Plugin.Instance!.Configuration.DefaultTranslationProvider;
 
         return _translationService.Providers
-            .Select(p => (object)new
+            .Select(p =>
             {
-                Id = p.Id.ToString(),
-                p.DisplayName,
-                Problem = p.GetConfigurationProblem(),
-                IsDefault = p.Id == defaultProvider
+                var problem = p.GetConfigurationProblem();
+                return (object)new
+                {
+                    Id = p.Id.ToString(),
+                    p.DisplayName,
+                    p.Tier,
+                    p.Summary,
+                    Problem = problem,
+                    Configured = problem is null,
+                    IsDefault = p.Id == defaultProvider
+                };
             })
             .ToList();
     }
@@ -762,40 +1070,37 @@ public class LapseController : ControllerBase
 
     /// <summary>
     /// Nudges a subtitle file's timings by hand, for when a sync gets close but is still
-    /// slightly off. Doesn't touch the engine, it just rewrites the timestamps.
+    /// slightly off. Doesn't touch the engine, it just rewrites the timestamps. Where the
+    /// result lands follows the configured output mode, same as a sync.
     /// </summary>
-    /// <param name="request">Which subtitle and how many seconds to move it.</param>
-    /// <returns>Ok with how many timestamps changed.</returns>
+    /// <param name="request">Which subtitle and how far to move it.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>What the shift did.</returns>
     [HttpPost("Lapse/Shift")]
     [Authorize(Policy = Policies.RequiresElevation)]
-    public async Task<ActionResult> Shift([FromBody] ShiftRequest request)
+    public async Task<ActionResult<ShiftResult>> Shift(
+        [FromBody] ShiftRequest request,
+        CancellationToken cancellationToken)
     {
         if (request is null || string.IsNullOrWhiteSpace(request.SubtitlePath))
         {
             return BadRequest("A subtitle path is required");
         }
 
-        var item = _libraryManager.GetItemById(request.ItemId);
-        if (item is null)
-        {
-            return NotFound("Item not found");
-        }
-
         // Only ever write to a subtitle the library actually knows about for this item.
         // The path we hand to the shifter is the library's own copy, not the one from the
         // request body, so there's no way to talk this into editing some other file.
-        var match = _subtitleLocator.GetExternalSubtitles(item)
-            .Find(s => string.Equals(s.Path, request.SubtitlePath, StringComparison.Ordinal));
-
+        var match = FindSubtitle(request.ItemId, request.SubtitlePath);
         if (match is null)
         {
-            return BadRequest("That subtitle doesn't belong to this item");
+            return BadRequest("That subtitle doesn't belong to this item, or the item doesn't exist");
         }
 
         try
         {
-            var shifted = await _subtitleShifter.ShiftAsync(match.Path, request.OffsetSeconds).ConfigureAwait(false);
-            return Ok(new { Shifted = shifted });
+            return await _subtitleShifter
+                .ShiftAsync(match.Path, request.ResolveOffsetSeconds(), request.OutputMode, cancellationToken)
+                .ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is NotSupportedException or FileNotFoundException or IOException)
         {
@@ -885,6 +1190,57 @@ public class LapseController : ControllerBase
     private static string? Blank(string? value)
     {
         return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    }
+
+    // Only ever accept #rgb, #rrggbb or #rrggbbaa, so nothing that lands in a <style>
+    // block on someone else's browser came out of a request body unchecked.
+    private static string NormalizeColor(string? value, string fallback)
+    {
+        var trimmed = value?.Trim();
+        if (string.IsNullOrEmpty(trimmed))
+        {
+            return fallback;
+        }
+
+        if (trimmed[0] != '#' || trimmed.Length is not (4 or 7 or 9))
+        {
+            return fallback;
+        }
+
+        for (var i = 1; i < trimmed.Length; i++)
+        {
+            if (!Uri.IsHexDigit(trimmed[i]))
+            {
+                return fallback;
+            }
+        }
+
+        return trimmed;
+    }
+
+    /// <summary>
+    /// Finds one of an item's external subtitles by path, returning the library's own
+    /// copy of the path rather than the caller's. Everything that writes to a subtitle
+    /// goes through this, so a request can't name a file that isn't this item's.
+    /// </summary>
+    /// <param name="itemId">The item.</param>
+    /// <param name="path">The path from the request.</param>
+    /// <returns>The subtitle, or null.</returns>
+    private SubtitleOption? FindSubtitle(Guid itemId, string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return null;
+        }
+
+        var item = _libraryManager.GetItemById(itemId);
+        if (item is null)
+        {
+            return null;
+        }
+
+        return _subtitleLocator.GetExternalSubtitles(item)
+            .Find(s => string.Equals(s.Path, path, StringComparison.Ordinal));
     }
 
     private static bool SupportsMode(IEngine engine, SyncMode mode)

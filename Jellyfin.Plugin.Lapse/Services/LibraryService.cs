@@ -60,19 +60,23 @@ public class LibraryService
             }
 
             var settings = config.Libraries.FirstOrDefault(l => l.LibraryId == id);
+            var collectionType = folder.CollectionType?.ToString();
 
             result.Add(new LibraryEntry
             {
                 ItemId = id,
                 Name = folder.Name,
-                CollectionType = folder.CollectionType?.ToString(),
+                CollectionType = collectionType,
 
                 // no entry means the user has never touched this library in the dashboard,
                 // and those default to on so an upgrade doesn't quietly stop syncing
                 Enabled = settings?.Enabled ?? true,
                 ScheduleEnabled = settings?.ScheduleEnabled ?? false,
+                ScheduleFrequency = (settings?.ScheduleFrequency ?? Data.ScheduleFrequency.Daily).ToString(),
                 ScheduleDay = settings?.ScheduleDay?.ToString(),
                 ScheduleTime = settings?.ScheduleTime ?? "03:00",
+                LastScheduledRunUtc = settings?.LastScheduledRunUtc,
+                IsShowLibrary = string.Equals(collectionType, "tvshows", StringComparison.OrdinalIgnoreCase),
                 Skipped = config.SkippedItemIds.Contains(id)
             });
         }

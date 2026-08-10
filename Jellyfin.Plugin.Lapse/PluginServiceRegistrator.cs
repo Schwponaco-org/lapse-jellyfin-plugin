@@ -7,9 +7,11 @@ using Jellyfin.Plugin.Lapse.Engines;
 using Jellyfin.Plugin.Lapse.Services;
 using Jellyfin.Plugin.Lapse.Services.Translation;
 using Jellyfin.Plugin.Lapse.Tasks;
+using Jellyfin.Plugin.Lapse.Web;
 using MediaBrowser.Controller;
 using MediaBrowser.Controller.Plugins;
 using MediaBrowser.Model.Tasks;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Jellyfin.Plugin.Lapse;
@@ -39,9 +41,20 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddSingleton<SubtitleShifter>();
         serviceCollection.AddSingleton<SyncQueueManager>();
 
-        serviceCollection.AddSingleton<GoogleTranslationProvider>();
-        serviceCollection.AddSingleton<LingarrTranslationProvider>();
+        serviceCollection.AddSingleton<SeriesSyncService>();
+
+        // Order here is the order the dashboard lists them in: no setup, then self
+        // hosted, then the ones that want a cloud API key.
+        serviceCollection.AddSingleton<ITranslationProvider, MyMemoryTranslationProvider>();
+        serviceCollection.AddSingleton<ITranslationProvider, LibreTranslateTranslationProvider>();
+        serviceCollection.AddSingleton<ITranslationProvider, LingarrTranslationProvider>();
+        serviceCollection.AddSingleton<ITranslationProvider, DeepLTranslationProvider>();
+        serviceCollection.AddSingleton<ITranslationProvider, GoogleTranslationProvider>();
         serviceCollection.AddSingleton<TranslationService>();
+
+        // Adds the LAPSE script to the web client's index.html as it's served. Without
+        // this there is no sync entry in any item's context menu.
+        serviceCollection.AddSingleton<IStartupFilter, ScriptInjectionStartupFilter>();
 
         serviceCollection.AddHostedService<AutoSyncHostedService>();
         serviceCollection.AddHostedService<LibraryScheduleService>();

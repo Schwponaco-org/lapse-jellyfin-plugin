@@ -10,55 +10,59 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Web;
 using Jellyfin.Plugin.Lapse.Data;
 using Microsoft.Extensions.Logging;
 
 namespace Jellyfin.Plugin.Lapse.Services.Translation;
 
 /// <summary>
-/// Google Cloud Translation, the v2 REST API. It takes a batch of strings per request,
-/// which is a lot kinder to both the rate limit and the clock than one call per line.
+/// LibreTranslate, self hosted. Its /translate endpoint takes an array of strings and
+/// returns an array back, so a whole subtitle file goes over in a handful of requests.
 /// </summary>
-public class GoogleTranslationProvider : ITranslationProvider
+public class LibreTranslateTranslationProvider : ITranslationProvider
 {
-    // Google caps a v2 request at 128 strings, and the whole request at 30k characters.
-    // 64 short subtitle lines sits comfortably inside both.
-    private const int BatchSize = 64;
+    // Batched rather than one request per line, but not so large that a single failure
+    // costs the whole file.
+    private const int BatchSize = 50;
 
     private readonly IHttpClientFactory _httpClientFactory;
-    private readonly ILogger<GoogleTranslationProvider> _logger;
+    private readonly ILogger<LibreTranslateTranslationProvider> _logger;
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="GoogleTranslationProvider"/> class.
+    /// Initializes a new instance of the <see cref="LibreTranslateTranslationProvider"/> class.
     /// </summary>
     /// <param name="httpClientFactory">Factory to grab an HttpClient from.</param>
     /// <param name="logger">Logger.</param>
-    public GoogleTranslationProvider(IHttpClientFactory httpClientFactory, ILogger<GoogleTranslationProvider> logger)
+    public LibreTranslateTranslationProvider(IHttpClientFactory httpClientFactory, ILogger<LibreTranslateTranslationProvider> logger)
     {
         _httpClientFactory = httpClientFactory;
         _logger = logger;
     }
 
     /// <inheritdoc />
-    public TranslationProvider Id => TranslationProvider.Google;
+    public TranslationProvider Id => TranslationProvider.LibreTranslate;
 
     /// <inheritdoc />
-    public string DisplayName => "Google Translate";
+    public string DisplayName => "LibreTranslate";
 
     /// <inheritdoc />
-    public int Tier => 2;
+    public int Tier => 1;
 
     /// <inheritdoc />
-    public string Summary => "Google Cloud Translation v2. Needs a Google Cloud project with billing and an API key.";
+    public string Summary => "Self hosted and open source. Point this at your own instance - no cloud account involved.";
 
     /// <inheritdoc />
     public string? GetConfigurationProblem()
     {
-        var key = Plugin.Instance?.Configuration.GoogleTranslateApiKey;
-        return string.IsNullOrWhiteSpace(key)
-            ? "No Google Translate API key is set. Add one in the LAPSE dashboard under Translation."
-            : null;
+        var baseUrl = Plugin.Instance?.Configuration.LibreTranslateBaseUrl;
+        if (string.IsNullOrWhiteSpace(baseUrl))
+        {
+            return "No LibreTranslate base URL is set. Add one in the LAPSE dashboard under Translation.";
+        }
+
+        return Uri.TryCreate(baseUrl, UriKind.Absolute, out _)
+            ? null
+            : $"'{baseUrl}' isn't a URL LibreTranslate can be reached at. It should look like http://libretranslate:5000.";
     }
 
     /// <inheritdoc />
@@ -74,7 +78,10 @@ public class GoogleTranslationProvider : ITranslationProvider
             throw new InvalidOperationException(problem);
         }
 
-        var apiKey = Plugin.Instance!.Configuration.GoogleTranslateApiKey!;
+        var config = Plugin.Instance!.Configuration;
+        var url = config.LibreTranslateBaseUrl!.TrimEnd('/') + "/translate";
+        var source = string.IsNullOrWhiteSpace(sourceLanguage) ? "auto" : sourceLanguage;
+
         var client = _httpClientFactory.CreateClient("Lapse");
         var results = new List<TranslatedLine>(lines.Count);
 
@@ -88,17 +95,17 @@ public class GoogleTranslationProvider : ITranslationProvider
                 batch.Add(lines[i]);
             }
 
-            var url = "https://translation.googleapis.com/language/translate/v2?key=" + HttpUtility.UrlEncode(apiKey);
             var payload = new Dictionary<string, object>
             {
                 ["q"] = batch,
+                ["source"] = source,
                 ["target"] = targetLanguage,
                 ["format"] = "text"
             };
 
-            if (!string.IsNullOrWhiteSpace(sourceLanguage))
+            if (!string.IsNullOrWhiteSpace(config.LibreTranslateApiKey))
             {
-                payload["source"] = sourceLanguage;
+                payload["api_key"] = config.LibreTranslateApiKey;
             }
 
             using var response = await client.PostAsJsonAsync(url, payload, cancellationToken).ConfigureAwait(false);
@@ -108,12 +115,16 @@ public class GoogleTranslationProvider : ITranslationProvider
                 var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
                 throw new HttpRequestException(string.Format(
                     CultureInfo.InvariantCulture,
-                    "Google Translate returned {0}: {1}",
+                    "LibreTranslate returned {0} for {1}: {2}",
                     (int)response.StatusCode,
+                    url,
                     Shorten(body)));
             }
 
-            using var document = await response.Content.ReadFromJsonAsync<JsonDocument>(cancellationToken).ConfigureAwait(false);
+            using var document = await response.Content
+                .ReadFromJsonAsync<JsonDocument>(cancellationToken)
+                .ConfigureAwait(false);
+
             results.AddRange(ReadTranslations(document, batch.Count));
         }
 
@@ -124,28 +135,26 @@ public class GoogleTranslationProvider : ITranslationProvider
     {
         var results = new List<TranslatedLine>();
 
-        if (document is not null
-            && document.RootElement.TryGetProperty("data", out var data)
-            && data.TryGetProperty("translations", out var translations)
-            && translations.ValueKind == JsonValueKind.Array)
+        if (document is not null && document.RootElement.TryGetProperty("translatedText", out var translated))
         {
-            foreach (var translation in translations.EnumerateArray())
+            // Handed an array it answers with an array, but some builds unwrap a single
+            // element back to a bare string, so take either.
+            if (translated.ValueKind == JsonValueKind.Array)
             {
-                results.Add(new TranslatedLine
+                foreach (var entry in translated.EnumerateArray())
                 {
-                    Text = translation.TryGetProperty("translatedText", out var text) ? text.GetString() : null,
-                    DetectedSourceLanguage = translation.TryGetProperty("detectedSourceLanguage", out var detected)
-                        ? detected.GetString()
-                        : null
-                });
+                    results.Add(new TranslatedLine { Text = entry.GetString() });
+                }
+            }
+            else if (translated.ValueKind == JsonValueKind.String)
+            {
+                results.Add(new TranslatedLine { Text = translated.GetString() });
             }
         }
 
-        // Google returns one translation per input, but if it ever doesn't, pad the batch
-        // out so the results still line up with the lines they came from
         if (results.Count != expected)
         {
-            _logger.LogWarning("Google Translate returned {Got} translations for {Expected} lines", results.Count, expected);
+            _logger.LogWarning("LibreTranslate returned {Got} translations for {Expected} lines", results.Count, expected);
             while (results.Count < expected)
             {
                 results.Add(new TranslatedLine());

@@ -47,6 +47,21 @@ public class SyncResult
     public double? Confidence { get; set; }
 
     /// <summary>
+    /// Gets or sets a value indicating whether the engine's confidence came in under the
+    /// configured threshold. What actually happened to the result then depends on the
+    /// low-confidence setting in File output.
+    /// </summary>
+    public bool LowConfidence { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether the result was thrown away and the file on
+    /// disk left exactly as it was. Only happens for a low-confidence result under the
+    /// "keep original" setting - the run itself still counts as a success, it just
+    /// deliberately didn't write anything.
+    /// </summary>
+    public bool Skipped { get; set; }
+
+    /// <summary>
     /// Gets or sets the path to the synced subtitle file the engine wrote out.
     /// </summary>
     public string? OutputPath { get; set; }

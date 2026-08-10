@@ -24,14 +24,31 @@
     box-shadow: 0 4px 24px rgba(0, 0, 0, .5);
 }
 
+/* The advanced dialog carries a lot more than the little confirm popups do. */
+.lapseDialogCard-wide {
+    width: 30em;
+}
+
 .lapseDialogCard h3 {
     margin-top: 0;
+}
+
+.lapseDialogSubhead {
+    margin: 0 0 .4em;
+    font-size: 1em;
+    opacity: .85;
 }
 
 .lapseDialogCard .fieldDescription {
     font-size: .85em;
     opacity: .7;
     line-height: 1.4;
+}
+
+.lapseDialogRule {
+    border: 0;
+    border-top: 1px solid rgba(255, 255, 255, .12);
+    margin: 1.4em 0 1em;
 }
 
 .lapseDialogButtons {
@@ -44,37 +61,79 @@
     flex: 1;
 }
 
-.lapseIframeOverlay {
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, .75);
-    z-index: 10000;
+.lapseSmallButton {
+    margin-top: .6em;
+}
+
+/* offset input with its - and + buttons either side */
+.lapseStepperRow {
     display: flex;
     align-items: center;
-    justify-content: center;
+    gap: .5em;
 }
 
-.lapseIframeCard {
-    position: relative;
-    width: 92vw;
-    height: 92vh;
-    background: var(--theme-body-background, #202124);
+.lapseStepperRow input {
+    flex: 1;
+    text-align: center;
+}
+
+.lapseStepButton {
+    min-width: 3em;
+    flex: 0 0 auto;
+}
+
+/* what the offset does to one real line from the file */
+.lapsePreviewBox {
+    margin-top: .8em;
+    padding: .7em .8em;
     border-radius: .3em;
-    overflow: hidden;
-    box-shadow: 0 4px 24px rgba(0, 0, 0, .5);
+    background: rgba(255, 255, 255, .06);
+    font-size: .85em;
+    line-height: 1.5;
 }
 
-.lapseIframeCard iframe {
+.lapsePreviewText {
+    opacity: .75;
+    margin-bottom: .5em;
+    font-style: italic;
+}
+
+.lapsePreviewRow {
+    display: flex;
+    gap: .6em;
+    font-family: monospace;
+    white-space: nowrap;
+    overflow-x: auto;
+}
+
+.lapsePreviewLabel {
+    opacity: .55;
+    min-width: 3.2em;
+    flex: 0 0 auto;
+}
+
+.lapsePreviewAfter {
+    color: var(--theme-primary-color, #00a4dc);
+}
+
+.lapseFieldPair {
+    display: flex;
+    gap: .8em;
+}
+
+.lapseFieldPair > * {
+    flex: 1;
+}
+
+.lapseRange {
     width: 100%;
-    height: 100%;
-    border: 0;
 }
 
-.lapseIframeCloseButton {
-    position: absolute;
-    top: .3em;
-    right: .3em;
-    z-index: 1;
+.lapseStackedCheck {
+    display: flex;
+    align-items: center;
+    gap: .5em;
+    margin: .6em 0;
 }
 
 .lapseToast {
@@ -89,4 +148,34 @@
     box-shadow: 0 2px 12px rgba(0, 0, 0, .5);
     z-index: 10001;
     max-width: 80vw;
+}
+
+/* --- our entries in Jellyfin's action sheet ---
+   "Sync All Subtitles to Reference" is longer than anything Jellyfin puts in that menu
+   itself, and the sheet's own rules keep item text on one line, so it ran off the right
+   edge and got cut. Let ours wrap and give the sheet room to grow with it. */
+
+.lapseSyncButton {
+    height: auto !important;
+    min-height: 3em;
+    align-items: center;
+}
+
+.lapseSyncButton .actionSheetItemText,
+.lapseSyncButton .listItemBodyText {
+    white-space: normal !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+    line-height: 1.35;
+    padding: .2em 0;
+}
+
+.lapseSyncButton .listItemBody {
+    min-width: 0;
+    overflow: visible !important;
+}
+
+.actionSheetContent:has(.lapseSyncButton),
+.actionSheet:has(.lapseSyncButton) {
+    max-width: min(32em, 92vw);
 }

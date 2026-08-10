@@ -3,6 +3,7 @@
 // Licensed under GPL v3 - see LICENSE for details
 
 using System;
+using System.Collections.Generic;
 
 namespace Jellyfin.Plugin.Lapse.Data;
 
@@ -18,9 +19,17 @@ public class MovieSyncRecord
     public Guid ItemId { get; set; }
 
     /// <summary>
-    /// Gets or sets the current status.
+    /// Gets or sets the outcome of the last attempt. This says what happened last time,
+    /// not how much of the item is synced - that's worked out from
+    /// <see cref="SyncedSubtitles"/>, because a single flag can't tell a fully synced item
+    /// from one where only one of four tracks was done.
     /// </summary>
     public MovieSyncStatus Status { get; set; } = MovieSyncStatus.Pending;
+
+    /// <summary>
+    /// Gets the subtitle files that have actually been synced for this item.
+    /// </summary>
+    public List<SubtitleSyncRecord> SyncedSubtitles { get; } = new();
 
     /// <summary>
     /// Gets or sets when the last sync attempt happened, if any.

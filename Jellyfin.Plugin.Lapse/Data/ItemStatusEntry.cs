@@ -60,6 +60,12 @@ public class ItemStatusEntry
     public int SubtitleCount { get; set; }
 
     /// <summary>
+    /// Gets or sets how many of those subtitles have actually been synced. Less than
+    /// <see cref="SubtitleCount"/> but more than zero is what "partially synced" means.
+    /// </summary>
+    public int SyncedSubtitleCount { get; set; }
+
+    /// <summary>
     /// Gets a value indicating whether this item has at least one external subtitle.
     /// </summary>
     public bool HasExternalSubtitle => SubtitleCount > 0;
