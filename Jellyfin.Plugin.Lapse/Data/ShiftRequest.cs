@@ -7,25 +7,46 @@ using System;
 namespace Jellyfin.Plugin.Lapse.Data;
 
 /// <summary>
-/// Body for POST /Lapse/Shift, the manual nudge for when a sync lands close but not perfect.
+/// A request to move a subtitle file's timings by hand.
 /// </summary>
 public class ShiftRequest
 {
     /// <summary>
-    /// Gets or sets the movie the subtitle belongs to. The subtitle has to actually be one
-    /// of this movie's external subtitles, so we're never writing to some arbitrary path
-    /// somebody passed in.
+    /// Gets or sets the item the subtitle belongs to, so the path can be checked against
+    /// what the library actually lists for it.
     /// </summary>
     public Guid ItemId { get; set; }
 
     /// <summary>
-    /// Gets or sets the subtitle file to nudge.
+    /// Gets or sets the subtitle file to move.
     /// </summary>
     public string SubtitlePath { get; set; } = string.Empty;
 
     /// <summary>
-    /// Gets or sets how many seconds to move it. Positive makes subtitles show up later,
-    /// negative makes them show up earlier.
+    /// Gets or sets how far to move it, in seconds. Negative makes subtitles appear
+    /// earlier. Ignored when <see cref="OffsetMs"/> is set, which is what the context
+    /// menu's shift dialog uses.
     /// </summary>
     public double OffsetSeconds { get; set; }
+
+    /// <summary>
+    /// Gets or sets how far to move it, in milliseconds. Wins over
+    /// <see cref="OffsetSeconds"/> when both are given.
+    /// </summary>
+    public int? OffsetMs { get; set; }
+
+    /// <summary>
+    /// Gets or sets where the result should be written, or null for the configured
+    /// default.
+    /// </summary>
+    public OutputMode? OutputMode { get; set; }
+
+    /// <summary>
+    /// Gets the offset to actually apply, in seconds.
+    /// </summary>
+    /// <returns>The offset in seconds.</returns>
+    public double ResolveOffsetSeconds()
+    {
+        return OffsetMs.HasValue ? OffsetMs.Value / 1000.0 : OffsetSeconds;
+    }
 }

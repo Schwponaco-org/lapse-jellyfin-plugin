@@ -38,8 +38,13 @@ public class LibraryEntry
     public bool ScheduleEnabled { get; set; }
 
     /// <summary>
-    /// Gets or sets which day the scheduled sync runs, as a DayOfWeek name, or null for
-    /// every day.
+    /// Gets or sets how often the scheduled sync runs, as a ScheduleFrequency name.
+    /// </summary>
+    public string ScheduleFrequency { get; set; } = "Daily";
+
+    /// <summary>
+    /// Gets or sets which day the scheduled sync runs, as a DayOfWeek name. Not used by
+    /// the daily frequency.
     /// </summary>
     public string? ScheduleDay { get; set; }
 
@@ -52,4 +57,16 @@ public class LibraryEntry
     /// Gets or sets a value indicating whether the whole library is on the skip list.
     /// </summary>
     public bool Skipped { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether this library holds series, which is what
+    /// decides whether the dashboard offers it the series and season sync buttons.
+    /// </summary>
+    public bool IsShowLibrary { get; set; }
+
+    /// <summary>
+    /// Gets or sets when this library's schedule last fired, so the dashboard can say
+    /// whether it's actually running.
+    /// </summary>
+    public DateTime? LastScheduledRunUtc { get; set; }
 }

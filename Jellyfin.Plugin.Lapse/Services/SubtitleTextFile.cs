@@ -113,8 +113,8 @@ public class SubtitleTextFile
     }
 
     /// <summary>
-    /// Builds the name of the translated file: Movie.en.srt with target "da" becomes
-    /// Movie.da.translated.srt. An existing language tag on the end of the name gets
+    /// Builds the name of the translated file: Movie.en.srt with target "es" becomes
+    /// Movie.es.translated.srt. An existing language tag on the end of the name gets
     /// replaced rather than stacked, so re-translating doesn't grow the name each time.
     /// </summary>
     /// <param name="sourcePath">The subtitle being translated.</param>

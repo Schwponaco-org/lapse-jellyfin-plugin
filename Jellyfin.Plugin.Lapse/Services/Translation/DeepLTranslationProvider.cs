@@ -10,54 +10,57 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Web;
 using Jellyfin.Plugin.Lapse.Data;
 using Microsoft.Extensions.Logging;
 
 namespace Jellyfin.Plugin.Lapse.Services.Translation;
 
 /// <summary>
-/// Google Cloud Translation, the v2 REST API. It takes a batch of strings per request,
-/// which is a lot kinder to both the rate limit and the clock than one call per line.
+/// DeepL, through its documented v2 REST API. Free and Pro keys use different hosts and
+/// are told apart by the ":fx" suffix a free key carries, which is exactly how DeepL's
+/// own client libraries decide, so there's no separate "which tier am I" setting to get
+/// wrong.
 /// </summary>
-public class GoogleTranslationProvider : ITranslationProvider
+public class DeepLTranslationProvider : ITranslationProvider
 {
-    // Google caps a v2 request at 128 strings, and the whole request at 30k characters.
-    // 64 short subtitle lines sits comfortably inside both.
-    private const int BatchSize = 64;
+    // DeepL takes up to 50 text parameters per request.
+    private const int BatchSize = 50;
+
+    private const string FreeEndpoint = "https://api-free.deepl.com/v2/translate";
+    private const string ProEndpoint = "https://api.deepl.com/v2/translate";
 
     private readonly IHttpClientFactory _httpClientFactory;
-    private readonly ILogger<GoogleTranslationProvider> _logger;
+    private readonly ILogger<DeepLTranslationProvider> _logger;
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="GoogleTranslationProvider"/> class.
+    /// Initializes a new instance of the <see cref="DeepLTranslationProvider"/> class.
     /// </summary>
     /// <param name="httpClientFactory">Factory to grab an HttpClient from.</param>
     /// <param name="logger">Logger.</param>
-    public GoogleTranslationProvider(IHttpClientFactory httpClientFactory, ILogger<GoogleTranslationProvider> logger)
+    public DeepLTranslationProvider(IHttpClientFactory httpClientFactory, ILogger<DeepLTranslationProvider> logger)
     {
         _httpClientFactory = httpClientFactory;
         _logger = logger;
     }
 
     /// <inheritdoc />
-    public TranslationProvider Id => TranslationProvider.Google;
+    public TranslationProvider Id => TranslationProvider.DeepL;
 
     /// <inheritdoc />
-    public string DisplayName => "Google Translate";
+    public string DisplayName => "DeepL";
 
     /// <inheritdoc />
     public int Tier => 2;
 
     /// <inheritdoc />
-    public string Summary => "Google Cloud Translation v2. Needs a Google Cloud project with billing and an API key.";
+    public string Summary => "Usually the best quality of the lot. Needs an API key; free keys end in \":fx\" and are detected automatically.";
 
     /// <inheritdoc />
     public string? GetConfigurationProblem()
     {
-        var key = Plugin.Instance?.Configuration.GoogleTranslateApiKey;
+        var key = Plugin.Instance?.Configuration.DeepLApiKey;
         return string.IsNullOrWhiteSpace(key)
-            ? "No Google Translate API key is set. Add one in the LAPSE dashboard under Translation."
+            ? "No DeepL API key is set. Add one in the LAPSE dashboard under Translation."
             : null;
     }
 
@@ -74,7 +77,9 @@ public class GoogleTranslationProvider : ITranslationProvider
             throw new InvalidOperationException(problem);
         }
 
-        var apiKey = Plugin.Instance!.Configuration.GoogleTranslateApiKey!;
+        var apiKey = Plugin.Instance!.Configuration.DeepLApiKey!.Trim();
+        var url = apiKey.EndsWith(":fx", StringComparison.OrdinalIgnoreCase) ? FreeEndpoint : ProEndpoint;
+
         var client = _httpClientFactory.CreateClient("Lapse");
         var results = new List<TranslatedLine>(lines.Count);
 
@@ -88,32 +93,44 @@ public class GoogleTranslationProvider : ITranslationProvider
                 batch.Add(lines[i]);
             }
 
-            var url = "https://translation.googleapis.com/language/translate/v2?key=" + HttpUtility.UrlEncode(apiKey);
             var payload = new Dictionary<string, object>
             {
-                ["q"] = batch,
-                ["target"] = targetLanguage,
-                ["format"] = "text"
+                ["text"] = batch,
+
+                // DeepL wants the target as an upper case code, and it distinguishes
+                // regional variants like EN-GB, so pass whatever was typed through
+                // uppercased rather than trying to be clever about it.
+                ["target_lang"] = targetLanguage.ToUpperInvariant()
             };
 
             if (!string.IsNullOrWhiteSpace(sourceLanguage))
             {
-                payload["source"] = sourceLanguage;
+                payload["source_lang"] = sourceLanguage.ToUpperInvariant();
             }
 
-            using var response = await client.PostAsJsonAsync(url, payload, cancellationToken).ConfigureAwait(false);
+            using var request = new HttpRequestMessage(HttpMethod.Post, url)
+            {
+                Content = JsonContent.Create(payload)
+            };
+
+            request.Headers.TryAddWithoutValidation("Authorization", "DeepL-Auth-Key " + apiKey);
+
+            using var response = await client.SendAsync(request, cancellationToken).ConfigureAwait(false);
 
             if (!response.IsSuccessStatusCode)
             {
                 var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
                 throw new HttpRequestException(string.Format(
                     CultureInfo.InvariantCulture,
-                    "Google Translate returned {0}: {1}",
+                    "DeepL returned {0}: {1}",
                     (int)response.StatusCode,
                     Shorten(body)));
             }
 
-            using var document = await response.Content.ReadFromJsonAsync<JsonDocument>(cancellationToken).ConfigureAwait(false);
+            using var document = await response.Content
+                .ReadFromJsonAsync<JsonDocument>(cancellationToken)
+                .ConfigureAwait(false);
+
             results.AddRange(ReadTranslations(document, batch.Count));
         }
 
@@ -125,27 +142,24 @@ public class GoogleTranslationProvider : ITranslationProvider
         var results = new List<TranslatedLine>();
 
         if (document is not null
-            && document.RootElement.TryGetProperty("data", out var data)
-            && data.TryGetProperty("translations", out var translations)
+            && document.RootElement.TryGetProperty("translations", out var translations)
             && translations.ValueKind == JsonValueKind.Array)
         {
             foreach (var translation in translations.EnumerateArray())
             {
                 results.Add(new TranslatedLine
                 {
-                    Text = translation.TryGetProperty("translatedText", out var text) ? text.GetString() : null,
-                    DetectedSourceLanguage = translation.TryGetProperty("detectedSourceLanguage", out var detected)
+                    Text = translation.TryGetProperty("text", out var text) ? text.GetString() : null,
+                    DetectedSourceLanguage = translation.TryGetProperty("detected_source_language", out var detected)
                         ? detected.GetString()
                         : null
                 });
             }
         }
 
-        // Google returns one translation per input, but if it ever doesn't, pad the batch
-        // out so the results still line up with the lines they came from
         if (results.Count != expected)
         {
-            _logger.LogWarning("Google Translate returned {Got} translations for {Expected} lines", results.Count, expected);
+            _logger.LogWarning("DeepL returned {Got} translations for {Expected} lines", results.Count, expected);
             while (results.Count < expected)
             {
                 results.Add(new TranslatedLine());

@@ -3,6 +3,7 @@
 // Licensed under GPL v3 - see LICENSE for details
 
 using System;
+using Jellyfin.Plugin.Lapse.Data;
 
 namespace Jellyfin.Plugin.Lapse.Configuration;
 
@@ -36,8 +37,13 @@ public class LibraryConfig
     public bool ScheduleEnabled { get; set; }
 
     /// <summary>
-    /// Gets or sets the day the scheduled sync runs, or null for every day. Stored as a
-    /// nullable enum because "every day" needs a value that isn't a weekday.
+    /// Gets or sets how often the scheduled sync runs.
+    /// </summary>
+    public ScheduleFrequency ScheduleFrequency { get; set; } = ScheduleFrequency.Daily;
+
+    /// <summary>
+    /// Gets or sets the day the scheduled sync runs on, for every frequency except
+    /// <see cref="Data.ScheduleFrequency.Daily"/>. Null falls back to Sunday.
     /// </summary>
     public DayOfWeek? ScheduleDay { get; set; }
 
@@ -68,5 +74,32 @@ public class LibraryConfig
         }
 
         return TimeSpan.FromHours(3);
+    }
+
+    /// <summary>
+    /// Gets the day this library syncs on. Only meaningful for the frequencies that have
+    /// a day at all; the daily one runs whatever this says.
+    /// </summary>
+    /// <returns>The day of the week.</returns>
+    public DayOfWeek ResolveScheduleDay()
+    {
+        return ScheduleDay ?? DayOfWeek.Sunday;
+    }
+
+    /// <summary>
+    /// Gets how long has to pass after a run before the same schedule may fire again.
+    /// Deliberately shorter than the nominal interval so a server that was asleep over
+    /// the exact slot still catches the next one rather than skipping a whole period.
+    /// </summary>
+    /// <returns>The minimum gap between two runs of this schedule.</returns>
+    public TimeSpan GetMinimumGap()
+    {
+        return ScheduleFrequency switch
+        {
+            ScheduleFrequency.Weekly => TimeSpan.FromDays(6),
+            ScheduleFrequency.BiWeekly => TimeSpan.FromDays(13),
+            ScheduleFrequency.Monthly => TimeSpan.FromDays(27),
+            _ => TimeSpan.FromHours(12)
+        };
     }
 }

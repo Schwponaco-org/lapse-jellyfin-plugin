@@ -28,7 +28,7 @@ public class TranslationRequest
     public string? SourceLanguage { get; set; }
 
     /// <summary>
-    /// Gets or sets the language code to translate into, e.g. "da".
+    /// Gets or sets the language code to translate into, e.g. "es".
     /// </summary>
     public string TargetLanguage { get; set; } = string.Empty;
 

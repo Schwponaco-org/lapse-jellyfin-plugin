@@ -37,12 +37,6 @@ public class EngineSettings
     public string? InstalledVersion { get; set; }
 
     /// <summary>
-    /// Gets or sets a value indicating whether the daily task may replace this engine's
-    /// binary when a newer release shows up.
-    /// </summary>
-    public bool AutoUpdate { get; set; } = true;
-
-    /// <summary>
     /// Gets or sets when the plugin last asked GitHub what the newest release was. Used to
     /// keep the dashboard from hammering the API on every page load.
     /// </summary>

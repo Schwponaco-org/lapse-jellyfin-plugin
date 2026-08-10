@@ -15,9 +15,15 @@ public enum MovieSyncStatus
     Pending,
 
     /// <summary>
-    /// Synced successfully at least once.
+    /// Every external subtitle the item currently has been synced.
     /// </summary>
     Synced,
+
+    /// <summary>
+    /// Some of the item's external subtitles have been synced and some haven't. Usually a
+    /// track that was added after the last sync, or a sync that only ran on one of them.
+    /// </summary>
+    PartiallySynced,
 
     /// <summary>
     /// Marked as skip, either directly or because a parent folder is skipped.

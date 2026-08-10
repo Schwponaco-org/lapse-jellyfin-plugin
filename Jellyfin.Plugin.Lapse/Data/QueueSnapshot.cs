@@ -32,6 +32,17 @@ public class QueueSnapshot
     public string? CurrentItemName { get; set; }
 
     /// <summary>
+    /// Gets or sets what this job is, e.g. "The Expanse" for a whole-series sync. Used to
+    /// say what the progress is about rather than just counting.
+    /// </summary>
+    public string? JobName { get; set; }
+
+    /// <summary>
+    /// Gets or sets what the items in this job are called, singular, e.g. "episode".
+    /// </summary>
+    public string? UnitName { get; set; }
+
+    /// <summary>
     /// Gets or sets the full list of items in the current job, in queue order.
     /// </summary>
     public List<QueueItem> Items { get; init; } = new();

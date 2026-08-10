@@ -58,15 +58,19 @@ public class EngineUpdater
     /// <returns>The update status.</returns>
     public async Task<EngineUpdateStatus> CheckAsync(IEngine engine, bool force = false, CancellationToken cancellationToken = default)
     {
-        var settings = Plugin.Instance!.Configuration.GetEngineSettings(engine.Descriptor.Id);
         var installedPath = _runner.ResolvePath(engine);
         var installed = File.Exists(installedPath);
+        var installedVersion = installed
+            ? await ResolveInstalledVersionAsync(engine, cancellationToken).ConfigureAwait(false)
+            : null;
+
+        var settings = Plugin.Instance!.Configuration.GetEngineSettings(engine.Descriptor.Id);
 
         var status = new EngineUpdateStatus
         {
             EngineId = engine.Descriptor.Id,
-            InstalledVersion = installed ? settings.InstalledVersion : null,
-            AutoUpdate = settings.AutoUpdate,
+            InstalledVersion = installedVersion,
+            AutoUpdate = Plugin.Instance!.Configuration.AutoUpdateEngines,
             LastCheckedUtc = settings.LastUpdateCheckUtc
         };
 
@@ -81,11 +85,51 @@ public class EngineUpdater
             Plugin.Instance!.SaveConfiguration();
         }
 
+        status.VersionUnknown = installed && installedVersion is null;
         status.UpdateAvailable = installed
             && engine.Descriptor.GetDownloadForThisMachine() is not null
-            && GitHubReleaseClient.IsNewer(status.InstalledVersion, latest);
+            && latest is not null
+
+            // An engine we can't put a version on is treated as out of date rather than
+            // as up to date. Saying "already on an unknown version" and refusing to do
+            // anything is the worst of both, and it's what this used to do: the version
+            // was only ever recorded at install time, so any engine installed before that
+            // existed - or installed while GitHub was unreachable - could never be updated
+            // again from the dashboard.
+            && (installedVersion is null || GitHubReleaseClient.IsNewer(installedVersion, latest));
 
         return status;
+    }
+
+    /// <summary>
+    /// Works out which version of an engine is on disk. The release tag recorded at
+    /// install time is the first choice, since that's the thing a release compares
+    /// against, but a binary that got there some other way can still be asked what it is,
+    /// and an answer from the binary is better than no answer at all.
+    /// </summary>
+    /// <param name="engine">The engine.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The version, or null when neither source knows.</returns>
+    public async Task<string?> ResolveInstalledVersionAsync(IEngine engine, CancellationToken cancellationToken = default)
+    {
+        var settings = Plugin.Instance!.Configuration.GetEngineSettings(engine.Descriptor.Id);
+
+        if (!string.IsNullOrWhiteSpace(settings.InstalledVersion))
+        {
+            return settings.InstalledVersion;
+        }
+
+        var runtime = await _runner.GetRuntimeInfoAsync(engine, cancellationToken).ConfigureAwait(false);
+        if (string.IsNullOrWhiteSpace(runtime.Version))
+        {
+            return null;
+        }
+
+        // Write it down so the next check doesn't have to start the binary again, and so
+        // the card has something to show before any probing has happened.
+        settings.InstalledVersion = runtime.Version;
+        Plugin.Instance!.SaveConfiguration();
+        return runtime.Version;
     }
 
     /// <summary>
@@ -101,9 +145,12 @@ public class EngineUpdater
 
         if (!force && !status.UpdateAvailable)
         {
-            return status.LatestVersion is null
-                ? "no release information available"
-                : $"already on {status.InstalledVersion ?? "an unknown version"}";
+            if (status.LatestVersion is null)
+            {
+                return "could not reach GitHub, so there's nothing to compare against";
+            }
+
+            return $"already on {status.InstalledVersion ?? status.LatestVersion}";
         }
 
         var tag = await _installer.InstallAsync(engine, cancellationToken).ConfigureAwait(false);
@@ -124,6 +171,7 @@ public class EngineUpdater
     {
         var results = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var engines = _registry.All;
+        var autoUpdate = Plugin.Instance!.Configuration.AutoUpdateEngines;
 
         for (var i = 0; i < engines.Count; i++)
         {
@@ -132,7 +180,7 @@ public class EngineUpdater
             var engine = engines[i];
             var settings = Plugin.Instance!.Configuration.GetEngineSettings(engine.Descriptor.Id);
 
-            if (!settings.AutoUpdate)
+            if (!autoUpdate)
             {
                 results[engine.Descriptor.Id] = "auto-update off";
             }

@@ -29,15 +29,13 @@ public class TranslationService
     /// <summary>
     /// Initializes a new instance of the <see cref="TranslationService"/> class.
     /// </summary>
-    /// <param name="google">The Google provider.</param>
-    /// <param name="lingarr">The Lingarr provider.</param>
+    /// <param name="providers">Every registered provider.</param>
     /// <param name="logger">Logger.</param>
-    public TranslationService(
-        GoogleTranslationProvider google,
-        LingarrTranslationProvider lingarr,
-        ILogger<TranslationService> logger)
+    public TranslationService(IEnumerable<ITranslationProvider> providers, ILogger<TranslationService> logger)
     {
-        _providers = new ITranslationProvider[] { google, lingarr };
+        // Least setup first, which is the order the dashboard lists them in and also the
+        // order a fallback should try them in.
+        _providers = providers.OrderBy(p => p.Tier).ToList();
         _logger = logger;
     }
 
@@ -53,7 +51,7 @@ public class TranslationService
     /// <returns>The provider.</returns>
     public ITranslationProvider Resolve(TranslationProvider? provider)
     {
-        var wanted = provider ?? Plugin.Instance?.Configuration.DefaultTranslationProvider ?? TranslationProvider.Google;
+        var wanted = provider ?? Plugin.Instance?.Configuration.DefaultTranslationProvider ?? TranslationProvider.MyMemory;
         return _providers.FirstOrDefault(p => p.Id == wanted) ?? _providers[0];
     }
 
@@ -214,12 +212,13 @@ public class TranslationService
     /// <summary>
     /// Scores one translated line from 0 to 1.
     ///
-    /// Neither Google's v2 API nor Lingarr's line endpoint returns a confidence number,
-    /// so rather than pretending otherwise the plugin scores each line on what it can
-    /// actually see: whether anything came back, whether the text changed at all, whether
-    /// the length is plausible for a translation, and whether the language the provider
-    /// detected is the one that was asked for. That's what the threshold slider filters
-    /// on, and it's good enough to catch the lines that are worth a second look.
+    /// MyMemory reports a match score of its own, and when a provider actually tells us
+    /// how sure it is that beats anything inferred. None of the others do, so rather than
+    /// pretending otherwise the plugin scores each line on what it can actually see:
+    /// whether anything came back, whether the text changed at all, whether the length is
+    /// plausible for a translation, and whether the language the provider detected is the
+    /// one that was asked for. That's what the threshold slider filters on, and it's good
+    /// enough to catch the lines that are worth a second look.
     /// </summary>
     /// <param name="source">The original line.</param>
     /// <param name="translated">What the provider said.</param>
@@ -230,6 +229,11 @@ public class TranslationService
         if (string.IsNullOrWhiteSpace(translated.Text))
         {
             return 0;
+        }
+
+        if (translated.Confidence.HasValue)
+        {
+            return Math.Clamp(translated.Confidence.Value, 0, 1);
         }
 
         var trimmedSource = source.Trim();

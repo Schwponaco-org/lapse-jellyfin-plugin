@@ -8,7 +8,7 @@
    theme exposes it and falling back to the stock #00A4DC otherwise. Status is said in
    words rather than shown as a coloured dot. */
 
-.lapseSection {
+.lapseLayout {
     --lapse-accent: var(--accent-color, #00A4DC);
 }
 
@@ -69,95 +69,135 @@
     display: block;
 }
 
-/* --- collapsible sections --- */
+/* --- sidebar layout ---
+   Sections used to be a stack of fold-downs, which meant scrolling past four other
+   things to reach the one you wanted. Now the sections are a list on the left and one
+   panel renders on the right, the way Jellyfin's own settings pages read. */
 
-.lapseSection {
-    border-top: 1px solid rgba(127, 127, 127, .25);
-    padding: .1em 0;
-}
-
-.lapseSection:last-of-type {
-    border-bottom: 1px solid rgba(127, 127, 127, .25);
-}
-
-.lapseSectionHeader {
+.lapseLayout {
     display: flex;
-    align-items: baseline;
-    gap: .7em;
-    padding: .75em .2em;
-    cursor: pointer;
-    list-style: none;
-    user-select: none;
+    align-items: flex-start;
+    gap: 1.6em;
+    margin-top: 1.2em;
 }
 
-/* swap the default triangle for one that points the way the section is going */
-.lapseSectionHeader::-webkit-details-marker {
+.lapseNav {
+    flex: 0 0 15em;
+    display: flex;
+    flex-direction: column;
+    gap: .15em;
+    position: sticky;
+    top: 1em;
+}
+
+.lapseNavItem {
+    display: grid;
+    grid-template-columns: 1.6em 1fr;
+    grid-template-areas:
+        "icon label"
+        ".    hint";
+    align-items: center;
+    gap: 0 .5em;
+    width: 100%;
+    text-align: left;
+    padding: .6em .8em;
+    border: 0;
+    border-radius: .3em;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+    transition: background .12s ease;
+}
+
+.lapseNavItem:hover {
+    background: rgba(127, 127, 127, .12);
+}
+
+.lapseNavItem-active {
+    background: rgba(0, 164, 220, .18);
+    box-shadow: inset 3px 0 0 var(--accent-color, #00A4DC);
+}
+
+.lapseNavIcon {
+    grid-area: icon;
+    font-size: 1.2em;
+    opacity: .75;
+}
+
+.lapseNavItem-active .lapseNavIcon {
+    opacity: 1;
+}
+
+.lapseNavLabel {
+    grid-area: label;
+    font-size: .95em;
+}
+
+.lapseNavHint {
+    grid-area: hint;
+    font-size: .75em;
+    opacity: .55;
+    line-height: 1.3;
+}
+
+.lapseNavHint:empty {
     display: none;
 }
 
-.lapseSectionHeader::before {
-    content: "\203A";
-    display: inline-block;
-    transition: transform .15s ease;
-    opacity: .6;
-    font-size: 1.2em;
-    line-height: 1;
-    width: .6em;
+.lapseContent {
+    flex: 1 1 auto;
+    min-width: 0;
 }
 
-.lapseSection[open] > .lapseSectionHeader::before {
-    transform: rotate(90deg);
+/* Only the selected panel is in the document flow. Hiding rather than unmounting keeps
+   every panel's form state and event wiring intact while switching. */
+.lapsePanel {
+    display: none;
 }
 
-.lapseSectionHeader:hover {
-    background: rgba(127, 127, 127, .08);
+.lapsePanel-active {
+    display: block;
 }
 
-.lapseSectionTitle {
-    font-size: 1.08em;
+.lapsePanelTitle {
+    margin: 0 0 .8em;
+    font-size: 1.35em;
     font-weight: 500;
 }
 
-.lapseSectionHint {
-    font-size: .85em;
-    opacity: .55;
-}
+/* Narrow screens can't spare 15em for navigation, so it becomes a scrolling strip of
+   chips above the content instead. */
+@media (max-width: 62em) {
+    .lapseLayout {
+        flex-direction: column;
+        gap: 1em;
+    }
 
-.lapseSectionBody {
-    padding: .2em .2em 1.1em 1.4em;
-}
+    .lapseNav {
+        flex: 1 1 auto;
+        width: 100%;
+        position: static;
+        flex-direction: row;
+        overflow-x: auto;
+        gap: .35em;
+        padding-bottom: .3em;
+    }
 
-/* --- sub-sections inside Advanced ---
-   Same markup and behaviour as a top level section, just quieter, so the Advanced
-   section reads as a folder of settings rather than another wall of them. */
+    .lapseNavItem {
+        width: auto;
+        flex: 0 0 auto;
+        grid-template-columns: auto auto;
+        grid-template-areas: "icon label";
+    }
 
-.lapseAdvancedBody {
-    padding-bottom: .4em;
-}
+    .lapseNavHint {
+        display: none;
+    }
 
-.lapseSubSection {
-    border-top: 1px solid rgba(127, 127, 127, .18);
-}
-
-.lapseSubSection-last {
-    border-bottom: 1px solid rgba(127, 127, 127, .18);
-}
-
-.lapseSubSection > .lapseSectionHeader {
-    padding: .55em .2em;
-}
-
-.lapseSubSection > .lapseSectionHeader .lapseSectionTitle {
-    font-size: .96em;
-    font-weight: 400;
-}
-
-.lapseSubSection > .lapseSectionHeader::before {
-    font-size: 1em;
-}
-
-.lapseSubSection > .lapseSectionBody {
-    padding: .1em .2em .9em 1.2em;
+    .lapseNavItem-active {
+        box-shadow: inset 0 -3px 0 var(--accent-color, #00A4DC);
+    }
 }
 
 /* --- engine cards --- */
@@ -547,4 +587,195 @@
     top: .3em;
     right: .3em;
     z-index: 1;
+}
+
+/* --- injection warning strip --- */
+
+/* Shown only when the plugin can't reach the web client, which is what makes the item
+   context menu entries silently not exist. */
+.lapseWarningStrip {
+    margin: 0 0 1em;
+    padding: .8em 1em;
+    border-radius: .3em;
+    background: rgba(220, 90, 60, .18);
+    border-left: 3px solid rgba(220, 90, 60, .8);
+    font-size: .88em;
+    line-height: 1.45;
+}
+
+/* --- the sidecar recommendation above Libraries and Bulk sync --- */
+
+.lapseNoteStrip {
+    margin: 0 0 .9em;
+    padding: .7em .9em;
+    border-radius: .3em;
+    background: rgba(127, 127, 127, .12);
+    border-left: 3px solid rgba(0, 164, 220, .6);
+    font-size: .85em;
+    line-height: 1.45;
+    opacity: .9;
+}
+
+/* --- engine version next to the name --- */
+
+.lapseVersionBadge {
+    margin-left: .5em;
+    font-size: .7em;
+    font-weight: normal;
+    padding: .15em .5em;
+    border-radius: 1em;
+    background: rgba(0, 164, 220, .25);
+    vertical-align: middle;
+    white-space: nowrap;
+}
+
+.lapseVersionBadge-unknown {
+    background: rgba(127, 127, 127, .22);
+    opacity: .8;
+}
+
+/* --- per show library sync buttons --- */
+
+.lapseShowLibraries {
+    margin-top: 1em;
+    display: flex;
+    flex-direction: column;
+    gap: .7em;
+}
+
+.lapseShowLibrary {
+    padding: .7em .9em;
+    border-radius: .3em;
+    background: rgba(127, 127, 127, .1);
+}
+
+.lapseShowLibraryName {
+    font-size: .9em;
+    margin-bottom: .5em;
+}
+
+/* --- translation provider cards --- */
+
+.lapseProviderList {
+    display: flex;
+    flex-direction: column;
+    gap: .8em;
+    margin: 1em 0;
+}
+
+.lapseProviderCard {
+    padding: .9em 1em;
+    border-radius: .3em;
+    background: rgba(127, 127, 127, .1);
+    border-left: 3px solid transparent;
+}
+
+.lapseProviderCard-on {
+    border-left-color: rgba(0, 164, 220, .7);
+}
+
+.lapseProviderTop {
+    display: flex;
+    align-items: center;
+    gap: .6em;
+    flex-wrap: wrap;
+}
+
+.lapseProviderName {
+    font-size: .95em;
+}
+
+.lapseProviderState {
+    font-size: .78em;
+    margin-left: auto;
+}
+
+.lapseChip-tier {
+    background: rgba(127, 127, 127, .22);
+}
+
+/* --- headings inside a subsection --- */
+
+.lapseSubHeading {
+    margin: 1.4em 0 .3em;
+    font-size: .95em;
+    opacity: .9;
+}
+
+/* --- sliders --- */
+
+.lapseRange {
+    width: 100%;
+    margin: .4em 0;
+}
+
+/* --- subtitle appearance --- */
+
+.lapseColorRow {
+    display: flex;
+    gap: 1em;
+    flex-wrap: wrap;
+}
+
+.lapseColorRow > * {
+    flex: 1;
+    min-width: 10em;
+}
+
+.lapseColorInput {
+    width: 100%;
+    height: 2.6em;
+    padding: .2em;
+    border: 0;
+    border-radius: .2em;
+    background: rgba(127, 127, 127, .15);
+}
+
+/* A stand-in for the bottom of a video frame, so the preview reads the way the real
+   thing will rather than as a coloured box on a settings page. */
+.lapseAppearancePreview {
+    margin: 1.2em 0;
+    padding: 2.5em 1em 1.2em;
+    border-radius: .3em;
+    background: linear-gradient(160deg, #2b3a4a 0%, #14181d 100%);
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    min-height: 8em;
+}
+
+.lapseAppearancePreviewText {
+    padding: .15em .45em;
+    border-radius: .15em;
+    text-align: center;
+    line-height: 1.3;
+    max-width: 90%;
+}
+
+/* --- the advanced dialog's paired language fields --- */
+
+.lapseFieldPair {
+    display: flex;
+    gap: .8em;
+}
+
+.lapseFieldPair > * {
+    flex: 1;
+}
+
+/* --- partially synced items ---
+   Distinct from both "synced" and "not synced", because "3 of 5 synced" is genuinely a
+   third state and reading it as either of the others is misleading. */
+
+.lapseStatusPill-partial {
+    background: rgba(230, 160, 40, .28);
+}
+
+/* --- headings inside a panel --- */
+
+.lapsePanel .lapseSubHeading {
+    margin: 1.6em 0 .4em;
+    font-size: 1.02em;
+    font-weight: 500;
+    opacity: .95;
 }

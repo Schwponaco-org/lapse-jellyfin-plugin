@@ -2,30 +2,22 @@
 // Copyright (C) 2026 Rasmus Stisen Jensen (rs-jensen)
 // Licensed under GPL v3 - see LICENSE for details
 
-// This runs on every page of the web client (it gets injected into index.html by
-// Plugin.cs), so unlike the dashboard script it can't assume the "Dashboard" helper
-// object is loaded - that's dashboard-only. Only ApiClient is safe to use everywhere.
-// Same reasoning the old intro-skipper inject.js used.
+// This runs on every page of the web client (the server adds it to index.html as that
+// page is served, see ScriptInjectionMiddleware), so unlike the dashboard script it can't
+// assume the "Dashboard" helper object is loaded - that's dashboard-only. Only ApiClient
+// is safe to use everywhere.
 
 (function () {
     'use strict';
 
-    // action ids the real jellyfin-web item context menu uses, just for debug logging -
-    // this used to be a hard gate but different jellyfin-web versions use different ids,
-    // so now it's only informational. Log to the console with a "[lapse]" prefix so this
-    // whole thing is debuggable from the browser devtools without a build step.
-    var KNOWN_CONTEXT_MENU_IDS = [
-        'resume', 'playallfromhere', 'queue', 'queuenext', 'shuffle', 'instantmix',
-        'multiSelect', 'addtocollection', 'edit', 'identify', 'refresh', 'delete',
-        'download', 'moveup', 'movedown', 'open', 'openalbum'
-    ];
-
-    // Everything with a video file worth lining subtitles up against. Used to be Movie
-    // only; libraries of any type can be turned on in the dashboard now, so the menu has
-    // to offer the same thing for episodes and loose videos.
+    // Everything with a video file worth lining subtitles up against.
     var SYNCABLE_TYPES = ['Movie', 'Episode', 'Video', 'MusicVideo'];
 
+    // Containers that expand into episodes rather than having subtitles of their own.
+    var CONTAINER_TYPES = ['Series', 'Season'];
+
     var pendingCardContext = null;
+    var progressPollHandle = null;
 
     function log(message) {
         console.log('[lapse] ' + message);
@@ -83,7 +75,7 @@
         document.head.appendChild(link);
     }
 
-    function showLapseToast(message) {
+    function showLapseToast(message, keepOpen) {
         var existing = document.querySelector('.lapseToast');
         if (existing) {
             existing.remove();
@@ -94,9 +86,171 @@
         toast.textContent = message;
         document.body.appendChild(toast);
 
-        setTimeout(function () {
-            toast.remove();
-        }, 6000);
+        if (!keepOpen) {
+            setTimeout(function () {
+                if (toast.parentNode) {
+                    toast.remove();
+                }
+            }, 6000);
+        }
+
+        return toast;
+    }
+
+    // --- subtitle appearance ---
+
+    // Restyles what the player already renders. Nothing on disk is touched, and turning
+    // the setting off puts everything straight back.
+    //
+    // Only text based tracks go through these elements at all: PGS and VOBSUB are drawn
+    // as images and never match, and ASS/SSA carries per-line style tags that the player
+    // applies inline, which beats anything set here.
+    //
+    // Two mechanisms, because one isn't enough on its own. The stylesheet covers the cue
+    // elements that already exist and the native ::cue pseudo element, which can only be
+    // reached from CSS. The observer then stamps the same values straight onto each
+    // subtitle element as the player creates it, because Jellyfin's own subtitle
+    // appearance helper writes inline styles onto those elements, and matching it inline
+    // with a priority is the only thing that reliably wins.
+    var SUBTITLE_SELECTORS = [
+        '.videoSubtitles',
+        '.videoSubtitlesInner',
+        '.videoOsdSubtitles',
+        '.subtitleAppearanceContainer',
+        '.htmlvideoplayer-subtitles'
+    ];
+
+    var appearanceSettings = null;
+    var appearanceObserver = null;
+
+    function refreshSubtitleAppearance() {
+        // Runs on every page including the login screen, where there is no ApiClient and
+        // nobody to have settings for. Touching it there would throw outside any promise
+        // chain, so check first and let the next page load try again.
+        if (typeof ApiClient === 'undefined' || !ApiClient.accessToken()) {
+            return;
+        }
+
+        lapseGet('Lapse/Appearance').then(function (appearance) {
+            appearanceSettings = appearance;
+            applySubtitleAppearance();
+        }).catch(function (err) {
+            log('could not read the subtitle appearance settings: ' + err.message);
+        });
+    }
+
+    function applySubtitleAppearance() {
+        var style = document.getElementById('lapseSubtitleAppearance');
+        var appearance = appearanceSettings;
+
+        if (!appearance || !appearance.Enabled) {
+            if (style) {
+                style.remove();
+            }
+
+            clearStampedSubtitles();
+            return;
+        }
+
+        if (!style) {
+            style = document.createElement('style');
+            style.id = 'lapseSubtitleAppearance';
+            document.head.appendChild(style);
+        }
+
+        style.textContent = buildAppearanceCss(appearance);
+        stampAllSubtitleElements();
+    }
+
+    function backgroundOf(appearance) {
+        return appearance.BackgroundEnabled ? (appearance.BackgroundColor || '#00000080') : 'transparent';
+    }
+
+    function buildAppearanceCss(appearance) {
+        var fontSize = (appearance.FontSizePx || 48) + 'px';
+        var color = appearance.TextColor || '#FFFFFF';
+        var background = backgroundOf(appearance);
+
+        return '' +
+            SUBTITLE_SELECTORS.join(', ') + ' {' +
+            '  font-size: ' + fontSize + ' !important;' +
+            '  color: ' + color + ' !important;' +
+            '}' +
+            '.videoSubtitlesInner, .videoSubtitles .videoSubtitlesInner {' +
+            '  background-color: ' + background + ' !important;' +
+            '}' +
+
+            // Native track rendering, which no amount of element styling can reach.
+            'video::cue {' +
+            '  font-size: ' + fontSize + ';' +
+            '  color: ' + color + ';' +
+            '  background-color: ' + background + ';' +
+            '}';
+    }
+
+    function stampSubtitleElement(element) {
+        var appearance = appearanceSettings;
+        if (!appearance || !appearance.Enabled) {
+            return;
+        }
+
+        element.setAttribute('data-lapse-styled', '1');
+        element.style.setProperty('font-size', (appearance.FontSizePx || 48) + 'px', 'important');
+        element.style.setProperty('color', appearance.TextColor || '#FFFFFF', 'important');
+
+        // The background belongs on the inner element - putting it on the outer one paints
+        // the whole width of the video rather than a box around the words.
+        if (element.classList.contains('videoSubtitlesInner')) {
+            element.style.setProperty('background-color', backgroundOf(appearance), 'important');
+        }
+    }
+
+    function stampAllSubtitleElements() {
+        document.querySelectorAll(SUBTITLE_SELECTORS.join(', ')).forEach(stampSubtitleElement);
+    }
+
+    function clearStampedSubtitles() {
+        document.querySelectorAll('[data-lapse-styled]').forEach(function (element) {
+            element.style.removeProperty('font-size');
+            element.style.removeProperty('color');
+            element.style.removeProperty('background-color');
+            element.removeAttribute('data-lapse-styled');
+        });
+    }
+
+    function startWatchingForSubtitles() {
+        if (appearanceObserver) {
+            return;
+        }
+
+        var selector = SUBTITLE_SELECTORS.join(', ');
+
+        appearanceObserver = new MutationObserver(function (mutations) {
+            mutations.forEach(function (mutation) {
+                mutation.addedNodes.forEach(function (node) {
+                    if (node.nodeType !== 1) {
+                        return;
+                    }
+
+                    if (node.matches && node.matches(selector)) {
+                        stampSubtitleElement(node);
+                    }
+
+                    if (node.querySelectorAll) {
+                        node.querySelectorAll(selector).forEach(stampSubtitleElement);
+                    }
+
+                    // A video appearing means playback is starting, which is the moment
+                    // the settings need to be current - someone who just changed them in
+                    // the dashboard shouldn't have to reload the whole client first.
+                    if (node.nodeName === 'VIDEO' || (node.querySelector && node.querySelector('video'))) {
+                        refreshSubtitleAppearance();
+                    }
+                });
+            });
+        });
+
+        appearanceObserver.observe(document.body, { childList: true, subtree: true });
     }
 
     // --- figure out which item the open action sheet belongs to ---
@@ -137,25 +291,30 @@
             return;
         }
 
-        var card = moreButton.closest('.card[data-id]');
+        var card = moreButton.closest('.card[data-id], .listItem[data-id]');
         if (!card) {
-            log('clicked a [data-action="menu"] button but found no ancestor .card[data-id]');
+            log('clicked a [data-action="menu"] button but found no ancestor with a data-id');
             return;
         }
 
         pendingCardContext = {
             id: card.getAttribute('data-id'),
             type: card.getAttribute('data-type'),
+            name: card.getAttribute('data-name'),
             timestamp: Date.now()
         };
         log('remembered card context: id=' + pendingCardContext.id + ' type=' + pendingCardContext.type);
     }
 
     function resolveItemContext() {
-        // grid/list card menus: we already know the id and type from the click itself
+        // grid/list card menus: we already know the id from the click itself, but the
+        // card's data-type is missing often enough that it's worth confirming
         if (pendingCardContext && (Date.now() - pendingCardContext.timestamp) < 1500) {
-            log('using remembered card context');
-            return Promise.resolve(pendingCardContext);
+            if (pendingCardContext.type && pendingCardContext.name) {
+                return Promise.resolve(pendingCardContext);
+            }
+
+            return lookUpItem(pendingCardContext.id);
         }
 
         // details page menu: no card involved, but the id is somewhere in the url
@@ -165,39 +324,28 @@
             return Promise.resolve(null);
         }
 
-        log('found id ' + locationId + ' in the url, looking up its type');
-        return ApiClient.getItem(ApiClient.getCurrentUserId(), locationId).then(function (item) {
-            log('item ' + locationId + ' has type ' + item.Type);
-            return { id: item.Id, type: item.Type };
+        return lookUpItem(locationId);
+    }
+
+    function lookUpItem(id) {
+        return ApiClient.getItem(ApiClient.getCurrentUserId(), id).then(function (item) {
+            return { id: item.Id, type: item.Type, name: item.Name };
         }).catch(function (err) {
-            log('could not look up item ' + locationId + ': ' + err);
+            log('could not look up item ' + id + ': ' + err);
             return null;
         });
     }
 
     // --- detect the action sheet and add our buttons to it ---
 
-    // just for the console log, doesn't gate anything anymore - different jellyfin-web
-    // versions use different action ids so this isn't reliable enough to block on.
-    function looksLikeItemContextMenu(sheet) {
-        var buttons = sheet.querySelectorAll('.actionSheetMenuItem[data-id]');
-        for (var i = 0; i < buttons.length; i++) {
-            if (KNOWN_CONTEXT_MENU_IDS.indexOf(buttons[i].getAttribute('data-id')) !== -1) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    function makeMenuButton(dataId, label, onClick) {
+    function makeMenuButton(dataId, label, icon, onClick) {
         var button = document.createElement('button');
         button.setAttribute('is', 'emby-button');
         button.type = 'button';
         button.className = 'listItem listItem-button actionSheetMenuItem lapseSyncButton';
         button.setAttribute('data-id', dataId);
         button.innerHTML =
-            '<span class="actionsheetMenuItemIcon listItemIcon listItemIcon-transparent material-icons subtitles" aria-hidden="true"></span>' +
+            '<span class="actionsheetMenuItemIcon listItemIcon listItemIcon-transparent material-icons ' + icon + '" aria-hidden="true"></span>' +
             '<div class="listItemBody actionsheetListItemBody">' +
             '<div class="listItemBodyText actionSheetItemText">' + escapeHtml(label) + '</div>' +
             '</div>';
@@ -208,26 +356,41 @@
         return button;
     }
 
-    function addSyncButtons(sheet, itemId) {
-        var scroller = sheet.querySelector('.actionSheetScroller');
-        if (!scroller) {
-            log('sheet has no .actionSheetScroller, cannot add the buttons (jellyfin-web markup may have changed)');
-            return;
-        }
+    function addMenuButtons(sheet, context) {
+        // The scroller is where the real entries live. Different jellyfin-web versions
+        // have shuffled the wrapper markup around, so fall back to the sheet itself
+        // rather than giving up and showing nothing.
+        var scroller = sheet.querySelector('.actionSheetScroller') || sheet;
 
         if (scroller.querySelector('.lapseSyncButton')) {
             return;
         }
 
-        scroller.appendChild(makeMenuButton('lapse-sync-subtitles', 'Sync Subtitles', function () {
-            openSyncPopup(itemId);
-        }));
+        var isContainer = CONTAINER_TYPES.indexOf(context.type) !== -1;
 
-        scroller.appendChild(makeMenuButton('lapse-sync-all-subtitles', 'Sync All Subtitles to Reference', function () {
-            openReferencePopup(itemId);
-        }));
+        if (isContainer) {
+            scroller.appendChild(makeMenuButton('lapse-sync-all', 'Sync All Subtitles', 'subtitles', function () {
+                startSeriesSync(context, null);
+            }));
 
-        log('added the LAPSE buttons for item ' + itemId);
+            scroller.appendChild(makeMenuButton('lapse-sync-all-reference', 'Sync All to Reference', 'compare_arrows', function () {
+                openSeriesReferencePopup(context);
+            }));
+        } else {
+            scroller.appendChild(makeMenuButton('lapse-sync-subtitles', 'Sync Subtitles', 'subtitles', function () {
+                openSyncPopup(context);
+            }));
+
+            scroller.appendChild(makeMenuButton('lapse-shift-subtitles', 'Shift Subtitles', 'schedule', function () {
+                openShiftPopup(context);
+            }));
+
+            scroller.appendChild(makeMenuButton('lapse-sync-all-subtitles', 'Sync All Subtitles to Reference', 'compare_arrows', function () {
+                openReferencePopup(context);
+            }));
+        }
+
+        log('added the LAPSE buttons for ' + context.type + ' ' + context.id);
     }
 
     function handleActionSheetOpened(sheet) {
@@ -235,22 +398,20 @@
             return;
         }
 
-        log('action sheet opened, looks like an item menu: ' + looksLikeItemContextMenu(sheet));
-
         resolveItemContext().then(function (context) {
             if (!context) {
                 log('could not figure out which item this menu belongs to, not adding the buttons');
                 return;
             }
 
-            if (SYNCABLE_TYPES.indexOf(context.type) === -1) {
+            if (SYNCABLE_TYPES.indexOf(context.type) === -1 && CONTAINER_TYPES.indexOf(context.type) === -1) {
                 log('item is a ' + context.type + ', which LAPSE has nothing to do with, not adding the buttons');
                 return;
             }
 
             // the sheet may already be gone by the time an async lookup resolves
             if (document.body.contains(sheet)) {
-                addSyncButtons(sheet, context.id);
+                addMenuButtons(sheet, context);
             } else {
                 log('sheet closed before we could add the buttons');
             }
@@ -280,12 +441,12 @@
         log('watching for action sheets');
     }
 
-    // --- the small "Sync" / "Advanced" popup ---
+    // --- dialogs ---
 
-    function openOverlay(innerHtml) {
+    function openOverlay(innerHtml, wide) {
         var overlay = document.createElement('div');
         overlay.className = 'lapseOverlay';
-        overlay.innerHTML = '<div class="lapseDialogCard">' + innerHtml + '</div>';
+        overlay.innerHTML = '<div class="lapseDialogCard' + (wide ? ' lapseDialogCard-wide' : '') + '">' + innerHtml + '</div>';
 
         overlay.addEventListener('click', function (e) {
             if (e.target === overlay) {
@@ -303,7 +464,7 @@
         }).join('');
     }
 
-    function openSyncPopup(itemId) {
+    function openSyncPopup(context) {
         var overlay = openOverlay(
             '<h3>Sync Subtitles</h3>' +
             '<div class="lapseDialogButtons">' +
@@ -313,12 +474,12 @@
 
         overlay.querySelector('#lapsePopupSync').addEventListener('click', function () {
             overlay.remove();
-            runQuickSync(itemId);
+            runQuickSync(context.id);
         });
 
         overlay.querySelector('#lapsePopupAdvanced').addEventListener('click', function () {
             overlay.remove();
-            openAdvancedOverlay(itemId);
+            openAdvancedDialog(context);
         });
     }
 
@@ -386,29 +547,185 @@
         return parts.join(', ') || 'done';
     }
 
+    function describeSyncOutcome(result) {
+        if (!result.Success) {
+            return 'Sync failed: ' + result.Error;
+        }
+
+        if (result.Skipped) {
+            return 'Left the original alone - ' + describeResult(result) +
+                ', which is under the confidence threshold. Change that under File output in the LAPSE dashboard.';
+        }
+
+        return 'Synced! ' + describeResult(result);
+    }
+
     function doSync(itemId, subtitlePath) {
         showLapseToast('Syncing...');
 
         // no EngineId here on purpose - the server picks whichever engine is set as the
         // default, so the quick button stays a one press job
         lapsePost('Lapse/Sync', { ItemId: itemId, Mode: 'Standard', SubtitlePath: subtitlePath }).then(function (result) {
-            if (!result.Success) {
-                showLapseToast('Sync failed: ' + result.Error);
-                return;
-            }
-
-            showLapseToast('Synced! ' + describeResult(result));
+            showLapseToast(describeSyncOutcome(result));
         }).catch(function (err) {
             showLapseToast('Sync failed: ' + err.message);
         });
     }
 
-    // --- "Sync All Subtitles to Reference" ---
+    // --- "Shift Subtitles" ---
 
-    function openReferencePopup(itemId) {
+    function openShiftPopup(context) {
         showLapseToast('Checking subtitles...');
 
-        lapseGet('Lapse/Items/' + itemId + '/Subtitles').then(function (subtitles) {
+        lapseGet('Lapse/Items/' + context.id + '/Subtitles').then(function (subtitles) {
+            var shiftable = subtitles.filter(function (s) {
+                return /\.(srt|vtt)$/i.test(s.Path);
+            });
+
+            if (shiftable.length === 0) {
+                showLapseToast(subtitles.length === 0
+                    ? 'No external subtitle found for this item.'
+                    : 'Shifting only works on .srt and .vtt files, and this item has neither.');
+                return;
+            }
+
+            showShiftDialog(context, shiftable);
+        }).catch(function (err) {
+            showLapseToast('Could not check subtitles: ' + err.message);
+        });
+    }
+
+    function showShiftDialog(context, subtitles) {
+        var overlay = openOverlay(
+            '<h3>Shift Subtitles</h3>' +
+            '<div class="selectContainer">' +
+            '  <label class="selectLabel">Subtitle</label>' +
+            '  <select is="emby-select" id="lapseShiftSubtitle" class="emby-select-withcolor emby-select">' +
+            subtitleOptionsHtml(subtitles) +
+            '  </select>' +
+            '</div>' +
+            '<div class="inputContainer">' +
+            '  <label class="inputLabel inputLabelUnfocused">Offset (milliseconds)</label>' +
+            '  <div class="lapseStepperRow">' +
+            '    <button is="emby-button" type="button" class="raised lapseStepButton" id="lapseShiftMinus"><span>&minus;</span></button>' +
+            '    <input is="emby-input" id="lapseShiftOffset" type="number" step="100" value="0" />' +
+            '    <button is="emby-button" type="button" class="raised lapseStepButton" id="lapseShiftPlus"><span>+</span></button>' +
+            '  </div>' +
+            '  <div class="fieldDescription">Minus makes subtitles appear earlier, plus later. The buttons move in 100ms steps.</div>' +
+            '</div>' +
+            '<div class="lapsePreviewBox" id="lapseShiftPreview">Loading an example line...</div>' +
+            '<div class="lapseDialogButtons">' +
+            '  <button is="emby-button" type="button" class="raised" id="lapseShiftCancel"><span>Cancel</span></button>' +
+            '  <button is="emby-button" type="button" class="raised button-submit" id="lapseShiftApply"><span>Apply</span></button>' +
+            '</div>');
+
+        var select = overlay.querySelector('#lapseShiftSubtitle');
+        var offsetInput = overlay.querySelector('#lapseShiftOffset');
+        var previewBox = overlay.querySelector('#lapseShiftPreview');
+        var currentCue = null;
+
+        function currentOffset() {
+            return parseInt(offsetInput.value, 10) || 0;
+        }
+
+        function renderPreview() {
+            if (!currentCue) {
+                previewBox.textContent = 'No example line available for this subtitle.';
+                return;
+            }
+
+            var shifted = shiftTimingLine(currentCue.TimingLine, currentOffset());
+
+            previewBox.innerHTML =
+                (currentCue.Text ? '<div class="lapsePreviewText">' + escapeHtml(currentCue.Text) + '</div>' : '') +
+                '<div class="lapsePreviewRow"><span class="lapsePreviewLabel">now</span>' +
+                '<span>' + escapeHtml(currentCue.TimingLine) + '</span></div>' +
+                '<div class="lapsePreviewRow"><span class="lapsePreviewLabel">after</span>' +
+                '<span class="lapsePreviewAfter">' + escapeHtml(shifted) + '</span></div>';
+        }
+
+        function loadCue() {
+            previewBox.textContent = 'Loading an example line...';
+            currentCue = null;
+
+            lapseGet('Lapse/Items/' + context.id + '/Subtitles/FirstCue?path=' + encodeURIComponent(select.value))
+                .then(function (cue) {
+                    currentCue = cue;
+                    renderPreview();
+                })
+                .catch(function () {
+                    previewBox.textContent = 'No example line available for this subtitle.';
+                });
+        }
+
+        function step(delta) {
+            offsetInput.value = currentOffset() + delta;
+            renderPreview();
+        }
+
+        select.addEventListener('change', loadCue);
+        offsetInput.addEventListener('input', renderPreview);
+        overlay.querySelector('#lapseShiftMinus').addEventListener('click', function () { step(-100); });
+        overlay.querySelector('#lapseShiftPlus').addEventListener('click', function () { step(100); });
+
+        overlay.querySelector('#lapseShiftCancel').addEventListener('click', function () {
+            overlay.remove();
+        });
+
+        overlay.querySelector('#lapseShiftApply').addEventListener('click', function () {
+            var offset = currentOffset();
+            if (!offset) {
+                showLapseToast('Set an offset first - zero would not change anything.');
+                return;
+            }
+
+            overlay.remove();
+            showLapseToast('Shifting by ' + offset + 'ms...');
+
+            // no OutputMode here: the server falls back to the configured one, which is
+            // the whole point of "output follows the configured mode"
+            lapsePost('Lapse/Shift', {
+                ItemId: context.id,
+                SubtitlePath: select.value,
+                OffsetMs: offset
+            }).then(function (result) {
+                showLapseToast('Moved ' + result.Shifted + ' timestamps by ' + offset + 'ms. Wrote ' + result.OutputPath);
+            }).catch(function (err) {
+                showLapseToast('Could not shift the subtitle: ' + err.message);
+            });
+        });
+
+        loadCue();
+    }
+
+    // Same arithmetic the server does, so the preview matches what Apply will produce
+    // without a round trip on every keystroke.
+    function shiftTimingLine(line, offsetMs) {
+        return line.replace(/(\d{1,3}):(\d{2}):(\d{2})([,.])(\d{1,3})/g, function (all, h, m, s, sep, ms) {
+            var total = (parseInt(h, 10) * 3600000) + (parseInt(m, 10) * 60000) +
+                (parseInt(s, 10) * 1000) + parseInt(ms.padEnd(3, '0'), 10) + offsetMs;
+
+            if (total < 0) {
+                total = 0;
+            }
+
+            return pad(Math.floor(total / 3600000), 2) + ':' +
+                pad(Math.floor(total / 60000) % 60, 2) + ':' +
+                pad(Math.floor(total / 1000) % 60, 2) + sep +
+                pad(total % 1000, 3);
+        });
+    }
+
+    function pad(value, width) {
+        return String(value).padStart(width, '0');
+    }
+
+    // --- "Sync All Subtitles to Reference" on a single item ---
+
+    function openReferencePopup(context) {
+        showLapseToast('Checking subtitles...');
+
+        lapseGet('Lapse/Items/' + context.id + '/Subtitles').then(function (subtitles) {
             if (subtitles.length < 2) {
                 showLapseToast('This item needs at least two external subtitles for that.');
                 return;
@@ -434,7 +751,7 @@
             overlay.querySelector('#lapseRefSync').addEventListener('click', function () {
                 var referencePath = overlay.querySelector('#lapseRefSelect').value;
                 overlay.remove();
-                doSyncAll(itemId, referencePath, subtitles.length - 1);
+                doSyncAll(context.id, referencePath, subtitles.length - 1);
             });
         }).catch(function (err) {
             showLapseToast('Could not check subtitles: ' + err.message);
@@ -458,41 +775,371 @@
         });
     }
 
-    function openAdvancedOverlay(itemId) {
-        // has to be the SPA route (/web/#/configurationpage?...), not the bare
-        // configurationpage?name=... resource - loaded on its own like that, the config
-        // page has no ApiClient/Dashboard at all, those only exist once jellyfin-web's
-        // own app shell has booted, which is what the #/ route inside the iframe gets us
-        var iframeSrc = '/web/#/configurationpage?name=LAPSE&itemId=' + encodeURIComponent(itemId) + '&autoAdvanced=1';
+    // --- series and season sync ---
 
-        var overlay = document.createElement('div');
-        overlay.className = 'lapseIframeOverlay';
-        overlay.innerHTML =
-            '<div class="lapseIframeCard">' +
-            '<button is="paper-icon-button-light" type="button" class="lapseIframeCloseButton" title="Close">' +
-            '<span class="material-icons close" aria-hidden="true"></span>' +
-            '</button>' +
-            '<iframe src="' + iframeSrc + '"></iframe>' +
-            '</div>';
+    function openSeriesReferencePopup(context) {
+        showLapseToast('Looking at the subtitles across these episodes...');
 
-        overlay.querySelector('.lapseIframeCloseButton').addEventListener('click', function () {
+        lapseGet('Lapse/Series/' + context.id + '/ReferenceOptions').then(function (options) {
+            if (!options || options.length === 0) {
+                showLapseToast('No subtitle track here is named consistently enough to use as a reference across episodes.');
+                return;
+            }
+
+            var optionsHtml = options.map(function (o) {
+                return '<option value="' + escapeHtml(o.Key) + '">' + escapeHtml(o.Key) +
+                    ' (on ' + o.EpisodeCount + ' of ' + o.TotalEpisodes + ' episodes)</option>';
+            }).join('');
+
+            var overlay = openOverlay(
+                '<h3>Sync All to Reference</h3>' +
+                '<p class="fieldDescription">Pick the subtitle track that is already correct. On every episode, the other subtitles get lined up against that episode\'s copy of it.</p>' +
+                '<div class="selectContainer">' +
+                '<select is="emby-select" id="lapseSeriesRefSelect" class="emby-select-withcolor emby-select">' +
+                optionsHtml +
+                '</select>' +
+                '</div>' +
+                '<div class="lapseDialogButtons">' +
+                '<button is="emby-button" type="button" class="raised" id="lapseSeriesRefCancel"><span>Cancel</span></button>' +
+                '<button is="emby-button" type="button" class="raised button-submit" id="lapseSeriesRefSync"><span>Sync</span></button>' +
+                '</div>');
+
+            overlay.querySelector('#lapseSeriesRefCancel').addEventListener('click', function () {
+                overlay.remove();
+            });
+
+            overlay.querySelector('#lapseSeriesRefSync').addEventListener('click', function () {
+                var key = overlay.querySelector('#lapseSeriesRefSelect').value;
+                overlay.remove();
+                startSeriesSync(context, key);
+            });
+        }).catch(function (err) {
+            showLapseToast('Could not read the subtitle tracks: ' + err.message);
+        });
+    }
+
+    function startSeriesSync(context, referenceKey) {
+        showLapseToast('Queuing episodes...');
+
+        lapsePost('Lapse/Series/Sync', {
+            ItemId: context.id,
+            ReferenceKey: referenceKey
+        }).then(function () {
+            // Progress goes in the notification toast rather than a modal, so the page
+            // stays usable while a whole show works through in the background.
+            startProgressPolling();
+        }).catch(function (err) {
+            showLapseToast('Could not start the sync: ' + err.message);
+        });
+    }
+
+    function startProgressPolling() {
+        if (progressPollHandle) {
+            return;
+        }
+
+        var toast = showLapseToast('Starting...', true);
+
+        function poll() {
+            lapseGet('Lapse/Queue').then(function (snapshot) {
+                var unit = snapshot.UnitName || 'item';
+                var plural = snapshot.Total === 1 ? unit : unit + 's';
+
+                if (snapshot.Running) {
+                    toast.textContent = (snapshot.JobName ? snapshot.JobName + ': ' : '') +
+                        snapshot.Completed + ' / ' + snapshot.Total + ' ' + plural + ' processed' +
+                        (snapshot.CurrentItemName ? ' - ' + snapshot.CurrentItemName : '');
+                    return;
+                }
+
+                stopProgressPolling();
+                toast.textContent = (snapshot.JobName ? snapshot.JobName + ': ' : '') +
+                    'finished, ' + snapshot.Completed + ' / ' + snapshot.Total + ' ' + plural + ' processed.';
+
+                setTimeout(function () {
+                    if (toast.parentNode) {
+                        toast.remove();
+                    }
+                }, 8000);
+            }).catch(function (err) {
+                stopProgressPolling();
+                toast.textContent = 'Lost track of the sync job: ' + err.message;
+            });
+        }
+
+        progressPollHandle = setInterval(poll, 2000);
+        poll();
+    }
+
+    function stopProgressPolling() {
+        if (progressPollHandle) {
+            clearInterval(progressPollHandle);
+            progressPollHandle = null;
+        }
+    }
+
+    // --- the Advanced dialog ---
+
+    // This used to load the whole plugin dashboard in an iframe, which navigated the
+    // page out from under whoever pressed it. It's a normal dialog now: everything it
+    // offers is an API call the injected script can make directly, so there was never a
+    // reason to drag the dashboard along.
+    function openAdvancedDialog(context) {
+        showLapseToast('Loading...');
+
+        Promise.all([
+            lapseGet('Lapse/Items/' + context.id + '/Subtitles'),
+            lapseGet('Lapse/Engines'),
+            lapseGet('Lapse/Translate/Providers')
+        ]).then(function (results) {
+            var toast = document.querySelector('.lapseToast');
+            if (toast) {
+                toast.remove();
+            }
+
+            showAdvancedDialog(context, results[0], results[1], results[2]);
+        }).catch(function (err) {
+            showLapseToast('Could not open the advanced options: ' + err.message);
+        });
+    }
+
+    function showAdvancedDialog(context, subtitles, engines, providers) {
+        var usableEngines = engines.filter(function (e) { return e.Installed && !e.RunCheckError; });
+        if (usableEngines.length === 0) {
+            showLapseToast('No engine is installed and working. Install one from the LAPSE dashboard first.');
+            return;
+        }
+
+        var configuredProviders = (providers || []).filter(function (p) { return p.Configured; });
+
+        var startEngine = usableEngines.filter(function (e) { return e.IsDefault; })[0] || usableEngines[0];
+
+        var engineOptions = usableEngines.map(function (e) {
+            return '<option value="' + escapeHtml(e.Id) + '"' + (e.Id === startEngine.Id ? ' selected' : '') + '>' +
+                escapeHtml(e.DisplayName) + '</option>';
+        }).join('');
+
+        var subtitleSection = subtitles.length === 0
+            ? '<p class="fieldDescription">No external subtitle found for this item.</p>'
+            : '<div class="selectContainer">' +
+              '  <label class="selectLabel">Subtitle</label>' +
+              '  <select is="emby-select" id="lapseAdvSubtitle" class="emby-select-withcolor emby-select">' +
+              subtitleOptionsHtml(subtitles) +
+              '  </select>' +
+              '</div>';
+
+        var referenceSection = subtitles.length > 1
+            ? '<hr class="lapseDialogRule" />' +
+              '<div class="selectContainer">' +
+              '  <label class="selectLabel">Sync all subtitles to this one</label>' +
+              '  <select is="emby-select" id="lapseAdvReference" class="emby-select-withcolor emby-select">' +
+              subtitleOptionsHtml(subtitles) +
+              '  </select>' +
+              '</div>' +
+              '<button is="emby-button" type="button" class="raised lapseSmallButton" id="lapseAdvSyncAll"><span>Sync all to reference</span></button>'
+            : '';
+
+        var translationSection = (subtitles.length > 0 && configuredProviders.length > 0)
+            ? '<hr class="lapseDialogRule" />' +
+              '<h4 class="lapseDialogSubhead">Translate</h4>' +
+              '<div class="lapseFieldPair">' +
+              '  <div class="inputContainer">' +
+              '    <label class="inputLabel inputLabelUnfocused">From</label>' +
+              '    <input is="emby-input" id="lapseAdvSourceLang" type="text" placeholder="auto" />' +
+              '  </div>' +
+              '  <div class="inputContainer">' +
+              '    <label class="inputLabel inputLabelUnfocused">To</label>' +
+              '    <input is="emby-input" id="lapseAdvTargetLang" type="text" placeholder="es" />' +
+              '  </div>' +
+              '</div>' +
+              '<div class="selectContainer">' +
+              '  <label class="selectLabel">Provider</label>' +
+              '  <select is="emby-select" id="lapseAdvProvider" class="emby-select-withcolor emby-select">' +
+              configuredProviders.map(function (p) {
+                  return '<option value="' + escapeHtml(p.Id) + '"' + (p.IsDefault ? ' selected' : '') + '>' +
+                      escapeHtml(p.DisplayName) + '</option>';
+              }).join('') +
+              '  </select>' +
+              '</div>' +
+              '<div class="inputContainer">' +
+              '  <label class="inputLabel inputLabelUnfocused">Confidence threshold: <span id="lapseAdvConfidenceValue">70</span>%</label>' +
+              '  <input type="range" id="lapseAdvConfidence" min="0" max="100" value="70" class="lapseRange" />' +
+              '</div>' +
+              '<label class="emby-checkbox-label lapseStackedCheck">' +
+              '  <input id="lapseAdvMetadataHeader" type="checkbox" is="emby-checkbox" checked />' +
+              '  <span>Add a metadata comment block at the top</span>' +
+              '</label>' +
+              '<div class="fieldDescription">Writes a new file next to the original, never over it.</div>' +
+              '<button is="emby-button" type="button" class="raised lapseSmallButton" id="lapseAdvTranslate"><span>Translate</span></button>'
+            : '';
+
+        var overlay = openOverlay(
+            '<h3>' + escapeHtml(context.name || 'Advanced') + '</h3>' +
+            '<div class="selectContainer">' +
+            '  <label class="selectLabel">Engine</label>' +
+            '  <select is="emby-select" id="lapseAdvEngine" class="emby-select-withcolor emby-select">' + engineOptions + '</select>' +
+            '</div>' +
+            '<div class="selectContainer">' +
+            '  <label class="selectLabel">Mode</label>' +
+            '  <select is="emby-select" id="lapseAdvMode" class="emby-select-withcolor emby-select">' +
+            modeOptionsFor(startEngine) +
+            '  </select>' +
+            '</div>' +
+            '<div class="inputContainer hide" id="lapseAdvPenaltyContainer">' +
+            '  <label class="inputLabel inputLabelUnfocused">Penalty</label>' +
+            '  <input is="emby-input" id="lapseAdvPenalty" type="number" value="' + startEngine.Penalty + '" />' +
+            '  <div class="fieldDescription" id="lapseAdvPenaltyNote"></div>' +
+            '</div>' +
+            subtitleSection +
+            '<div class="lapseDialogButtons">' +
+            '  <button is="emby-button" type="button" class="raised" id="lapseAdvClose"><span>Close</span></button>' +
+            '  <button is="emby-button" type="button" class="raised button-submit" id="lapseAdvSync"' +
+            (subtitles.length === 0 ? ' disabled' : '') + '><span>Sync</span></button>' +
+            '</div>' +
+            referenceSection +
+            translationSection,
+            true);
+
+        var engineSelect = overlay.querySelector('#lapseAdvEngine');
+        var modeSelect = overlay.querySelector('#lapseAdvMode');
+        var penaltyContainer = overlay.querySelector('#lapseAdvPenaltyContainer');
+        var penaltyInput = overlay.querySelector('#lapseAdvPenalty');
+        var penaltyNote = overlay.querySelector('#lapseAdvPenaltyNote');
+
+        function currentEngine() {
+            return usableEngines.filter(function (e) { return e.Id === engineSelect.value; })[0] || startEngine;
+        }
+
+        function syncPenaltyVisibility() {
+            var engine = currentEngine();
+            var isSplit = modeSelect.value === 'Split';
+            penaltyContainer.classList.toggle('hide', !(isSplit && engine.SupportsPenalty));
+            penaltyNote.textContent = 'Higher values mean fewer splits. ' + engine.DisplayName +
+                ' takes ' + engine.MinPenalty + ' to ' + engine.MaxPenalty + ', default ' + engine.Penalty + '.';
+        }
+
+        engineSelect.addEventListener('change', function () {
+            var engine = currentEngine();
+            modeSelect.innerHTML = modeOptionsFor(engine);
+            penaltyInput.value = engine.Penalty;
+            syncPenaltyVisibility();
+        });
+
+        modeSelect.addEventListener('change', syncPenaltyVisibility);
+        syncPenaltyVisibility();
+
+        function selectedSubtitlePath() {
+            var select = overlay.querySelector('#lapseAdvSubtitle');
+            return select ? select.value : null;
+        }
+
+        function currentPenalty() {
+            var engine = currentEngine();
+            return modeSelect.value === 'Split' && engine.SupportsPenalty
+                ? (parseInt(penaltyInput.value, 10) || engine.Penalty)
+                : 0;
+        }
+
+        overlay.querySelector('#lapseAdvClose').addEventListener('click', function () {
             overlay.remove();
         });
 
-        document.body.appendChild(overlay);
+        overlay.querySelector('#lapseAdvSync').addEventListener('click', function () {
+            overlay.remove();
+            showLapseToast('Syncing...');
+
+            lapsePost('Lapse/Sync', {
+                ItemId: context.id,
+                EngineId: currentEngine().Id,
+                Mode: modeSelect.value,
+                Penalty: currentPenalty(),
+                SubtitlePath: selectedSubtitlePath()
+            }).then(function (result) {
+                showLapseToast(describeSyncOutcome(result));
+            }).catch(function (err) {
+                showLapseToast('Sync failed: ' + err.message);
+            });
+        });
+
+        var syncAllButton = overlay.querySelector('#lapseAdvSyncAll');
+        if (syncAllButton) {
+            syncAllButton.addEventListener('click', function () {
+                var referencePath = overlay.querySelector('#lapseAdvReference').value;
+                overlay.remove();
+                doSyncAll(context.id, referencePath, subtitles.length - 1);
+            });
+        }
+
+        var confidenceSlider = overlay.querySelector('#lapseAdvConfidence');
+        if (confidenceSlider) {
+            confidenceSlider.addEventListener('input', function () {
+                overlay.querySelector('#lapseAdvConfidenceValue').textContent = confidenceSlider.value;
+            });
+        }
+
+        var translateButton = overlay.querySelector('#lapseAdvTranslate');
+        if (translateButton) {
+            translateButton.addEventListener('click', function () {
+                var target = (overlay.querySelector('#lapseAdvTargetLang').value || '').trim();
+                if (!target) {
+                    showLapseToast('Enter the language code to translate into first, e.g. es for Spanish.');
+                    return;
+                }
+
+                var job = {
+                    ItemId: context.id,
+                    SubtitlePath: selectedSubtitlePath(),
+                    SourceLanguage: (overlay.querySelector('#lapseAdvSourceLang').value || '').trim() || null,
+                    TargetLanguage: target,
+                    Provider: overlay.querySelector('#lapseAdvProvider').value,
+                    ConfidenceThreshold: parseInt(confidenceSlider.value, 10),
+                    IncludeMetadataHeader: overlay.querySelector('#lapseAdvMetadataHeader').checked
+                };
+
+                overlay.remove();
+                showLapseToast('Translating into ' + target + '...');
+
+                lapsePost('Lapse/Translate', job).then(function (result) {
+                    showLapseToast(result.Success
+                        ? ('Translated ' + result.TranslatedCount + ' of ' + result.LineCount + ' lines. Wrote ' + result.OutputPath)
+                        : ('Translation failed: ' + result.Error));
+                }).catch(function (err) {
+                    showLapseToast('Translation failed: ' + err.message);
+                });
+            });
+        }
+    }
+
+    function modeOptionsFor(engine) {
+        var modes = [
+            { value: 'Standard', label: 'Standard', supported: engine.SupportsStandard },
+            { value: 'Ols', label: 'Standard OLS', supported: engine.SupportsOls },
+            { value: 'Split', label: 'Split', supported: engine.SupportsSplit }
+        ];
+
+        return modes.filter(function (m) { return m.supported; }).map(function (m) {
+            return '<option value="' + m.value + '">' + escapeHtml(m.label) + '</option>';
+        }).join('');
     }
 
     // --- go ---
 
-    // This script sits at the end of <head>, so when it first runs the <body> tag hasn't
-    // been parsed yet and document.body is still null. Waiting for DOMContentLoaded before
-    // touching body is the whole ballgame here - without it the observer setup throws and
-    // takes the rest of the script down with it.
     function start() {
         log('inject.js starting up');
         ensureStylesheetLoaded();
         document.addEventListener('click', rememberCardContextFromClick, true);
         startWatchingForActionSheets();
+        startWatchingForSubtitles();
+
+        // ApiClient isn't necessarily ready the instant the DOM is, and there's no event
+        // for it, so give it a moment before the first authenticated call.
+        setTimeout(refreshSubtitleAppearance, 2000);
+
+        // The client is a single page app, so moving between pages doesn't re-run any of
+        // this. Re-reading the settings on navigation is what makes a change made in the
+        // dashboard show up on the next thing played without a full reload.
+        window.addEventListener('hashchange', refreshSubtitleAppearance);
+        window.addEventListener('popstate', refreshSubtitleAppearance);
     }
 
     if (document.readyState === 'loading') {

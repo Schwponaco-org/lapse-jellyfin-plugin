@@ -4,8 +4,8 @@
 
 using System;
 using System.Collections.Generic;
-using System.IO;
 using Jellyfin.Plugin.Lapse.Configuration;
+using Jellyfin.Plugin.Lapse.Web;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Common.Plugins;
 using MediaBrowser.Model.Plugins;
@@ -15,14 +15,14 @@ using Microsoft.Extensions.Logging;
 namespace Jellyfin.Plugin.Lapse;
 
 /// <summary>
-/// The main LAPSE plugin. Registers the dashboard page and injects the context menu
-/// script into the web client, the same way plugins have done this for years (see
-/// intro-skipper's old EntryPoint.cs, this plugin followed the exact same approach).
+/// The main LAPSE plugin. Registers the dashboard page and the script files the web
+/// client loads. Getting that script in front of the web client is handled by
+/// <see cref="ScriptInjectionMiddleware"/> rather than by editing index.html, which is
+/// what this used to do and what stopped the context menu from ever appearing on the
+/// packaged Linux and macOS builds.
 /// </summary>
 public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
 {
-    private const string InjectedScriptTag = "<script src=\"configurationpage?name=lapse-inject.js\"></script>";
-
     /// <summary>
     /// Initializes a new instance of the <see cref="Plugin"/> class.
     /// </summary>
@@ -38,27 +38,14 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
         // upgrading doesn't quietly drop a configured binary path or penalty.
         Configuration.MigrateLegacySettings();
 
-        var indexPath = Path.Combine(applicationPaths.WebPath, "index.html");
         try
         {
-            InjectScript(indexPath, logger);
+            WebClientInjection.WebPath = applicationPaths.WebPath;
         }
-        catch (Exception ex)
+        catch (NotSupportedException ex)
         {
-            // Injecting into index.html can fail for all sorts of environment reasons
-            // (read only filesystem, wrong file owner, web path missing entirely). None
-            // of those should stop the rest of the plugin from loading.
-            if (ex is UnauthorizedAccessException)
-            {
-                logger.LogError(
-                    ex,
-                    "No permission to modify {Path}. Try fixing its file ownership/permissions (e.g. chown it to the jellyfin user) and restart the server.",
-                    indexPath);
-            }
-            else
-            {
-                logger.LogError(ex, "Could not inject the LAPSE context menu script into {Path}", indexPath);
-            }
+            WebClientInjection.Problem = "This server doesn't expose a web client folder, so the item context menu can't be extended.";
+            logger.LogWarning(ex, "Could not work out where the Jellyfin web client lives");
         }
     }
 
@@ -106,33 +93,5 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
                 EmbeddedResourcePath = $"{prefix}.Configuration.lapse-inject.css"
             }
         };
-    }
-
-    private static void InjectScript(string indexPath, ILogger logger)
-    {
-        if (!File.Exists(indexPath))
-        {
-            logger.LogWarning("index.html not found at {Path}, skipping script injection", indexPath);
-            return;
-        }
-
-        var contents = File.ReadAllText(indexPath);
-
-        if (contents.Contains(InjectedScriptTag, StringComparison.Ordinal))
-        {
-            logger.LogDebug("LAPSE context menu script already injected");
-            return;
-        }
-
-        var headEndIndex = contents.IndexOf("</head>", StringComparison.OrdinalIgnoreCase);
-        if (headEndIndex < 0)
-        {
-            logger.LogWarning("Could not find </head> in index.html, skipping script injection");
-            return;
-        }
-
-        contents = contents.Insert(headEndIndex, InjectedScriptTag);
-        File.WriteAllText(indexPath, contents);
-        logger.LogInformation("LAPSE context menu script injected into the web interface");
     }
 }

@@ -320,6 +320,38 @@ public class EngineRunner
                 return result;
             }
 
+            var threshold = Plugin.Instance?.Configuration.SyncConfidenceThreshold ?? 50;
+            result.LowConfidence = result.Confidence.HasValue && result.Confidence.Value * 100 < threshold;
+
+            if (result.LowConfidence)
+            {
+                var action = Plugin.Instance?.Configuration.LowConfidenceAction ?? LowConfidenceAction.KeepOriginal;
+
+                if (action == LowConfidenceAction.KeepOriginal)
+                {
+                    // A low score nearly always means the subtitle isn't for this video,
+                    // and writing that over a subtitle that was already fine is the one
+                    // outcome there's no undoing. The work file gets cleaned up in the
+                    // finally block, so nothing on disk changes at all.
+                    result.Skipped = true;
+                    _logger.LogInformation(
+                        "{Engine} came back at {Confidence:P0} on {Subtitle}, under the {Threshold}% threshold - leaving the original alone",
+                        engine.Descriptor.DisplayName,
+                        result.Confidence,
+                        subtitlePath,
+                        threshold);
+                    return result;
+                }
+
+                if (action == LowConfidenceAction.Sidecar && string.IsNullOrWhiteSpace(destinationOverride))
+                {
+                    // Keep the original where it is and put the doubtful result beside it,
+                    // whatever the output mode would normally have done.
+                    destination = ResolveDestination(subtitlePath, OutputMode.SidecarOnly);
+                    resolvedOutputMode = OutputMode.SidecarOnly;
+                }
+            }
+
             result.BackupPath = TakeBackup(destination, resolvedOutputMode);
             File.Move(workPath, destination, overwrite: true);
             result.OutputPath = destination;
@@ -349,11 +381,19 @@ public class EngineRunner
         }
     }
 
+    /// <summary>
+    /// Copies whatever is at the destination to a .bak first, when the output mode asks
+    /// for that. Shared with the manual shifter, which has to make the same promise about
+    /// the file it's about to replace.
+    /// </summary>
+    /// <param name="destination">The file about to be written.</param>
+    /// <param name="mode">The output mode in effect.</param>
+    /// <returns>The backup path, or null if no backup was taken.</returns>
     [System.Diagnostics.CodeAnalysis.SuppressMessage(
         "Security",
         "CA3003:Review code for file path injection vulnerabilities",
         Justification = "The destination comes from RunAsync, which derives it from a subtitle path the caller already validated.")]
-    private static string? TakeBackup(string destination, OutputMode mode)
+    public static string? TakeBackup(string destination, OutputMode mode)
     {
         if (mode is not (OutputMode.OverwriteWithBackup or OutputMode.SidecarWithBackup))
         {

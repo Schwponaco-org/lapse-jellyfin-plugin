@@ -46,6 +46,12 @@ public class LingarrTranslationProvider : ITranslationProvider
     public string DisplayName => "Lingarr";
 
     /// <inheritdoc />
+    public int Tier => 1;
+
+    /// <inheritdoc />
+    public string Summary => "Self hosted. Translates a line at a time with its neighbours as context, which helps with dialogue that runs across cues.";
+
+    /// <inheritdoc />
     public string? GetConfigurationProblem()
     {
         var baseUrl = Plugin.Instance?.Configuration.LingarrBaseUrl;

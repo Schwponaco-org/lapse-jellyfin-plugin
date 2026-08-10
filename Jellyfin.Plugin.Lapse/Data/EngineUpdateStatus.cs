@@ -33,7 +33,15 @@ public class EngineUpdateStatus
     public bool UpdateAvailable { get; set; }
 
     /// <summary>
-    /// Gets or sets a value indicating whether the daily task may update this engine.
+    /// Gets or sets a value indicating whether the plugin couldn't work out what version
+    /// is installed. The update still goes ahead in that case, it just can't say what
+    /// it's replacing.
+    /// </summary>
+    public bool VersionUnknown { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether the daily task keeps installed engines up
+    /// to date. This is a server-wide setting, so it reads the same for every engine.
     /// </summary>
     public bool AutoUpdate { get; set; }
 
