@@ -56,7 +56,7 @@ Outside the Settings group there is a **Sync status** list of every syncable ite
 
 ## Engines
 
-**LAPSE** is the one this plugin is built around and the one to use. It listens to the audio and works out on its own whether the subtitle is simply early, drifting because it was made for a different framerate, split across a re-cut, or some combination, then fixes whichever it is. It also says how sure it is about the answer, which none of the others do. Builds are published for Linux, macOS and Windows on both Intel and ARM, so it runs wherever Jellyfin does.
+**LAPSE** is the one this plugin is built around and the one to use. It listens to the audio and works out on its own whether the subtitle is simply early, drifting because it was made for a different framerate, split across a re-cut, or some combination, then fixes whichever it is. It also says how sure it is about the answer, which none of the others do. Builds are published for Linux, macOS and Windows, so it runs wherever Jellyfin does.
 
 **alass** splits the file into sections and times each one separately. Handy for recordings cut around ad breaks. Only x86_64 builds are published, for Linux and Windows.
 
