@@ -20,7 +20,7 @@ Then find LAPSE in the **Catalog** tab, install it, and restart Jellyfin.
 
 Now open the plugin from **Dashboard > Plugins > LAPSE**. This part matters: a fresh install has no engine on disk and cannot sync anything yet. Download it from the **Engines** tab in the plugin dashboard, or press the Install button the dashboard shows you on a fresh install. Either way it is one download and then you are set up.
 
-You need Jellyfin 10.11 or newer.
+You need Jellyfin 10.11.11 or newer.
 
 ## Using it
 
