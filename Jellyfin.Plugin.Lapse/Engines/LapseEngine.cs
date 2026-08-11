@@ -155,7 +155,8 @@ public partial class LapseEngine : IEngine
             return EngineResults.Failure(requestedMode, stderr, exitCode);
         }
 
-        var match = TextOutputRegex().Match(stdout);
+        var text = stdout + "\n" + stderr;
+        var match = TextOutputRegex().Match(text);
         if (match.Success)
         {
             return new SyncResult
@@ -164,7 +165,7 @@ public partial class LapseEngine : IEngine
                 Mode = ModeFromEngineName(match.Groups["mode"].Value, requestedMode),
                 OffsetMs = int.Parse(match.Groups["offset"].Value, CultureInfo.InvariantCulture),
                 Confidence = ReadConfidence(match.Value),
-                EngineOutput = EngineResults.Summarize(stdout)
+                EngineOutput = EngineResults.Summarize(text)
             };
         }
 
