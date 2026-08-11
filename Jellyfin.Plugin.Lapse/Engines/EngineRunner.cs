@@ -123,6 +123,37 @@ public class EngineRunner
     }
 
     /// <summary>
+    /// Gets the mode a plain "Sync" press should use with an engine: what the admin picked
+    /// in that engine's Advanced section, or the first mode the engine itself offers.
+    /// </summary>
+    /// <param name="engine">The engine.</param>
+    /// <returns>The mode to run.</returns>
+    public static SyncMode ResolveDefaultMode(IEngine engine)
+    {
+        var configured = Plugin.Instance?.Configuration.GetEngineSettings(engine.Descriptor.Id).DefaultMode;
+
+        if (!string.IsNullOrWhiteSpace(configured)
+            && Enum.TryParse<SyncMode>(configured, ignoreCase: true, out var parsed)
+            && engine.Descriptor.Modes.Exists(m => m.Mode == parsed))
+        {
+            return parsed;
+        }
+
+        return engine.Descriptor.Modes.Count > 0 ? engine.Descriptor.Modes[0].Mode : SyncMode.Standard;
+    }
+
+    /// <summary>
+    /// Gets an engine's advanced parameters, merged with its own documented defaults.
+    /// </summary>
+    /// <param name="engine">The engine.</param>
+    /// <returns>The values to build a command line from.</returns>
+    public static EngineParameterValues ResolveParameters(IEngine engine)
+    {
+        var saved = Plugin.Instance?.Configuration.GetEngineSettings(engine.Descriptor.Id).GetParameterMap();
+        return new EngineParameterValues(engine.Descriptor.Parameters, saved);
+    }
+
+    /// <summary>
     /// Works out where a synced subtitle should end up under a given output mode. The
     /// sidecar modes put it next to the original with the configured suffix inserted, so
     /// Movie.en.srt becomes Movie.en.shifted.srt and Jellyfin picks it up as an extra
@@ -299,7 +330,9 @@ public class EngineRunner
                 Mode = mode,
                 Penalty = penalty,
                 FfmpegDirectory = ffmpegDirectory,
-                Runtime = runtime
+                Runtime = runtime,
+                Parameters = ResolveParameters(engine),
+                ConfidenceSigma = Plugin.Instance?.Configuration.ConfidenceSigma ?? LapseEngine.DefaultConfidenceSigma
             });
 
             var (stdout, stderr, exitCode) = await RunProcessAsync(enginePath, args, ffmpegDirectory, cancellationToken).ConfigureAwait(false);
@@ -310,6 +343,17 @@ public class EngineRunner
             if (!result.Success)
             {
                 _logger.LogWarning("{Engine} failed on {Subtitle}: {Error}", engine.Descriptor.DisplayName, subtitlePath, result.Error);
+
+                // The message above is the summarized one the dashboard shows. Anyone
+                // actually chasing a bad file needs the decoder chatter that was filtered
+                // out of it, so it goes here rather than nowhere.
+                _logger.LogDebug(
+                    "{Engine} full output for {Subtitle}:\nstdout:\n{Stdout}\nstderr:\n{Stderr}",
+                    engine.Descriptor.DisplayName,
+                    subtitlePath,
+                    stdout,
+                    stderr);
+
                 return result;
             }
 
@@ -320,12 +364,16 @@ public class EngineRunner
                 return result;
             }
 
-            var threshold = Plugin.Instance?.Configuration.SyncConfidenceThreshold ?? 50;
-            result.LowConfidence = result.Confidence.HasValue && result.Confidence.Value * 100 < threshold;
+            // The engine has already weighed its answer against the configured confidence
+            // and said what it thinks of it, so gate on that rather than re-deriving a
+            // judgement from a number here. Engines that report no verdict (alass,
+            // ffsubsync) are never held to this and always get written.
+            result.LowConfidence = result.Verdict is not null
+                && !string.Equals(result.Verdict, "solid", StringComparison.OrdinalIgnoreCase);
 
             if (result.LowConfidence)
             {
-                var action = Plugin.Instance?.Configuration.LowConfidenceAction ?? LowConfidenceAction.KeepOriginal;
+                var action = Plugin.Instance?.Configuration.LowConfidenceAction ?? LowConfidenceAction.Sidecar;
 
                 if (action == LowConfidenceAction.KeepOriginal)
                 {
@@ -335,11 +383,12 @@ public class EngineRunner
                     // finally block, so nothing on disk changes at all.
                     result.Skipped = true;
                     _logger.LogInformation(
-                        "{Engine} came back at {Confidence:P0} on {Subtitle}, under the {Threshold}% threshold - leaving the original alone",
+                        "{Engine} came back {Verdict} on {Subtitle} (sigma {Sigma}, threshold {Threshold}) - leaving the original alone",
                         engine.Descriptor.DisplayName,
-                        result.Confidence,
+                        result.Verdict,
                         subtitlePath,
-                        threshold);
+                        result.Sigma,
+                        Plugin.Instance?.Configuration.ConfidenceSigma);
                     return result;
                 }
 
@@ -355,6 +404,7 @@ public class EngineRunner
             result.BackupPath = TakeBackup(destination, resolvedOutputMode);
             File.Move(workPath, destination, overwrite: true);
             result.OutputPath = destination;
+            result.InputPath = subtitlePath;
             return result;
         }
         finally

@@ -82,38 +82,84 @@
     flex: 0 0 auto;
 }
 
-/* what the offset does to one real line from the file */
+.lapseShiftControls {
+    margin-top: .9em;
+}
+
+/* The number here is the thing being read while dragging the slider, and at the inherited
+   input size it was too small to read at a glance. It gets its own size rather than a
+   global override so nothing else in the dialog moves. */
+.lapseShiftNumber {
+    font-size: 1.5em !important;
+    font-weight: 500;
+    letter-spacing: .02em;
+    padding: .25em .4em !important;
+    text-align: center;
+}
+
+.lapseShiftUnit {
+    font-size: 1em;
+    opacity: .6;
+    flex: 0 0 auto;
+    margin-left: -.2em;
+}
+
+.lapseShiftSlider {
+    width: 100%;
+    margin: 0;
+    accent-color: var(--accent-color, #00A4DC);
+}
+
+.lapseShiftScale {
+    display: flex;
+    justify-content: space-between;
+    font-size: .7em;
+    opacity: .5;
+    margin: .1em 0 .7em;
+}
+
+/* What the offset does to one real line from the file. This is the thing being read while
+   the slider moves, so it is sized to be read at a glance rather than inheriting the
+   dialog's small print. */
 .lapsePreviewBox {
     margin-top: .8em;
-    padding: .7em .8em;
+    padding: .9em 1em;
     border-radius: .3em;
     background: rgba(255, 255, 255, .06);
-    font-size: .85em;
-    line-height: 1.5;
+    font-size: 1em;
+    line-height: 1.6;
 }
 
 .lapsePreviewText {
     opacity: .75;
-    margin-bottom: .5em;
+    margin-bottom: .6em;
     font-style: italic;
+    font-size: 1.02em;
 }
 
 .lapsePreviewRow {
     display: flex;
-    gap: .6em;
-    font-family: monospace;
+    align-items: baseline;
+    gap: .7em;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 1.12em;
+    letter-spacing: .01em;
     white-space: nowrap;
     overflow-x: auto;
 }
 
 .lapsePreviewLabel {
-    opacity: .55;
-    min-width: 3.2em;
+    opacity: .5;
+    min-width: 3.4em;
     flex: 0 0 auto;
+    font-size: .8em;
+    text-transform: uppercase;
+    letter-spacing: .06em;
 }
 
 .lapsePreviewAfter {
     color: var(--theme-primary-color, #00a4dc);
+    font-weight: 600;
 }
 
 .lapseFieldPair {

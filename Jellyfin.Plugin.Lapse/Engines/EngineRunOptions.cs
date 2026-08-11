@@ -50,4 +50,17 @@ public class EngineRunOptions
     /// Gets or sets what the installed binary said it supports.
     /// </summary>
     public EngineRuntimeInfo Runtime { get; set; } = EngineRuntimeInfo.Unknown;
+
+    /// <summary>
+    /// Gets or sets this engine's advanced parameters, already merged with the engine's
+    /// own defaults.
+    /// </summary>
+    public EngineParameterValues Parameters { get; set; } = EngineParameterValues.Empty;
+
+    /// <summary>
+    /// Gets or sets how far the answer has to stand out before the engine will overwrite
+    /// the original, in standard deviations. Only LAPSE takes this (as --confidence); the
+    /// other engines report no confidence at all and ignore it.
+    /// </summary>
+    public double ConfidenceSigma { get; set; } = LapseEngine.DefaultConfidenceSigma;
 }

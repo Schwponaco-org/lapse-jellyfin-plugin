@@ -779,3 +779,588 @@
     font-weight: 500;
     opacity: .95;
 }
+
+/* ---------------------------------------------------------------- settings group
+
+   The sidebar used to be nine flat entries, which made opening the plugin feel like
+   opening a settings form. The everyday things stay at the top level and everything that
+   is really configuration folds away under here. */
+
+.lapseNavGroup {
+    display: flex;
+    align-items: center;
+    gap: .6em;
+    width: 100%;
+    padding: .55em .7em;
+    border: none;
+    background: none;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+    border-radius: .3em;
+    font-size: inherit;
+    opacity: .85;
+}
+
+.lapseNavGroup:hover {
+    background: rgba(127, 127, 127, .12);
+}
+
+.lapseNavChevron {
+    margin-left: auto;
+    font-size: 1.1em;
+    transition: transform .12s ease;
+}
+
+.lapseNavGroup-open .lapseNavChevron {
+    transform: rotate(90deg);
+}
+
+.lapseNavSub {
+    display: flex;
+    flex-direction: column;
+    gap: .1em;
+    padding-left: 1.6em;
+    margin-bottom: .3em;
+}
+
+.lapseNavSub .lapseNavItem {
+    padding-top: .4em;
+    padding-bottom: .4em;
+    font-size: .95em;
+}
+
+/* --------------------------------------------------------------- dashboard front page */
+
+.lapseHero {
+    display: flex;
+    gap: 1.4em;
+    flex-wrap: wrap;
+    align-items: stretch;
+    margin-bottom: 1.4em;
+}
+
+.lapseHeroMain {
+    flex: 2 1 24em;
+    display: flex;
+    align-items: center;
+    gap: 1.4em;
+    border: 1px solid rgba(127, 127, 127, .22);
+    border-radius: .5em;
+    padding: 1.2em 1.4em;
+    background:
+        radial-gradient(120% 140% at 0% 0%, rgba(0, 164, 220, .10), transparent 60%);
+}
+
+.lapseHeroEngine {
+    flex: 1 1 15em;
+    border: 1px solid rgba(127, 127, 127, .22);
+    border-left: 3px solid var(--lapse-accent, #00A4DC);
+    border-radius: .5em;
+    padding: 1.1em 1.2em;
+    display: flex;
+    flex-direction: column;
+    gap: .25em;
+}
+
+/* The share of eligible items that are fully synced, drawn as a ring rather than yet
+   another number in a row of numbers. --lapse-dial is the percentage. */
+.lapseDial {
+    flex: 0 0 auto;
+    width: 7.4em;
+    height: 7.4em;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    background: conic-gradient(
+        var(--lapse-accent, #00A4DC) calc(var(--lapse-dial) * 1%),
+        rgba(127, 127, 127, .18) 0);
+}
+
+.lapseDialInner {
+    width: 5.9em;
+    height: 5.9em;
+    border-radius: 50%;
+    background: var(--theme-body-background-color, #101010);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    line-height: 1.1;
+}
+
+.lapseDialValue {
+    font-size: 1.9em;
+    font-weight: 500;
+}
+
+.lapseDialValue small {
+    font-size: .5em;
+    opacity: .6;
+    margin-left: .1em;
+}
+
+.lapseDialLabel {
+    font-size: .72em;
+    opacity: .6;
+    text-transform: uppercase;
+    letter-spacing: .07em;
+    margin-top: .2em;
+}
+
+.lapseHeroText {
+    min-width: 0;
+}
+
+.lapseHeroHeadline {
+    font-size: 1.25em;
+    font-weight: 500;
+    margin-bottom: .25em;
+}
+
+.lapseHeroSub {
+    font-size: .85em;
+    opacity: .65;
+    line-height: 1.45;
+    margin-bottom: .9em;
+}
+
+.lapseHeroActions {
+    display: flex;
+    gap: .4em;
+    flex-wrap: wrap;
+    margin-top: auto;
+    padding-top: .8em;
+}
+
+.lapseProgressBar {
+    display: flex;
+    height: .55em;
+    border-radius: 1em;
+    overflow: hidden;
+    background: rgba(127, 127, 127, .15);
+}
+
+.lapseProgressSegment {
+    display: block;
+    min-width: 2px;
+}
+
+.lapseProgress-synced { background: var(--lapse-accent, #00A4DC); }
+.lapseProgress-partial { background: rgba(230, 170, 40, .85); }
+.lapseProgress-failed { background: rgba(216, 67, 67, .85); }
+.lapseProgress-pending { background: rgba(150, 150, 150, .5); }
+.lapseProgress-skipped { background: rgba(127, 127, 127, .35); }
+.lapseProgress-ignored { background: rgba(127, 127, 127, .2); }
+
+.lapseActiveEngineLabel {
+    font-size: .7em;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    opacity: .55;
+}
+
+.lapseActiveEngineName {
+    font-size: 1.35em;
+    font-weight: 500;
+}
+
+.lapseActiveEngineMode {
+    font-size: .82em;
+    opacity: .65;
+}
+
+.lapseStatRow {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(7.5em, 1fr));
+    gap: .6em;
+    margin-bottom: 1.4em;
+}
+
+/* Tiles are buttons: pressing one filters the status list to that status, which is what
+   anyone who just read "14 failed" wants to do next. */
+.lapseStat {
+    border: 1px solid rgba(127, 127, 127, .22);
+    border-radius: .4em;
+    padding: .7em .5em;
+    text-align: center;
+    background: none;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+    transition: border-color .12s ease, transform .12s ease;
+}
+
+.lapseStat:hover {
+    border-color: var(--lapse-accent, #00A4DC);
+    transform: translateY(-1px);
+}
+
+.lapseStatValue {
+    font-size: 1.7em;
+    font-weight: 500;
+    line-height: 1.1;
+}
+
+.lapseStatLabel {
+    font-size: .75em;
+    opacity: .7;
+    margin-top: .2em;
+}
+
+.lapseStat-synced { border-bottom: 2px solid rgba(0, 164, 220, .7); }
+.lapseStat-partial { border-bottom: 2px solid rgba(230, 170, 40, .7); }
+.lapseStat-pending { border-bottom: 2px solid rgba(150, 150, 150, .6); }
+.lapseStat-failed { border-bottom: 2px solid rgba(216, 67, 67, .7); }
+.lapseStat-skipped { border-bottom: 2px solid rgba(127, 127, 127, .45); }
+.lapseStat-ignored { border-bottom: 2px solid rgba(127, 127, 127, .3); }
+
+.lapseActivityList {
+    display: flex;
+    flex-direction: column;
+    border: 1px solid rgba(127, 127, 127, .2);
+    border-radius: .4em;
+    overflow: hidden;
+}
+
+.lapseActivityRow {
+    display: flex;
+    align-items: center;
+    gap: .7em;
+    padding: .45em .8em;
+    border-bottom: 1px solid rgba(127, 127, 127, .12);
+    font-size: .85em;
+}
+
+.lapseActivityRow:last-child {
+    border-bottom: none;
+}
+
+.lapseActivityRow:hover {
+    background: rgba(127, 127, 127, .06);
+}
+
+.lapseActivityName {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.lapseActivityDetail {
+    opacity: .6;
+    font-size: .9em;
+    white-space: nowrap;
+}
+
+.lapseActivityWhen {
+    opacity: .5;
+    font-size: .85em;
+    white-space: nowrap;
+}
+
+.lapseActivityAction {
+    flex: 0 0 4.5em;
+    text-align: right;
+}
+
+.lapseActivityAction .lapseSmallButton {
+    padding: .2em .7em !important;
+    font-size: .9em !important;
+    margin: 0;
+}
+
+.lapseActivityUndone {
+    font-size: .85em;
+    opacity: .45;
+    font-style: italic;
+}
+
+.lapseActivityEmpty {
+    border: 1px dashed rgba(127, 127, 127, .3);
+    border-radius: .4em;
+    padding: 1.4em;
+    text-align: center;
+    font-size: .88em;
+    opacity: .65;
+}
+
+/* A fresh install has nothing to show and nothing to configure yet. One button beats a
+   grid of zeroes and a settings form nobody can use until the engine is on disk. */
+.lapseEmptyState {
+    border: 1px solid rgba(127, 127, 127, .25);
+    border-radius: .5em;
+    padding: 2.2em 1.5em;
+    text-align: center;
+    max-width: 34em;
+}
+
+.lapseEmptyTitle {
+    font-size: 1.3em;
+    font-weight: 500;
+    margin-bottom: .5em;
+}
+
+.lapseEmptyBody {
+    opacity: .8;
+    line-height: 1.5;
+    margin-bottom: 1.2em;
+}
+
+.lapseEmptyFooter {
+    font-size: .8em;
+    opacity: .55;
+    margin-top: 1em;
+}
+
+.lapseBigButton {
+    padding: .6em 2em !important;
+    font-size: 1.05em !important;
+}
+
+/* --------------------------------------------------------------- engine cards */
+
+.lapseTier {
+    font-size: .68em;
+    letter-spacing: .05em;
+    text-transform: uppercase;
+    padding: .2em .6em;
+    border-radius: 1em;
+    white-space: nowrap;
+}
+
+.lapseTier-recommended {
+    background: rgba(0, 164, 220, .28);
+    color: inherit;
+}
+
+.lapseTier-supported {
+    background: rgba(127, 127, 127, .22);
+}
+
+.lapseTier-experimental {
+    background: rgba(230, 170, 40, .25);
+}
+
+.lapseWhyLink {
+    font-size: .78em;
+    line-height: 1.35;
+}
+
+/* Compact cards: name, version, badge, one status line, buttons. The prose that used to
+   sit here said nothing anyone on this page didn't already know. */
+.lapseEngineStatusLine {
+    display: flex;
+    align-items: center;
+    gap: .45em;
+    font-size: .8em;
+    opacity: .75;
+}
+
+.lapseEngineDot {
+    width: .55em;
+    height: .55em;
+    border-radius: 50%;
+    flex: 0 0 auto;
+}
+
+.lapseEngineDot-ok { background: #4caf50; }
+.lapseEngineDot-stale { background: #e6aa28; }
+.lapseEngineDot-broken { background: #d84343; }
+.lapseEngineDot-off { background: rgba(127, 127, 127, .5); }
+.lapseEngineDot-blocked {
+    background: none;
+    border: 1px solid rgba(127, 127, 127, .6);
+}
+
+.lapseChip-recommended {
+    background: rgba(0, 164, 220, .28);
+    margin-left: .5em;
+}
+
+.lapseChip-experimental {
+    background: rgba(230, 170, 40, .25);
+    margin-left: .6em;
+    vertical-align: middle;
+}
+
+.lapseEngineAdvanced {
+    border-top: 1px solid rgba(127, 127, 127, .2);
+    margin-top: .5em;
+    padding-top: .8em;
+}
+
+.lapseModeNotes {
+    font-size: .78em;
+    opacity: .75;
+    line-height: 1.45;
+    margin-bottom: 1em;
+    border-left: 2px solid rgba(127, 127, 127, .3);
+    padding-left: .7em;
+}
+
+.lapseModeNote {
+    margin-bottom: .25em;
+}
+
+/* The flag name next to each label. Anyone tuning these wants to know which switch they
+   are actually setting, so it goes on the label rather than being hidden in a tooltip. */
+.lapseFlag {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: .85em;
+    opacity: .6;
+    margin-left: .4em;
+}
+
+.lapseParamNote {
+    font-size: .76em !important;
+    line-height: 1.4;
+    opacity: .7;
+    margin-top: .15em;
+}
+
+.lapseEngineLinks {
+    margin-top: .8em;
+    font-size: .85em;
+}
+
+.lapseRadioRow-recommended {
+    border-left: 2px solid var(--lapse-accent, #00A4DC);
+    padding-left: .7em;
+}
+
+/* --------------------------------------------------------------- ignore list */
+
+.lapseStatusPill-ignored {
+    background: rgba(127, 127, 127, .18);
+    border: 1px dashed rgba(127, 127, 127, .55);
+}
+
+/* Ignored rows stay readable but obviously set aside, so scanning the list tells you
+   what is going to be left alone without having to read every pill. */
+.lapseItemRow-ignored {
+    opacity: .55;
+}
+
+.lapseItemRow-ignored .listItemBodyText:first-child {
+    text-decoration: line-through;
+    text-decoration-color: rgba(127, 127, 127, .6);
+}
+
+.lapseIgnoreResults {
+    display: flex;
+    flex-direction: column;
+    gap: .2em;
+    margin-bottom: 1em;
+}
+
+.lapseIgnoreCandidate {
+    display: flex;
+    align-items: center;
+    gap: .8em;
+    padding: .35em .6em;
+    border: 1px solid rgba(127, 127, 127, .18);
+    border-radius: .3em;
+    font-size: .9em;
+}
+
+.lapseIgnoreCandidateName {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.lapseIgnoreList {
+    margin-top: .4em;
+}
+
+.lapseIgnoreRow {
+    display: flex;
+    align-items: center;
+}
+
+/* --------------------------------------------------------------- about */
+
+.lapseInfoTable {
+    border: 1px solid rgba(127, 127, 127, .2);
+    border-radius: .4em;
+    overflow: hidden;
+    margin: .8em 0;
+    max-width: 46em;
+}
+
+.lapseInfoRow {
+    display: flex;
+    gap: 1em;
+    padding: .45em .8em;
+    border-bottom: 1px solid rgba(127, 127, 127, .12);
+    font-size: .85em;
+}
+
+.lapseInfoRow:last-child {
+    border-bottom: none;
+}
+
+.lapseInfoKey {
+    flex: 0 0 15em;
+    opacity: .65;
+}
+
+.lapseInfoValue {
+    flex: 1 1 auto;
+    min-width: 0;
+    word-break: break-word;
+}
+
+.lapseCredits {
+    display: flex;
+    gap: 1.2em;
+    margin: .4em 0 .8em;
+}
+
+.lapseCreditLink {
+    font-size: 1em;
+}
+
+.lapseWebhookStatus {
+    font-size: .82em;
+    opacity: .7;
+    line-height: 1.45;
+    border-left: 2px solid rgba(127, 127, 127, .35);
+    padding-left: .7em;
+    margin: .5em 0;
+}
+
+.lapseWebhookStatus:empty {
+    display: none;
+}
+
+/* Read-only line at the top of an engine's Advanced section, for explaining why something
+   somebody came looking for is deliberately not there. */
+.lapseAdvancedNote {
+    font-size: .78em;
+    line-height: 1.5;
+    opacity: .75;
+    background: rgba(127, 127, 127, .09);
+    border-radius: .3em;
+    padding: .6em .8em;
+    margin-bottom: 1em;
+}
+
+/* Checkbox rows inside an engine's Advanced section each carry their own description
+   underneath. Without a gap the next checkbox sat on top of the previous one's note. */
+.lapseEngineAdvanced .lapseStackedCheck {
+    margin: 1em 0 .2em;
+    align-items: flex-start;
+}
+
+.lapseEngineAdvanced .lapseStackedCheck + .lapseParamNote {
+    margin-bottom: .6em;
+}
+
+.lapseEngineAdvanced .lapseStackedCheck:first-child {
+    margin-top: 0;
+}

@@ -22,9 +22,11 @@ public class SyncRequest
     public string? EngineId { get; set; }
 
     /// <summary>
-    /// Gets or sets the alignment mode to use.
+    /// Gets or sets the alignment mode to use. Null means "whatever this engine's default
+    /// sync mode is set to", which is what the context menu's Sync button and the item
+    /// list's Sync button both send.
     /// </summary>
-    public SyncMode Mode { get; set; } = SyncMode.Standard;
+    public SyncMode? Mode { get; set; }
 
     /// <summary>
     /// Gets or sets the penalty value. Only used when <see cref="Mode"/> is Split.

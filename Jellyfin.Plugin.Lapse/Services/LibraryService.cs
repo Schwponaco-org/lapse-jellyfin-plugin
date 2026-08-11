@@ -155,7 +155,7 @@ public class LibraryService
             return false;
         }
 
-        if (SyncQueueManager.IsSkipped(item))
+        if (SyncQueueManager.IsSkipped(item) || IsIgnored(item))
         {
             return false;
         }
@@ -165,6 +165,30 @@ public class LibraryService
         // an item we can't place in a library (a stray item, or a library the plugin
         // can't see) is left alone rather than synced on a guess
         return libraryId.HasValue && Plugin.Instance!.Configuration.IsLibraryEnabled(libraryId.Value);
+    }
+
+    /// <summary>
+    /// Says whether anything on the ignore list covers this item. A rule on a series or a
+    /// folder covers everything under it, so this walks the item's ancestors as well as
+    /// checking its own id and path.
+    /// </summary>
+    /// <param name="item">The item.</param>
+    /// <returns>True if the item is ignored.</returns>
+    public static bool IsIgnored(BaseItem item)
+    {
+        var config = Plugin.Instance?.Configuration;
+        if (config is null || config.IgnoreRules.Count == 0)
+        {
+            return false;
+        }
+
+        var ids = new List<Guid>();
+        for (var current = item; current is not null; current = current.GetParent())
+        {
+            ids.Add(current.Id);
+        }
+
+        return config.IsIgnored(ids, item.Path);
     }
 
     /// <summary>
@@ -182,7 +206,9 @@ public class LibraryService
     /// library is named.
     /// </summary>
     /// <param name="libraryId">The library to look in, or null for all enabled ones.</param>
-    /// <param name="includeSkipped">True to include items marked as skip.</param>
+    /// <param name="includeSkipped">True to include items marked as skip or ignore. The
+    /// dashboard's status list wants them (they're worth showing, greyed out); anything
+    /// that is about to sync does not.</param>
     /// <returns>The items.</returns>
     public List<BaseItem> GetItems(Guid? libraryId = null, bool includeSkipped = false)
     {
@@ -212,7 +238,7 @@ public class LibraryService
                 continue;
             }
 
-            if (!includeSkipped && SyncQueueManager.IsSkipped(item))
+            if (!includeSkipped && (SyncQueueManager.IsSkipped(item) || IsIgnored(item)))
             {
                 continue;
             }

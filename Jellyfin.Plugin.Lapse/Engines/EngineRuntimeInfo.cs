@@ -57,6 +57,22 @@ public class EngineRuntimeInfo
     public bool SupportsNoBackupFlag => HasFlag("--no-backup");
 
     /// <summary>
+    /// Gets or sets the usage text the binary printed, trimmed to something sane. Kept
+    /// because not everything worth knowing is a flag: LAPSE's auto mode is a positional
+    /// argument, so the only way to tell a build that has it from one that doesn't is to
+    /// look at the mode list it prints.
+    /// </summary>
+    public string? UsageText { get; set; }
+
+    /// <summary>
+    /// Gets a value indicating whether the binary offers LAPSE's auto mode. Builds from
+    /// before it existed reject "auto" as an unknown mode rather than ignoring it, so
+    /// this has to be checked before asking for it.
+    /// </summary>
+    public bool SupportsAutoMode =>
+        UsageText is not null && UsageText.Contains("auto|", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
     /// Checks whether the binary said it understands a flag.
     /// </summary>
     /// <param name="flag">The flag, including its leading dashes.</param>

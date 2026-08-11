@@ -23,6 +23,12 @@ public enum InjectionMethod
     PatchedFile,
 
     /// <summary>
+    /// index.html can be read and does have a head to inject into, so the middleware will
+    /// do its job as soon as a browser asks for the page. Nothing has asked yet.
+    /// </summary>
+    Ready,
+
+    /// <summary>
     /// The script isn't reaching the web client at all.
     /// </summary>
     None
@@ -141,6 +147,67 @@ public static class WebClientInjection
         }
 
         return path.TrimEnd('/');
+    }
+
+    /// <summary>
+    /// Works out where things stand right now, rather than reporting on whatever the last
+    /// request happened to do.
+    ///
+    /// <see cref="Method"/> on its own is not a fair answer to "does the context menu
+    /// work". It starts at None and only moves once a browser has actually asked this
+    /// server process for index.html. An admin who opens the plugin page from a client
+    /// that was already loaded - the normal case after a server restart, since the web
+    /// client is a single page app and doesn't re-fetch its own index - would see None
+    /// and a warning saying the entries can't be added, while the entries were in fact
+    /// working perfectly. So a status nobody has confirmed yet gets confirmed here, by
+    /// checking the one thing the middleware actually depends on: that index.html can be
+    /// read and has a head to insert into.
+    /// </summary>
+    /// <returns>The current status.</returns>
+    public static InjectionMethod Evaluate()
+    {
+        if (Method is InjectionMethod.Middleware or InjectionMethod.PatchedFile)
+        {
+            return Method;
+        }
+
+        var html = TryReadIndex(WebPath);
+        if (html is null)
+        {
+            Problem ??= string.IsNullOrWhiteSpace(WebPath)
+                ? "this server doesn't expose a web client folder."
+                : $"index.html could not be read from {WebPath}.";
+
+            Method = InjectionMethod.None;
+            return Method;
+        }
+
+        if (html.Contains(Marker, StringComparison.Ordinal))
+        {
+            Problem = null;
+            Method = InjectionMethod.PatchedFile;
+            return Method;
+        }
+
+        if (html.Contains("</head>", StringComparison.OrdinalIgnoreCase))
+        {
+            Problem = null;
+            Method = InjectionMethod.Ready;
+            return Method;
+        }
+
+        Problem = "the web client's index.html has no <head> to add the script to.";
+        Method = InjectionMethod.None;
+        return Method;
+    }
+
+    /// <summary>
+    /// Says whether the sync entries will show up in the item context menu.
+    /// </summary>
+    /// <returns>True unless something is genuinely stopping the script from getting there.</returns>
+    public static bool IsWorking()
+    {
+        return Evaluate() != InjectionMethod.None;
     }
 
     /// <summary>

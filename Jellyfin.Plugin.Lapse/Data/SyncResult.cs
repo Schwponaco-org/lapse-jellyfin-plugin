@@ -47,6 +47,27 @@ public class SyncResult
     public double? Confidence { get; set; }
 
     /// <summary>
+    /// Gets or sets what LAPSE made of its own answer: "solid" when it stood out clearly
+    /// enough to overwrite the original, "unsure" when it is probably right, "nothing"
+    /// when the audio doesn't back it up at all. This is the engine's own judgement
+    /// against the configured confidence, and it's a better thing to gate on than a
+    /// number the plugin re-interprets. Null for engines that don't report one.
+    /// </summary>
+    public string? Verdict { get; set; }
+
+    /// <summary>
+    /// Gets or sets how many standard deviations the chosen answer beat the alternatives
+    /// by, when the engine reports it. This is the number --confidence is compared against.
+    /// </summary>
+    public double? Sigma { get; set; }
+
+    /// <summary>
+    /// Gets or sets the share of sampled slices of the file that agreed with the answer,
+    /// 0 to 1, when the engine reports it.
+    /// </summary>
+    public double? Agreement { get; set; }
+
+    /// <summary>
     /// Gets or sets a value indicating whether the engine's confidence came in under the
     /// configured threshold. What actually happened to the result then depends on the
     /// low-confidence setting in File output.
@@ -60,6 +81,13 @@ public class SyncResult
     /// deliberately didn't write anything.
     /// </summary>
     public bool Skipped { get; set; }
+
+    /// <summary>
+    /// Gets or sets the subtitle that was read. Recorded so the history can tell a run
+    /// that replaced a file from one that added a new one next to it, which is the
+    /// difference between undoing by restoring a backup and undoing by deleting.
+    /// </summary>
+    public string? InputPath { get; set; }
 
     /// <summary>
     /// Gets or sets the path to the synced subtitle file the engine wrote out.

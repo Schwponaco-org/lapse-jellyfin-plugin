@@ -33,5 +33,15 @@ public enum MovieSyncStatus
     /// <summary>
     /// Last sync attempt failed. See <see cref="MovieSyncRecord.LastError"/> for why.
     /// </summary>
-    Failed
+    Failed,
+
+    /// <summary>
+    /// On the ignore list, so no automatic or bulk run will touch it. Distinct from
+    /// <see cref="Skipped"/>, which is a per-item "not now" rather than a standing rule
+    /// that also covers everything under a series or folder.
+    ///
+    /// Last in the enum on purpose: an older config stores these values as numbers, and
+    /// inserting anywhere else would silently change what existing records mean.
+    /// </summary>
+    Ignored
 }

@@ -206,7 +206,13 @@ public partial class EngineCapabilityProbe
             return null;
         }
 
-        var result = new EngineRuntimeInfo { Probed = true, Source = "usage" };
+        var result = new EngineRuntimeInfo
+        {
+            Probed = true,
+            Source = "usage",
+            UsageText = text.Length > 4000 ? text[..4000] : text
+        };
+
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (Match match in LongFlagRegex().Matches(text))

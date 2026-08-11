@@ -2,101 +2,60 @@
 // Copyright (C) 2026 Rasmus Stisen Jensen (rs-jensen)
 // Licensed under GPL v3 - see LICENSE for details
 
+using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Jellyfin.Plugin.Lapse.Data;
 
 namespace Jellyfin.Plugin.Lapse.Engines;
 
 /// <summary>
-/// The LAPSE engine. Its CLI is:
-/// lapse &lt;video_or_subtitle&gt; &lt;subtitle&gt; [ols|nosplit|split] [penalty]
-///       [--output &lt;path&gt;] [--no-backup] [--no-embedded]
-/// where the flags only exist on newer builds. On a build without --output it rewrites
-/// the subtitle it was given, so we hand it a copy at the output path instead and let it
-/// edit that. --no-embedded turns off preferring a subtitle track already inside the
-/// reference video over decoding its audio, which the plugin never needs to set: an
-/// already-correct embedded track is exactly what "reference" is supposed to mean here.
+/// The LAPSE engine, which is what this plugin is built around. Its CLI is:
+///
+/// lapse &lt;video_or_subtitle&gt; &lt;subtitle&gt; [auto|ols|nosplit|split] [penalty]
+///       [--output PATH] [--confidence N] [--audio-track N] [--sub-track N]
+///       [--no-backup] [--no-sidecar] [--no-embedded] [--full-scan] [--no-cache]
+///       [--force] [--strict] [--dry-run] [--json] [--quiet]
+///
+/// With --json it prints one line of JSON describing what it did, including the verdict
+/// it reached, which is a much better thing to judge a run on than scraping a sentence.
+/// Older builds don't have --json (or the auto mode), so the runtime probe decides which
+/// of the two paths to take and the plain-text parsing is kept for those.
 /// </summary>
 public partial class LapseEngine : IEngine
 {
-    private static EngineDownload BuildLinuxDownload(string arch)
+    /// <summary>
+    /// The engine's own default for --confidence: how many standard deviations the answer
+    /// has to stand out by before it will overwrite the original. This is sure_sigma in
+    /// the engine's main.cpp, and the plugin's own threshold setting defaults to it rather
+    /// than to a number of the plugin's own invention.
+    /// </summary>
+    public const double DefaultConfidenceSigma = 8.0;
+
+    private const string RepoUrl = "https://github.com/rs-jensen/lapse";
+    private const string BenchmarksUrl = "https://github.com/rs-jensen/lapse/blob/main/docs/benchmarks.md";
+
+    // The files that ship in the same archive as the binary and have to land beside it.
+    // silero.cpp's loader looks for these next to the executable and quietly falls back to
+    // the weaker built-in voice detection when they aren't there, so a "successful" install
+    // that dropped them would just sync worse for no visible reason.
+    private static readonly string[] CompanionNames =
     {
-        var download = new EngineDownload(
-            $"https://github.com/rs-jensen/lapse/releases/latest/download/lapse-linux-{arch}",
-            EnginePackaging.RawBinary);
-
-        // The release asset is named libonnxruntime-linux-{arch}.so, but the engine's own
-        // loader (silero.cpp, load_runtime()) only ever looks beside itself for the bare
-        // "libonnxruntime.so" - it doesn't know the arch-suffixed name. Save it under the
-        // name the engine actually searches for, not the name GitHub gave it.
-        download.Sidecars.Add(new EngineSidecarAsset(
-            $"https://github.com/rs-jensen/lapse/releases/latest/download/libonnxruntime-linux-{arch}.so",
-            "libonnxruntime.so"));
-        download.Sidecars.Add(new EngineSidecarAsset(
-            "https://github.com/rs-jensen/lapse/releases/latest/download/silero_vad.onnx",
-            "silero_vad.onnx"));
-
-        return download;
-    }
+        "libonnxruntime.so", "libonnxruntime.dylib", "onnxruntime.dll", "silero_vad.onnx"
+    };
 
     // Done (nosplit): offset=1250ms -> /path/to/out.srt
-    // Newer builds add a confidence to the same line, so everything after the numbers we
-    // care about is deliberately loose:
-    // Done (nosplit): offset=1250ms confidence=0.82 -> /path/to/out.srt
-    [GeneratedRegex(@"^Done \(nosplit\): offset=(?<offset>-?[0-9]+)ms(?<extra>.*?) -> (?<path>.+)$", RegexOptions.Multiline)]
-    private static partial Regex NosplitOutputRegex();
-
-    // Done (ols): slope=1.0021 intercept=0.42s [confidence=0.9] -> /path/to/out.srt
-    [GeneratedRegex(@"^Done \(ols\): slope=(?<slope>[-0-9.eE+]+) intercept=(?<intercept>[-0-9.eE+]+)s(?<extra>.*?) -> (?<path>.+)$", RegexOptions.Multiline)]
-    private static partial Regex OlsOutputRegex();
-
-    // Done (split, p=6): /path/to/out.srt
-    // Newer builds print "Done (split, p=6): base=120ms confidence=0.7 -> /path/to/out.srt"
-    [GeneratedRegex(@"^Done \(split, p=(?<penalty>[-0-9.eE+]+)\):(?<extra>.*)$", RegexOptions.Multiline)]
-    private static partial Regex SplitOutputRegex();
+    [GeneratedRegex(@"^Done \((?<mode>[^)]*)\): offset=(?<offset>-?[0-9]+)ms(?<extra>.*?) -> (?<path>.+)$", RegexOptions.Multiline)]
+    private static partial Regex TextOutputRegex();
 
     // confidence=0.82, wherever it turns up on the line
     [GeneratedRegex(@"confidence=(?<confidence>[0-9.eE+-]+)")]
     private static partial Regex ConfidenceRegex();
 
     /// <inheritdoc />
-    public EngineDescriptor Descriptor { get; } = new()
-    {
-        Id = "lapse",
-        DisplayName = "LAPSE",
-        Description = "Language agnostic subtitle sync. The only engine here that can do OLS alignment.",
-        ProjectUrl = "https://github.com/rs-jensen/lapse",
-        GitHubRepo = "rs-jensen/lapse",
-        BuildGuideUrl = "https://github.com/rs-jensen/lapse#cli",
-        ExecutableName = "lapse",
-        EditsInPlace = true,
-        Experimental = true,
-
-        // Upstream only publishes Linux builds. There's deliberately no Windows or macOS
-        // entry here, which is what makes the dashboard show the build-it-yourself help
-        // instead of handing out a download that would not run.
-        //
-        // The Silero VAD path (better voice detection than the built-in libfvad) needs
-        // onnxruntime and its model sitting next to the binary. Both are listed as sidecars
-        // rather than baked into what "install" requires, because the engine itself falls
-        // back to libfvad when either is missing - which is also what happens on any
-        // release that predates these two assets existing, so an install stays a success
-        // either way, just with the older VAD until a release actually carries them.
-        LinuxAmd64 = BuildLinuxDownload("amd64"),
-        LinuxArm64 = BuildLinuxDownload("arm64"),
-        Capabilities = new EngineCapabilities
-        {
-            SupportsStandard = true,
-            SupportsOls = true,
-            SupportsSplit = true,
-            SupportsPenalty = true,
-            DefaultPenalty = 6,
-            MinPenalty = 0,
-            MaxPenalty = 100
-        }
-    };
+    public EngineDescriptor Descriptor { get; } = BuildDescriptor();
 
     /// <inheritdoc />
     public bool NeedsSeededOutput(EngineRuntimeInfo runtime)
@@ -109,21 +68,36 @@ public partial class LapseEngine : IEngine
     /// <inheritdoc />
     public IReadOnlyList<string> BuildArguments(EngineRunOptions options)
     {
-        var modeArgument = options.Mode switch
+        var runtime = options.Runtime;
+        var values = options.Parameters;
+        var supportsOutput = runtime.SupportsOutputFlag;
+
+        // Without --output, LAPSE rewrites the file it's handed, so the caller copies the
+        // input to the output path first and we point LAPSE at that copy.
+        var subtitleArgument = supportsOutput ? options.InputPath : options.OutputPath;
+
+        var mode = options.Mode;
+        if (mode == SyncMode.Auto && !runtime.SupportsAutoMode)
         {
+            // An older binary would reject "auto" outright. Its nearest equivalent is the
+            // plain single-offset search, which is what it used to default to anyway.
+            mode = SyncMode.Standard;
+        }
+
+        var modeArgument = mode switch
+        {
+            SyncMode.Auto => "auto",
             SyncMode.Ols => "ols",
             SyncMode.Split => "split",
             _ => "nosplit"
         };
 
-        var supportsOutput = options.Runtime.SupportsOutputFlag;
-
-        // Without --output, LAPSE rewrites the file it's handed, so the caller copies the
-        // input to the output path first and we point LAPSE at that copy.
-        var subtitleArgument = supportsOutput ? options.InputPath : options.OutputPath;
         var args = new List<string> { options.ReferencePath, subtitleArgument, modeArgument };
 
-        if (options.Mode == SyncMode.Split)
+        // The penalty is positional and has to come right after the mode. Only split mode
+        // reads it; in auto mode the engine works the penalty out from the size of the
+        // file, which it does better than a fixed number would.
+        if (mode == SyncMode.Split)
         {
             args.Add(options.Penalty.ToString(CultureInfo.InvariantCulture));
         }
@@ -137,10 +111,29 @@ public partial class LapseEngine : IEngine
         // The plugin does its own backups, driven by the output mode setting, so let the
         // engine skip its .bak when it knows how. Older builds always write one, next to
         // the temporary work file, and the runner cleans that up afterwards.
-        if (options.Runtime.SupportsNoBackupFlag)
+        if (runtime.SupportsNoBackupFlag)
         {
             args.Add("--no-backup");
         }
+
+        if (runtime.HasFlag("--json"))
+        {
+            args.Add("--json");
+        }
+
+        if (runtime.HasFlag("--confidence"))
+        {
+            args.Add("--confidence");
+            args.Add(EngineParameterValues.Format(options.ConfidenceSigma));
+        }
+
+        AddNumber(args, runtime, values, "audioTrack", "--audio-track");
+        AddNumber(args, runtime, values, "subTrack", "--sub-track");
+
+        AddSwitch(args, runtime, values, "noEmbedded", "--no-embedded");
+        AddSwitch(args, runtime, values, "fullScan", "--full-scan");
+        AddSwitch(args, runtime, values, "noCache", "--no-cache");
+        AddSwitch(args, runtime, values, "force", "--force");
 
         return args;
     }
@@ -148,45 +141,30 @@ public partial class LapseEngine : IEngine
     /// <inheritdoc />
     public SyncResult ParseResult(string stdout, string stderr, int exitCode, SyncMode requestedMode, int requestedPenalty)
     {
+        // The JSON report is the reliable source when the binary has it. It's a single
+        // line on stdout, but be generous about where it is in case something else got
+        // printed first.
+        var report = ReadJsonReport(stdout) ?? ReadJsonReport(stderr);
+        if (report is not null)
+        {
+            return report;
+        }
+
         if (exitCode != 0)
         {
             return EngineResults.Failure(requestedMode, stderr, exitCode);
         }
 
-        var nosplitMatch = NosplitOutputRegex().Match(stdout);
-        if (nosplitMatch.Success)
+        var match = TextOutputRegex().Match(stdout);
+        if (match.Success)
         {
             return new SyncResult
             {
                 Success = true,
-                Mode = SyncMode.Standard,
-                OffsetMs = int.Parse(nosplitMatch.Groups["offset"].Value, CultureInfo.InvariantCulture),
-                Confidence = ReadConfidence(nosplitMatch.Value)
-            };
-        }
-
-        var olsMatch = OlsOutputRegex().Match(stdout);
-        if (olsMatch.Success)
-        {
-            return new SyncResult
-            {
-                Success = true,
-                Mode = SyncMode.Ols,
-                Slope = double.Parse(olsMatch.Groups["slope"].Value, CultureInfo.InvariantCulture),
-                Intercept = double.Parse(olsMatch.Groups["intercept"].Value, CultureInfo.InvariantCulture),
-                Confidence = ReadConfidence(olsMatch.Value)
-            };
-        }
-
-        var splitMatch = SplitOutputRegex().Match(stdout);
-        if (splitMatch.Success)
-        {
-            return new SyncResult
-            {
-                Success = true,
-                Mode = SyncMode.Split,
-                Penalty = (int)double.Parse(splitMatch.Groups["penalty"].Value, CultureInfo.InvariantCulture),
-                Confidence = ReadConfidence(splitMatch.Value)
+                Mode = ModeFromEngineName(match.Groups["mode"].Value, requestedMode),
+                OffsetMs = int.Parse(match.Groups["offset"].Value, CultureInfo.InvariantCulture),
+                Confidence = ReadConfidence(match.Value),
+                EngineOutput = EngineResults.Summarize(stdout)
             };
         }
 
@@ -196,6 +174,299 @@ public partial class LapseEngine : IEngine
             Mode = requestedMode,
             Error = "Engine finished but its output didn't look like a normal result. Check the server logs."
         };
+    }
+
+    private static EngineDescriptor BuildDescriptor()
+    {
+        var descriptor = new EngineDescriptor
+        {
+            Id = "lapse",
+            DisplayName = "LAPSE",
+            Description = "Lines subtitles up against the speech in the audio, so it works whatever "
+                + "language either of them is in. Works out on its own whether the file is shifted, "
+                + "stretched, split or re-cut, and says how sure it is about the answer.",
+            ProjectUrl = RepoUrl,
+            GitHubRepo = "rs-jensen/lapse",
+            BuildGuideUrl = RepoUrl + "#building",
+            ExecutableName = "lapse",
+            EditsInPlace = true,
+            Tier = EngineTier.Recommended,
+            AdvancedNote = "There is nothing here for text encoding, and there does not need to be. "
+                + "LAPSE detects the encoding of the subtitle it reads and writes the result back in the "
+                + "same one, so a Windows-1252 file stays Windows-1252 and a UTF-8 file stays UTF-8. "
+                + "The other two engines take encoding arguments because they do not do this.",
+            WhyUrl = BenchmarksUrl,
+            WhyLabel = "Why is this recommended? Read more on GitHub",
+            LinuxAmd64 = Archive("lapse-linux-amd64.tar.gz", EnginePackaging.TarGz),
+            LinuxArm64 = Archive("lapse-linux-arm64.tar.gz", EnginePackaging.TarGz),
+            MacAmd64 = Archive("lapse-macos-x86_64.tar.gz", EnginePackaging.TarGz),
+            MacArm64 = Archive("lapse-macos-arm64.tar.gz", EnginePackaging.TarGz),
+            WindowsAmd64 = Archive("lapse-windows-x64.zip", EnginePackaging.Zip),
+            Capabilities = new EngineCapabilities
+            {
+                SupportsStandard = true,
+                SupportsAuto = true,
+                SupportsOls = true,
+                SupportsSplit = true,
+                SupportsPenalty = true,
+                DefaultPenalty = 6,
+                MinPenalty = 0,
+                MaxPenalty = 100
+            }
+        };
+
+        descriptor.Modes.Add(new EngineModeOption(
+            SyncMode.Auto,
+            "Auto",
+            "Picks whichever of the others fits. Leave it here."));
+        descriptor.Modes.Add(new EngineModeOption(
+            SyncMode.Standard,
+            "Single offset",
+            "Moves the whole file by one amount. For subtitles that are simply early or late."));
+        descriptor.Modes.Add(new EngineModeOption(
+            SyncMode.Split,
+            "Split",
+            "Gives different parts of the file different timing. For discs cut around ad breaks, or a film joined from two rips."));
+        descriptor.Modes.Add(new EngineModeOption(
+            SyncMode.Ols,
+            "Framerate fix",
+            "Stretches the file so it drifts less as it plays. For a subtitle made for a 25fps release played against a 23.976fps one, where the gap grows from nothing to minutes by the end."));
+
+        descriptor.Parameters.Add(new EngineParameter
+        {
+            Key = "audioTrack",
+            Label = "Audio track",
+            Description = "Which audio stream to listen to, counting from 0. Blank lets the engine pick, which is normally what you want.",
+            Flag = "--audio-track",
+            Kind = EngineParameterKind.Number,
+            Minimum = 0,
+            BlankMeansUnset = true
+        });
+
+        descriptor.Parameters.Add(new EngineParameter
+        {
+            Key = "subTrack",
+            Label = "Embedded subtitle track",
+            Description = "Which subtitle stream inside the video to use as the reference, counting from 0. Blank lets the engine pick.",
+            Flag = "--sub-track",
+            Kind = EngineParameterKind.Number,
+            Minimum = 0,
+            BlankMeansUnset = true
+        });
+
+        descriptor.Parameters.Add(new EngineParameter
+        {
+            Key = "noEmbedded",
+            Label = "Ignore embedded subtitles",
+            Description = "Always listen to the audio instead of lining up against a subtitle track already inside the video. Slower, but right when the embedded track is itself out of sync.",
+            Flag = "--no-embedded",
+            Kind = EngineParameterKind.Boolean,
+            DefaultValue = "false"
+        });
+
+        descriptor.Parameters.Add(new EngineParameter
+        {
+            Key = "fullScan",
+            Label = "Listen to the whole file",
+            Description = "Decode all the audio instead of sampling the first stretch of it. Slower, and worth it on films that open with a long silent or musical passage.",
+            Flag = "--full-scan",
+            Kind = EngineParameterKind.Boolean,
+            DefaultValue = "false"
+        });
+
+        descriptor.Parameters.Add(new EngineParameter
+        {
+            Key = "noCache",
+            Label = "Do not reuse the speech cache",
+            Description = "The engine saves where it found speech so other tracks for the same video start from the answer. Turn this off only when you suspect a stale cache.",
+            Flag = "--no-cache",
+            Kind = EngineParameterKind.Boolean,
+            DefaultValue = "false"
+        });
+
+        descriptor.Parameters.Add(new EngineParameter
+        {
+            Key = "force",
+            Label = "Sync even when the engine is unsure",
+            Description = "Treats every result as confident, and syncs files with too few cues to judge properly. Off by default, and the safer place to handle this is the low confidence setting under File output.",
+            Flag = "--force",
+            Kind = EngineParameterKind.Boolean,
+            DefaultValue = "false"
+        });
+
+        return descriptor;
+    }
+
+    private static EngineDownload Archive(string assetName, EnginePackaging packaging)
+    {
+        var download = new EngineDownload(
+            $"{RepoUrl}/releases/latest/download/{assetName}",
+            packaging);
+
+        download.CompanionFiles.AddRange(CompanionNames);
+        return download;
+    }
+
+    private static void AddSwitch(
+        List<string> args,
+        EngineRuntimeInfo runtime,
+        EngineParameterValues values,
+        string key,
+        string flag)
+    {
+        if (values.GetBool(key) && runtime.HasFlag(flag))
+        {
+            args.Add(flag);
+        }
+    }
+
+    private static void AddNumber(
+        List<string> args,
+        EngineRuntimeInfo runtime,
+        EngineParameterValues values,
+        string key,
+        string flag)
+    {
+        var value = values.GetInt(key);
+        if (value.HasValue && runtime.HasFlag(flag))
+        {
+            args.Add(flag);
+            args.Add(value.Value.ToString(CultureInfo.InvariantCulture));
+        }
+    }
+
+    // { "mode":"auto/shifted", "offset_ms":1250, "confidence":0.82, "verdict":"solid",
+    //   "written":true, "output":"/path/to.srt", ... }
+    private static SyncResult? ReadJsonReport(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return null;
+        }
+
+        var start = text.IndexOf('{', StringComparison.Ordinal);
+        var end = text.LastIndexOf('}');
+        if (start < 0 || end <= start)
+        {
+            return null;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(text[start..(end + 1)]);
+            var root = document.RootElement;
+
+            if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("verdict", out _))
+            {
+                return null;
+            }
+
+            var verdict = ReadString(root, "verdict") ?? "nothing";
+            var written = root.TryGetProperty("written", out var writtenElement)
+                && writtenElement.ValueKind == JsonValueKind.True;
+
+            var result = new SyncResult
+            {
+                Success = written,
+                Mode = ModeFromEngineName(ReadString(root, "mode"), SyncMode.Auto),
+                Verdict = verdict,
+                Confidence = ReadDouble(root, "confidence"),
+                Sigma = ReadDouble(root, "sigma"),
+                Agreement = ReadDouble(root, "agreement"),
+                OffsetMs = (int?)ReadDouble(root, "offset_ms"),
+                EngineOutput = DescribeReport(root, verdict)
+            };
+
+            var ratio = ReadDouble(root, "ratio");
+            if (ratio.HasValue && Math.Abs(ratio.Value - 1.0) > 0.000001)
+            {
+                result.Slope = ratio.Value - 1.0;
+                result.Intercept = (result.OffsetMs ?? 0) / 1000.0;
+            }
+
+            var parts = ReadDouble(root, "parts");
+            if (parts is > 1)
+            {
+                result.Penalty = (int)parts.Value;
+            }
+
+            if (!written)
+            {
+                result.Error = ReadString(root, "why") ?? "The engine decided not to write anything.";
+            }
+
+            return result;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static string DescribeReport(JsonElement root, string verdict)
+    {
+        var cues = ReadDouble(root, "cues");
+        var coverage = ReadDouble(root, "coverage");
+        var reference = ReadString(root, "reference");
+
+        var parts = new List<string> { "verdict " + verdict };
+
+        if (reference is not null)
+        {
+            parts.Add("matched against " + (reference == "vad" ? "the audio" : reference));
+        }
+
+        if (cues.HasValue)
+        {
+            parts.Add(EngineParameterValues.Format(cues.Value) + " cues");
+        }
+
+        if (coverage is < 1.0)
+        {
+            parts.Add("heard " + Math.Round(coverage.Value * 100) + "% of the file");
+        }
+
+        return string.Join(", ", parts);
+    }
+
+    private static string? ReadString(JsonElement root, string name)
+    {
+        return root.TryGetProperty(name, out var element) && element.ValueKind == JsonValueKind.String
+            ? element.GetString()
+            : null;
+    }
+
+    private static double? ReadDouble(JsonElement root, string name)
+    {
+        return root.TryGetProperty(name, out var element) && element.ValueKind == JsonValueKind.Number
+            ? element.GetDouble()
+            : null;
+    }
+
+    // The engine reports what it actually did, which in auto mode is one of "auto/shifted",
+    // "auto/drifting", "auto/recut" and friends rather than the mode we asked for.
+    private static SyncMode ModeFromEngineName(string? name, SyncMode fallback)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return fallback;
+        }
+
+        if (name.Contains("split", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("recut", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("joined", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("restart", StringComparison.OrdinalIgnoreCase))
+        {
+            return SyncMode.Split;
+        }
+
+        if (name.Contains("ols", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("drifting", StringComparison.OrdinalIgnoreCase))
+        {
+            return SyncMode.Ols;
+        }
+
+        return name.Contains("auto", StringComparison.OrdinalIgnoreCase) ? SyncMode.Auto : SyncMode.Standard;
     }
 
     private static double? ReadConfidence(string line)

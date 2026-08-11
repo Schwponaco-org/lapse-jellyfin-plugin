@@ -17,6 +17,13 @@ public class EngineCapabilities
     public bool SupportsStandard { get; set; } = true;
 
     /// <summary>
+    /// Gets or sets a value indicating whether the engine decides for itself what shape
+    /// the problem is and handles it, rather than being told which alignment to run. Only
+    /// LAPSE does this.
+    /// </summary>
+    public bool SupportsAuto { get; set; }
+
+    /// <summary>
     /// Gets or sets a value indicating whether the engine can fit a slope and intercept
     /// across the whole file. Only LAPSE does this one.
     /// </summary>

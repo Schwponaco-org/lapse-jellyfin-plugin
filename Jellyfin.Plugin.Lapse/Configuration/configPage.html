@@ -26,67 +26,99 @@
                 <progress id="lapseQueueBar" max="100" value="0"></progress>
             </div>
 
-            <!-- Sidebar on the left, one panel at a time on the right. Everything used to
-                 be a stack of fold-down sections, which meant scrolling past four other
-                 things to reach the one you wanted. -->
+            <!-- Sidebar on the left, one panel at a time on the right. The everyday things
+                 sit at the top on their own; everything that is really configuration is
+                 behind the Settings group, which stays folded up until someone asks for
+                 it. Opening the plugin should not look like a form. -->
             <div class="lapseLayout">
                 <nav class="lapseNav" id="lapseNav" aria-label="LAPSE sections">
-                    <button type="button" class="lapseNavItem" data-panel="lapsePanelEngines">
-                        <span class="lapseNavIcon material-icons memory" aria-hidden="true"></span>
-                        <span class="lapseNavLabel">Engines</span>
-                        <span class="lapseNavHint" id="lapseEnginesHint"></span>
-                    </button>
-                    <button type="button" class="lapseNavItem" data-panel="lapsePanelLibraries">
-                        <span class="lapseNavIcon material-icons video_library" aria-hidden="true"></span>
-                        <span class="lapseNavLabel">Libraries</span>
-                        <span class="lapseNavHint" id="lapseLibrariesHint"></span>
+                    <button type="button" class="lapseNavItem" data-panel="lapsePanelDashboard">
+                        <span class="lapseNavIcon material-icons dashboard" aria-hidden="true"></span>
+                        <span class="lapseNavLabel">Dashboard</span>
                     </button>
                     <button type="button" class="lapseNavItem" data-panel="lapsePanelItems">
                         <span class="lapseNavIcon material-icons list" aria-hidden="true"></span>
-                        <span class="lapseNavLabel">Items</span>
+                        <span class="lapseNavLabel">Sync status</span>
                         <span class="lapseNavHint" id="lapseItemsHint"></span>
                     </button>
                     <button type="button" class="lapseNavItem" data-panel="lapsePanelBulk">
                         <span class="lapseNavIcon material-icons playlist_play" aria-hidden="true"></span>
                         <span class="lapseNavLabel">Bulk sync</span>
                     </button>
+                    <button type="button" class="lapseNavItem" data-panel="lapsePanelLibraries">
+                        <span class="lapseNavIcon material-icons video_library" aria-hidden="true"></span>
+                        <span class="lapseNavLabel">Libraries</span>
+                        <span class="lapseNavHint" id="lapseLibrariesHint"></span>
+                    </button>
                     <button type="button" class="lapseNavItem" data-panel="lapsePanelSubToSub">
                         <span class="lapseNavIcon material-icons compare_arrows" aria-hidden="true"></span>
                         <span class="lapseNavLabel">Subtitle to subtitle</span>
                     </button>
-                    <button type="button" class="lapseNavItem" data-panel="lapsePanelOutput">
-                        <span class="lapseNavIcon material-icons save" aria-hidden="true"></span>
-                        <span class="lapseNavLabel">File output</span>
-                        <span class="lapseNavHint" id="lapseOutputHint"></span>
+
+                    <button type="button" class="lapseNavGroup" id="lapseSettingsToggle" aria-expanded="false" aria-controls="lapseSettingsGroup">
+                        <span class="lapseNavIcon material-icons settings" aria-hidden="true"></span>
+                        <span class="lapseNavLabel">Settings</span>
+                        <span class="lapseNavChevron material-icons chevron_right" aria-hidden="true"></span>
                     </button>
-                    <button type="button" class="lapseNavItem" data-panel="lapsePanelTranslation">
-                        <span class="lapseNavIcon material-icons translate" aria-hidden="true"></span>
-                        <span class="lapseNavLabel">Translation</span>
-                        <span class="lapseNavHint" id="lapseTranslationHint"></span>
-                    </button>
-                    <button type="button" class="lapseNavItem" data-panel="lapsePanelAppearance">
-                        <span class="lapseNavIcon material-icons format_size" aria-hidden="true"></span>
-                        <span class="lapseNavLabel">Subtitle appearance</span>
-                        <span class="lapseNavHint" id="lapseAppearanceHint"></span>
-                    </button>
-                    <button type="button" class="lapseNavItem" data-panel="lapsePanelAdvanced">
-                        <span class="lapseNavIcon material-icons tune" aria-hidden="true"></span>
-                        <span class="lapseNavLabel">Advanced</span>
-                    </button>
+                    <div class="lapseNavSub hide" id="lapseSettingsGroup">
+                        <button type="button" class="lapseNavItem" data-panel="lapsePanelEngines">
+                            <span class="lapseNavLabel">Engines</span>
+                            <span class="lapseNavHint" id="lapseEnginesHint"></span>
+                        </button>
+                        <button type="button" class="lapseNavItem" data-panel="lapsePanelOutput">
+                            <span class="lapseNavLabel">File output</span>
+                            <span class="lapseNavHint" id="lapseOutputHint"></span>
+                        </button>
+                        <button type="button" class="lapseNavItem" data-panel="lapsePanelIgnore">
+                            <span class="lapseNavLabel">Ignore list</span>
+                            <span class="lapseNavHint" id="lapseIgnoreHint"></span>
+                        </button>
+                        <button type="button" class="lapseNavItem" data-panel="lapsePanelTranslation">
+                            <span class="lapseNavLabel">Translation</span>
+                            <span class="lapseNavHint" id="lapseTranslationHint"></span>
+                        </button>
+                        <button type="button" class="lapseNavItem" data-panel="lapsePanelAppearance">
+                            <span class="lapseNavLabel">Subtitle appearance</span>
+                            <span class="lapseNavHint" id="lapseAppearanceHint"></span>
+                        </button>
+                        <button type="button" class="lapseNavItem" data-panel="lapsePanelLabs">
+                            <span class="lapseNavLabel">Experimental</span>
+                        </button>
+                        <button type="button" class="lapseNavItem" data-panel="lapsePanelAbout">
+                            <span class="lapseNavLabel">About</span>
+                        </button>
+                    </div>
                 </nav>
 
                 <div class="lapseContent">
 
+                    <section class="lapsePanel" id="lapsePanelDashboard">
+                        <h2 class="lapsePanelTitle">Dashboard</h2>
+                        <div id="lapseOverview"></div>
+                    </section>
+
                     <section class="lapsePanel" id="lapsePanelEngines">
                         <h2 class="lapsePanelTitle">Engines</h2>
+                        <div class="fieldDescription lapseTightNote">
+                            One is enough. Advanced holds only the switches that engine really has.
+                        </div>
                         <div id="lapseEngineCards" class="lapseEngineCards"></div>
                         <div class="lapseButtonRow">
-                            <button is="emby-button" type="button" id="btnInstallAllEngines" class="raised lapseSmallButton">
-                                <span>Install all available</span>
-                            </button>
                             <button is="emby-button" type="button" id="btnCheckEngineUpdates" class="raised lapseSmallButton">
                                 <span>Check for updates</span>
                             </button>
+                            <button is="emby-button" type="button" id="btnSaveEngines" class="raised button-submit lapseSmallButton">
+                                <span>Save engine settings</span>
+                            </button>
+                        </div>
+                        <label class="emby-checkbox-label lapseStackedCheck">
+                            <input id="lapseAutoUpdateEngines" type="checkbox" is="emby-checkbox" />
+                            <span>Keep installed engines up to date automatically</span>
+                        </label>
+                        <div class="fieldDescription lapseTightNote">
+                            The dashboard checks for new releases every time it loads. With this on, the
+                            daily task also installs them. An engine you pointed at your own binary is
+                            never replaced.
                         </div>
                         <div class="fieldDescription lapseTightNote" id="lapsePlatformNote"></div>
                     </section>
@@ -94,9 +126,9 @@
                     <section class="lapsePanel" id="lapsePanelLibraries">
                         <h2 class="lapsePanelTitle">Libraries</h2>
                         <div class="lapseNoteStrip">
-                            Note: automatic sync may occasionally shift a correctly timed subtitle. It is
-                            recommended to configure File Output to Sidecar mode before enabling bulk or
-                            scheduled sync.
+                            Automatic sync can occasionally move a subtitle that was already fine. Set
+                            File output to one of the sidecar modes before turning on bulk or scheduled
+                            syncing and nothing you have now can be lost.
                         </div>
                         <div class="fieldDescription lapseTightNote">
                             Turn a library on to make everything in it eligible for syncing. A schedule syncs
@@ -109,10 +141,19 @@
                     </section>
 
                     <section class="lapsePanel" id="lapsePanelItems">
-                        <h2 class="lapsePanelTitle">Items</h2>
+                        <h2 class="lapsePanelTitle">Sync status</h2>
                         <div class="lapseFilterRow">
                             <input is="emby-input" id="lapseItemSearch" type="text" placeholder="Search items..." />
                             <select is="emby-select" id="lapseItemLibraryFilter" class="emby-select-withcolor emby-select"></select>
+                            <select is="emby-select" id="lapseItemStatusFilter" class="emby-select-withcolor emby-select">
+                                <option value="">Any status</option>
+                                <option value="Pending">Not synced</option>
+                                <option value="Synced">Synced</option>
+                                <option value="PartiallySynced">Partly synced</option>
+                                <option value="Failed">Failed</option>
+                                <option value="Skipped">Skipped</option>
+                                <option value="Ignored">Ignored</option>
+                            </select>
                             <label class="emby-checkbox-label lapseInlineCheck">
                                 <input id="lapseIncludeAll" type="checkbox" is="emby-checkbox" />
                                 <span>Include all</span>
@@ -128,9 +169,9 @@
                     <section class="lapsePanel" id="lapsePanelBulk">
                         <h2 class="lapsePanelTitle">Bulk sync</h2>
                         <div class="lapseNoteStrip">
-                            Note: automatic sync may occasionally shift a correctly timed subtitle. It is
-                            recommended to configure File Output to Sidecar mode before enabling bulk or
-                            scheduled sync.
+                            Automatic sync can occasionally move a subtitle that was already fine. Set
+                            File output to one of the sidecar modes before running this and nothing you
+                            have now can be lost.
                         </div>
                         <div class="lapseButtonRow">
                             <button is="emby-button" type="button" id="btnSyncLibrary" class="raised lapseSmallButton">
@@ -184,18 +225,42 @@
                             <input id="lapseSubToSubNewFile" type="checkbox" is="emby-checkbox" checked />
                             <span>Write the result to a new file instead of overwriting the input</span>
                         </label>
-                        <div class="inputContainer" id="lapseSubToSubOutputContainer">
-                            <label class="inputLabel inputLabelUnfocused" for="lapseSubToSubOutput">New subtitle file</label>
-                            <input is="emby-input" id="lapseSubToSubOutput" type="text" />
-                            <div class="fieldDescription">
-                                Suggested from the input file's name - change it to whatever you like. It has to
-                                end in .srt, .ass, .ssa or .vtt.
+                        <div id="lapseSubToSubOutputContainer">
+                            <div class="selectContainer">
+                                <label class="selectLabel" for="lapseSubToSubPlacement">Where to put it</label>
+                                <select is="emby-select" id="lapseSubToSubPlacement" class="emby-select-withcolor emby-select">
+                                    <option value="ReferenceFolder">Same folder as the reference subtitle (default)</option>
+                                    <option value="InputFolder">Same folder as the input subtitle</option>
+                                    <option value="CustomFolder">A folder I choose</option>
+                                </select>
+                                <div class="fieldDescription" id="lapseSubToSubPlacementNote"></div>
+                            </div>
+                            <div class="inputContainer hide" id="lapseSubToSubCustomContainer">
+                                <label class="inputLabel inputLabelUnfocused" for="lapseSubToSubCustomFolder">Folder</label>
+                                <div class="lapsePathRow">
+                                    <input is="emby-input" id="lapseSubToSubCustomFolder" type="text" />
+                                    <button is="paper-icon-button-light" type="button" id="btnBrowseSubToSubFolder" title="Browse">
+                                        <span class="material-icons search" aria-hidden="true"></span>
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="inputContainer">
+                                <label class="inputLabel inputLabelUnfocused" for="lapseSubToSubOutput">File name</label>
+                                <input is="emby-input" id="lapseSubToSubOutput" type="text" />
+                                <div class="fieldDescription">
+                                    Suggested from the input file's name. It has to end in .srt, .ass, .ssa or .vtt.
+                                </div>
                             </div>
                         </div>
-                        <div class="fieldDescription lapseTightNote">Always runs standard mode with the default engine.</div>
-                        <button is="emby-button" type="button" id="btnSyncSubtitles" class="raised button-submit lapseSmallButton">
-                            <span>Sync</span>
-                        </button>
+                        <div class="fieldDescription lapseTightNote" id="lapseSubToSubEngineNote"></div>
+                        <div class="lapseButtonRow">
+                            <button is="emby-button" type="button" id="btnSyncSubtitles" class="raised button-submit lapseSmallButton">
+                                <span>Sync</span>
+                            </button>
+                            <button is="emby-button" type="button" id="btnSaveSubToSub" class="raised lapseSmallButton">
+                                <span>Save as the default</span>
+                            </button>
+                        </div>
                     </section>
 
                     <section class="lapsePanel" id="lapsePanelOutput">
@@ -207,32 +272,73 @@
                             <div class="fieldDescription" id="lapseSidecarPreview"></div>
                         </div>
 
-                        <h3 class="lapseSubHeading">When confidence is below threshold</h3>
+                        <h3 class="lapseSubHeading">Confidence</h3>
                         <div class="fieldDescription lapseTightNote">
-                            <strong>LAPSE engine only.</strong> LAPSE reports how much of the subtitle ended up
-                            sitting on speech, and a low score usually means the subtitle isn't for this video
-                            at all. alass and ffsubsync report no confidence, so nothing here applies to them
-                            and their results are always written.
+                            <strong>LAPSE only.</strong> LAPSE measures how far its answer stands out from
+                            every other offset it tried, and calls a result solid, unsure or nothing on
+                            that basis. This is the bar it has to clear, passed to the engine as
+                            <code>--confidence</code>. alass and ffsubsync report nothing of the kind, so
+                            their results are always written.
                         </div>
-                        <div id="lapseLowConfidenceModes" class="lapseRadioGroup"></div>
                         <div class="inputContainer">
-                            <label class="inputLabel inputLabelUnfocused" for="lapseSyncConfidence">
-                                Threshold (LAPSE only): <span id="lapseSyncConfidenceValue"></span>%
+                            <label class="inputLabel inputLabelUnfocused" for="lapseConfidenceSigma">
+                                Threshold: <span id="lapseConfidenceSigmaValue"></span>
                             </label>
-                            <input type="range" id="lapseSyncConfidence" min="0" max="100" class="lapseRange" />
+                            <input type="range" id="lapseConfidenceSigma" min="1" max="20" step="0.5" class="lapseRange" />
+                            <div class="fieldDescription" id="lapseConfidenceSigmaNote"></div>
                         </div>
+
+                        <h3 class="lapseSubHeading">When LAPSE is not confident</h3>
+                        <div id="lapseLowConfidenceModes" class="lapseRadioGroup"></div>
 
                         <button is="emby-button" type="button" id="btnSaveOutput" class="raised button-submit lapseSmallButton">
                             <span>Save output settings</span>
                         </button>
                     </section>
 
+                    <section class="lapsePanel" id="lapsePanelIgnore">
+                        <h2 class="lapsePanelTitle">Ignore list</h2>
+                        <div class="fieldDescription lapseTightNote">
+                            Nothing on this list is touched by a scheduled run, a bulk sync, the
+                            Radarr/Sonarr webhook, or anything else automatic. Ignoring a series or a
+                            folder covers everything inside it. You can still sync an ignored item by
+                            hand from its own menu.
+                        </div>
+                        <div class="lapseFilterRow">
+                            <input is="emby-input" id="lapseIgnoreSearch" type="text" placeholder="Search the library..." />
+                            <button is="emby-button" type="button" id="btnIgnoreSearch" class="raised lapseSmallButton">
+                                <span>Find</span>
+                            </button>
+                        </div>
+                        <div id="lapseIgnoreSearchResults" class="lapseIgnoreResults"></div>
+
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="lapseIgnorePath">Or ignore a path</label>
+                            <div class="lapsePathRow">
+                                <input is="emby-input" id="lapseIgnorePath" type="text" placeholder="/media/movies/Home videos" />
+                                <button is="paper-icon-button-light" type="button" id="btnBrowseIgnorePath" title="Browse">
+                                    <span class="material-icons search" aria-hidden="true"></span>
+                                </button>
+                                <button is="emby-button" type="button" id="btnAddIgnorePath" class="raised lapseSmallButton">
+                                    <span>Add</span>
+                                </button>
+                            </div>
+                            <div class="fieldDescription">
+                                Covers the file or folder and everything under it. A path works even for
+                                things Jellyfin has not scanned yet.
+                            </div>
+                        </div>
+
+                        <h3 class="lapseSubHeading">Currently ignored</h3>
+                        <div id="lapseIgnoreList" class="paperList lapseIgnoreList"></div>
+                    </section>
+
                     <section class="lapsePanel" id="lapsePanelTranslation">
                         <h2 class="lapsePanelTitle">Translation</h2>
                         <div class="fieldDescription lapseTightNote">
                             <strong>To use this:</strong> press Advanced on an item, either from its three-dot
-                            menu or from the <strong>Items</strong> list, then use the Translate box in that
-                            dialog. This page is only where the providers and their defaults are set up.
+                            menu or from the <strong>Sync status</strong> list, then use the Translate box in
+                            that dialog. This page is only where the providers and their defaults are set up.
                         </div>
                         <div class="fieldDescription lapseTightNote">
                             Translation always writes a new file next to the original and never touches it.
@@ -327,29 +433,105 @@
                         </div>
                     </section>
 
-                    <section class="lapsePanel" id="lapsePanelAdvanced">
-                        <h2 class="lapsePanelTitle">Advanced</h2>
-                        <div class="fieldDescription lapseTightNote">
-                            None of this needs setting up. The defaults are what most people want.
+                    <section class="lapsePanel" id="lapsePanelLabs">
+                        <h2 class="lapsePanelTitle">Experimental</h2>
+                        <div class="lapseNoteStrip">
+                            Everything on this page is experimental. It leans on services and apps outside
+                            Jellyfin, so it can break when they change, and none of it is needed for
+                            normal syncing.
                         </div>
 
-                        <h3 class="lapseSubHeading">Engine auto-update</h3>
+                        <h3 class="lapseSubHeading">
+                            Fetch missing subtitles from OpenSubtitles
+                            <span class="lapseChip lapseChip-experimental">Experimental</span>
+                        </h3>
+                        <div class="fieldDescription lapseTightNote">
+                            When a sync is asked for on an item that has no subtitle at all, go and get one
+                            first, then sync it. Items that already have a subtitle are untouched.
+                        </div>
                         <label class="emby-checkbox-label lapseStackedCheck">
-                            <input id="lapseAutoUpdateEngines" type="checkbox" is="emby-checkbox" />
-                            <span>Auto-update installed engines</span>
+                            <input id="lapseOpenSubtitlesEnabled" type="checkbox" is="emby-checkbox" />
+                            <span>Fetch a subtitle when there isn't one</span>
                         </label>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="lapseOpenSubtitlesLanguage">Preferred language</label>
+                            <input is="emby-input" id="lapseOpenSubtitlesLanguage" type="text" placeholder="en" />
+                            <div class="fieldDescription">Two letter code, e.g. en, da, es, de.</div>
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="lapseOpenSubtitlesApiKey">API key</label>
+                            <input is="emby-input" id="lapseOpenSubtitlesApiKey" type="password" />
+                            <div class="fieldDescription">
+                                Register a consumer at opensubtitles.com to get one.
+                            </div>
+                        </div>
+                        <div class="lapseFieldPair">
+                            <div class="inputContainer">
+                                <label class="inputLabel inputLabelUnfocused" for="lapseOpenSubtitlesUsername">Account name</label>
+                                <input is="emby-input" id="lapseOpenSubtitlesUsername" type="text" />
+                            </div>
+                            <div class="inputContainer">
+                                <label class="inputLabel inputLabelUnfocused" for="lapseOpenSubtitlesPassword">Password</label>
+                                <input is="emby-input" id="lapseOpenSubtitlesPassword" type="password" />
+                            </div>
+                        </div>
                         <div class="fieldDescription lapseTightNote">
-                            Keeps every engine you have installed up to date once a day. Engines that are not
-                            installed are ignored, and an engine you pointed at your own binary is never
-                            replaced. Turning this off is not recommended - engine releases carry sync quality
-                            fixes.
+                            Searching works with just the key. Downloading needs an account, and comes out
+                            of that account's daily quota.
                         </div>
 
-                        <h3 class="lapseSubHeading">Engine tuning</h3>
-                        <div id="lapseEngineSettings"></div>
-                        <button is="emby-button" type="button" id="btnSaveSettings" class="raised button-submit lapseSmallButton">
-                            <span>Save engine tuning</span>
+                        <h3 class="lapseSubHeading">
+                            Radarr and Sonarr
+                            <span class="lapseChip lapseChip-experimental">Experimental</span>
+                        </h3>
+                        <div class="fieldDescription lapseTightNote">
+                            Both apps can call a URL when they import something. Point them here and a new
+                            episode or film gets synced as soon as Jellyfin has scanned it in. Nothing
+                            polls: they call, LAPSE waits for the item to appear, then syncs it. If it
+                            never appears the scheduled sync picks it up later.
+                        </div>
+                        <label class="emby-checkbox-label lapseStackedCheck">
+                            <input id="lapseArrWebhookEnabled" type="checkbox" is="emby-checkbox" />
+                            <span>Accept import notifications from Radarr and Sonarr</span>
+                        </label>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="lapseArrWebhookUrl">Webhook URL</label>
+                            <input is="emby-input" id="lapseArrWebhookUrl" type="text" readonly />
+                            <div class="fieldDescription">
+                                In Radarr or Sonarr: Settings, Connect, add a Webhook, method POST, paste this
+                                as the URL, and tick "On Import" (and "On Upgrade" if you want re-imports
+                                synced too). The secret in the URL is the only thing protecting it, so treat
+                                it like a password.
+                            </div>
+                        </div>
+                        <div class="lapseWebhookStatus" id="lapseArrWebhookStatus"></div>
+                        <div class="lapseButtonRow">
+                            <button is="emby-button" type="button" id="btnNewArrToken" class="raised lapseSmallButton">
+                                <span>Generate a new URL</span>
+                            </button>
+                            <button is="emby-button" type="button" id="btnRefreshArrStatus" class="raised lapseSmallButton">
+                                <span>Check for calls</span>
+                            </button>
+                        </div>
+
+                        <button is="emby-button" type="button" id="btnSaveLabs" class="raised button-submit lapseSmallButton">
+                            <span>Save experimental settings</span>
                         </button>
+                    </section>
+
+                    <section class="lapsePanel" id="lapsePanelAbout">
+                        <h2 class="lapsePanelTitle">About</h2>
+                        <div id="lapseAboutBody"></div>
+
+                        <h3 class="lapseSubHeading">Credits</h3>
+                        <div class="lapseCredits">
+                            <a is="emby-linkbutton" class="button-link lapseCreditLink" href="https://github.com/rs-jensen" target="_blank" rel="noopener">rs-jensen</a>
+                            <a is="emby-linkbutton" class="button-link lapseCreditLink" href="https://github.com/cowmuncher" target="_blank" rel="noopener">cowmuncher</a>
+                        </div>
+                        <div class="fieldDescription lapseTightNote">
+                            LAPSE is free software under the GPL v3. The engines it can install are their
+                            authors' work and carry their own licences.
+                        </div>
                     </section>
 
                 </div>

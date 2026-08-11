@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Jellyfin.Plugin.Lapse.Data;
+using Jellyfin.Plugin.Lapse.Engines;
 using MediaBrowser.Model.Plugins;
 
 namespace Jellyfin.Plugin.Lapse.Configuration;
@@ -23,6 +24,12 @@ public class PluginConfiguration : BasePluginConfiguration
         DefaultPenalty = 6;
         DefaultEngineId = "lapse";
     }
+
+    /// <summary>
+    /// Gets how many history entries are kept. Enough to cover a bulk run over a season
+    /// and still be there the next morning, not so many that the config file balloons.
+    /// </summary>
+    public static int MaxHistoryEntries => 300;
 
     /// <summary>
     /// Gets or sets which engine to use when a sync doesn't ask for a specific one.
@@ -64,14 +71,24 @@ public class PluginConfiguration : BasePluginConfiguration
 
     /// <summary>
     /// Gets or sets what happens when the engine finishes but isn't confident about the
-    /// result. Keeping the original is the default: a low score usually means the
-    /// subtitle isn't for this video at all.
+    /// result. Writing the doubtful result to a sidecar is the default: it never touches
+    /// a subtitle that was already fine, and it still leaves the result there to look at.
     /// </summary>
-    public LowConfidenceAction LowConfidenceAction { get; set; } = LowConfidenceAction.KeepOriginal;
+    public LowConfidenceAction LowConfidenceAction { get; set; } = LowConfidenceAction.Sidecar;
 
     /// <summary>
-    /// Gets or sets the confidence (0-100) a sync has to reach before it counts as good.
-    /// Engines that don't report a confidence at all are never held to this.
+    /// Gets or sets how far LAPSE's answer has to stand out from the alternatives before
+    /// it counts as confident, in standard deviations. This is passed straight to the
+    /// engine as --confidence, and the default is the engine's own internal default
+    /// (sure_sigma in its main.cpp), not a number of the plugin's invention.
+    /// </summary>
+    public double ConfidenceSigma { get; set; } = LapseEngine.DefaultConfidenceSigma;
+
+    /// <summary>
+    /// Gets or sets the old 0-100 confidence percentage. Kept only so an upgrade can tell
+    /// a config written before <see cref="ConfidenceSigma"/> existed, see
+    /// <see cref="MigrateLegacySettings"/>. The two are on completely different scales, so
+    /// the old value is dropped rather than converted.
     /// </summary>
     public int SyncConfidenceThreshold { get; set; } = 50;
 
@@ -147,10 +164,77 @@ public class PluginConfiguration : BasePluginConfiguration
     public List<MovieSyncRecord> MovieRecords { get; } = new();
 
     /// <summary>
+    /// Gets the recent per-file history, newest last, so a sync can be undone. Capped at
+    /// <see cref="MaxHistoryEntries"/> - this lives in the plugin's XML config, which is
+    /// read and rewritten whole, so it must not be allowed to grow with the library.
+    /// </summary>
+    public List<SyncHistoryEntry> History { get; } = new();
+
+    /// <summary>
     /// Gets the ids of items and folders that are marked as skip. An item counts
     /// as skipped if its own id is here, or any of its parent folders' ids are.
     /// </summary>
     public List<Guid> SkippedItemIds { get; } = new();
+
+    /// <summary>
+    /// Gets the ignore list: films, series and folders that no automatic or bulk run may
+    /// touch. Separate from the skip list on purpose - skip is a per-item "not now" you
+    /// set while working through the item list, ignore is a standing "never" that also
+    /// covers everything underneath a series or a folder.
+    /// </summary>
+    public List<IgnoreRule> IgnoreRules { get; } = new();
+
+    /// <summary>
+    /// Gets or sets where a subtitle-to-subtitle result is written by default.
+    /// </summary>
+    public SubToSubPlacement SubToSubPlacement { get; set; } = SubToSubPlacement.ReferenceFolder;
+
+    /// <summary>
+    /// Gets or sets the folder used when <see cref="SubToSubPlacement"/> is
+    /// <see cref="SubToSubPlacement.CustomFolder"/>.
+    /// </summary>
+    public string? SubToSubCustomFolder { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether a sync on an item with no subtitle at all
+    /// may go and fetch one from OpenSubtitles first. Experimental.
+    /// </summary>
+    public bool OpenSubtitlesEnabled { get; set; }
+
+    /// <summary>
+    /// Gets or sets the OpenSubtitles API key, sent as the Api-Key header.
+    /// </summary>
+    public string? OpenSubtitlesApiKey { get; set; }
+
+    /// <summary>
+    /// Gets or sets the OpenSubtitles account name. Their API hands out search results to
+    /// an API key alone, but a download needs a token that only a login can produce, so
+    /// without these two the fetch will find a subtitle and then fail to get it.
+    /// </summary>
+    public string? OpenSubtitlesUsername { get; set; }
+
+    /// <summary>
+    /// Gets or sets the OpenSubtitles account password.
+    /// </summary>
+    public string? OpenSubtitlesPassword { get; set; }
+
+    /// <summary>
+    /// Gets or sets the language to fetch subtitles in, as a two letter code.
+    /// </summary>
+    public string OpenSubtitlesLanguage { get; set; } = "en";
+
+    /// <summary>
+    /// Gets or sets a value indicating whether the Radarr/Sonarr webhook endpoint accepts
+    /// requests. Experimental, and off until someone turns it on.
+    /// </summary>
+    public bool ArrWebhookEnabled { get; set; }
+
+    /// <summary>
+    /// Gets or sets the shared secret the webhook URL carries. Radarr and Sonarr can't
+    /// send a Jellyfin API key, so the endpoint is anonymous and this is what stands
+    /// between it and anyone who can reach the server.
+    /// </summary>
+    public string? ArrWebhookToken { get; set; }
 
     /// <summary>
     /// Finds the settings for one engine, creating an entry if there isn't one yet.
@@ -201,6 +285,61 @@ public class PluginConfiguration : BasePluginConfiguration
     }
 
     /// <summary>
+    /// Says whether an id or a file path is on the ignore list. Ids are matched against
+    /// the item and every one of its ancestors by the caller; paths match a file that
+    /// sits under the ignored folder, so ignoring a series folder covers every episode in
+    /// it without needing an entry each.
+    /// </summary>
+    /// <param name="ids">The item's own id and its ancestors' ids.</param>
+    /// <param name="path">The item's file path, if it has one.</param>
+    /// <returns>True if anything on the ignore list covers this item.</returns>
+    public bool IsIgnored(IEnumerable<Guid> ids, string? path)
+    {
+        if (IgnoreRules.Count == 0)
+        {
+            return false;
+        }
+
+        var idSet = new HashSet<Guid>(ids);
+
+        foreach (var rule in IgnoreRules)
+        {
+            if (rule.ItemId.HasValue && idSet.Contains(rule.ItemId.Value))
+            {
+                return true;
+            }
+
+            if (!string.IsNullOrWhiteSpace(rule.Path) && CoversPath(rule.Path, path))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    // A rule matches the file itself or anything under it, so a folder covers its whole
+    // tree. Comparing on a trailing separator stops "/media/Movies" from also swallowing
+    // "/media/Movies Extra".
+    private static bool CoversPath(string rulePath, string? itemPath)
+    {
+        if (string.IsNullOrWhiteSpace(itemPath))
+        {
+            return false;
+        }
+
+        var rule = rulePath.TrimEnd('/', '\\');
+
+        if (itemPath.Equals(rule, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return itemPath.StartsWith(rule + "/", StringComparison.OrdinalIgnoreCase)
+            || itemPath.StartsWith(rule + "\\", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
     /// Moves settings from the old single-engine days onto the LAPSE engine entry, so
     /// upgrading doesn't silently lose a configured binary path or penalty. Only does
     /// anything the first time, since it clears the old fields as it goes.
@@ -235,5 +374,48 @@ public class PluginConfiguration : BasePluginConfiguration
         }
 
         SyncConfidenceThreshold = Math.Clamp(SyncConfidenceThreshold, 0, 100);
+
+        // A config from before the threshold moved onto the engine's own scale
+        // deserializes this as 0, which would tell LAPSE that nothing is ever confident.
+        // The engine rejects anything at or below zero anyway, so snap it back to what
+        // the engine itself ships with.
+        if (ConfidenceSigma <= 0)
+        {
+            ConfidenceSigma = LapseEngine.DefaultConfidenceSigma;
+        }
+
+        if (string.IsNullOrWhiteSpace(OpenSubtitlesLanguage))
+        {
+            OpenSubtitlesLanguage = "en";
+        }
+
+        ClearBadAlassEncodings();
+    }
+
+    // An earlier version shipped "auto" as the default for alass's two encoding arguments,
+    // taken from the "default: auto" line in its help text. The 2.0.0 binary hands that
+    // string to encoding_rs and panics with "auto is not a known encoding label", so every
+    // alass sync failed. The descriptor no longer offers it, but anyone who pressed Save
+    // while it did has the value written into their config, where it would keep breaking
+    // them. Nothing is lost by dropping it: blank is what makes alass detect the encoding,
+    // which is what "auto" was meant to say in the first place.
+    private void ClearBadAlassEncodings()
+    {
+        var alass = Engines.FirstOrDefault(e => string.Equals(e.EngineId, "alass", StringComparison.OrdinalIgnoreCase));
+        if (alass is null)
+        {
+            return;
+        }
+
+        foreach (var parameter in alass.Parameters)
+        {
+            var isEncoding = string.Equals(parameter.Key, "encodingRef", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(parameter.Key, "encodingInc", StringComparison.OrdinalIgnoreCase);
+
+            if (isEncoding && string.Equals(parameter.Value?.Trim(), "auto", StringComparison.OrdinalIgnoreCase))
+            {
+                parameter.Value = null;
+            }
+        }
     }
 }

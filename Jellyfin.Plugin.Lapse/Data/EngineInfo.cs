@@ -7,6 +7,94 @@ using System.Collections.Generic;
 namespace Jellyfin.Plugin.Lapse.Data;
 
 /// <summary>
+/// One alignment mode an engine offers, as the dashboard sees it.
+/// </summary>
+public class EngineModeInfo
+{
+    /// <summary>
+    /// Gets or sets the mode name, matching the SyncMode enum.
+    /// </summary>
+    public string Value { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Gets or sets what the dropdown shows.
+    /// </summary>
+    public string Label { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Gets or sets the one line explanation.
+    /// </summary>
+    public string Description { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// One of an engine's advanced parameters, with its definition and its current value, so
+/// the dashboard can draw the right control without knowing anything about the engine.
+/// </summary>
+public class EngineParameterInfo
+{
+    /// <summary>
+    /// Gets or sets the parameter key.
+    /// </summary>
+    public string Key { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Gets or sets the label.
+    /// </summary>
+    public string Label { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Gets or sets the one line explanation.
+    /// </summary>
+    public string Description { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Gets or sets the command line flag this drives, shown next to the label.
+    /// </summary>
+    public string? Flag { get; set; }
+
+    /// <summary>
+    /// Gets or sets the control to draw: Boolean, Number, Text or Select.
+    /// </summary>
+    public string Kind { get; set; } = "Text";
+
+    /// <summary>
+    /// Gets or sets the engine's own default, as text.
+    /// </summary>
+    public string DefaultValue { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Gets or sets what's currently set, which is the default until someone changes it.
+    /// </summary>
+    public string Value { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Gets or sets the lowest accepted number.
+    /// </summary>
+    public double? Minimum { get; set; }
+
+    /// <summary>
+    /// Gets or sets the highest accepted number.
+    /// </summary>
+    public double? Maximum { get; set; }
+
+    /// <summary>
+    /// Gets or sets the step for number inputs.
+    /// </summary>
+    public double Step { get; set; } = 1;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether leaving it blank means "don't pass the flag".
+    /// </summary>
+    public bool BlankMeansUnset { get; set; }
+
+    /// <summary>
+    /// Gets the choices for a select parameter, as value/label pairs.
+    /// </summary>
+    public List<EngineModeInfo> Options { get; } = new();
+}
+
+/// <summary>
 /// One engine as the dashboard sees it: who it is, whether it's usable, and what it can do.
 /// </summary>
 public class EngineInfo
@@ -47,10 +135,46 @@ public class EngineInfo
     public bool IsDefault { get; set; }
 
     /// <summary>
-    /// Gets or sets a value indicating whether the engine is still experimental, which
-    /// the dashboard says next to its name.
+    /// Gets or sets the badge next to the name: "Recommended", "Supported" or
+    /// "Experimental".
     /// </summary>
-    public bool Experimental { get; set; }
+    public string Tier { get; set; } = "Supported";
+
+    /// <summary>
+    /// Gets or sets a page backing the badge up, linked right under it.
+    /// </summary>
+    public string? WhyUrl { get; set; }
+
+    /// <summary>
+    /// Gets or sets the text of the <see cref="WhyUrl"/> link.
+    /// </summary>
+    public string? WhyLabel { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether the engine can decide the alignment shape
+    /// for itself.
+    /// </summary>
+    public bool SupportsAuto { get; set; }
+
+    /// <summary>
+    /// Gets or sets the mode a plain Sync press uses with this engine.
+    /// </summary>
+    public string DefaultMode { get; set; } = "Standard";
+
+    /// <summary>
+    /// Gets the modes this engine offers, in the order to show them.
+    /// </summary>
+    public List<EngineModeInfo> Modes { get; } = new();
+
+    /// <summary>
+    /// Gets this engine's advanced parameters, with whatever is currently set for each.
+    /// </summary>
+    public List<EngineParameterInfo> Parameters { get; } = new();
+
+    /// <summary>
+    /// Gets or sets a read-only line shown at the top of the Advanced section.
+    /// </summary>
+    public string? AdvancedNote { get; set; }
 
     /// <summary>
     /// Gets or sets a value indicating whether there's a build for this machine.
@@ -86,6 +210,13 @@ public class EngineInfo
     /// Gets or sets the penalty currently in effect for this engine.
     /// </summary>
     public int Penalty { get; set; }
+
+    /// <summary>
+    /// Gets or sets the penalty the engine itself ships with, which is what the settings
+    /// form quotes as the standard value. Not the same as <see cref="Penalty"/>, which is
+    /// whatever is configured right now.
+    /// </summary>
+    public int DefaultPenalty { get; set; }
 
     /// <summary>
     /// Gets or sets the lowest penalty this engine accepts.

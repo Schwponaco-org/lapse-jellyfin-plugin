@@ -530,17 +530,27 @@
     function describeResult(result) {
         var parts = [];
 
-        if (result.Mode === 'Standard' && result.OffsetMs != null) {
+        if (result.OffsetMs != null && result.OffsetMs !== 0) {
             parts.push('offset ' + result.OffsetMs + 'ms');
-        } else if (result.Mode === 'Ols' && result.Slope != null) {
-            parts.push('slope ' + result.Slope.toFixed(4) + ', intercept ' + result.Intercept.toFixed(2) + 's');
-        } else if (result.Mode === 'Split' && result.Penalty != null) {
-            parts.push('split, penalty ' + result.Penalty);
-        } else if (result.EngineOutput) {
+        }
+
+        if (result.Slope != null) {
+            parts.push('stretched by ' + (result.Slope * 100).toFixed(3) + '%');
+        }
+
+        if (result.Mode === 'Split' && result.Penalty != null) {
+            parts.push('split into ' + result.Penalty + ' parts');
+        }
+
+        if (parts.length === 0 && result.EngineOutput) {
             parts.push(result.EngineOutput);
         }
 
-        if (result.Confidence != null) {
+        // LAPSE says what it made of its own answer, which beats a percentage nobody has
+        // a feel for. Engines that report nothing fall back to whatever they did give us.
+        if (result.Verdict) {
+            parts.push(result.Verdict);
+        } else if (result.Confidence != null) {
             parts.push('confidence ' + Math.round(result.Confidence * 100) + '%');
         }
 
@@ -563,9 +573,10 @@
     function doSync(itemId, subtitlePath) {
         showLapseToast('Syncing...');
 
-        // no EngineId here on purpose - the server picks whichever engine is set as the
-        // default, so the quick button stays a one press job
-        lapsePost('Lapse/Sync', { ItemId: itemId, Mode: 'Standard', SubtitlePath: subtitlePath }).then(function (result) {
+        // No EngineId and no Mode here on purpose. The server picks whichever engine is set
+        // as the default and runs it in that engine's configured default sync mode, so this
+        // button stays a one press job and what it does is set in one place.
+        lapsePost('Lapse/Sync', { ItemId: itemId, SubtitlePath: subtitlePath }).then(function (result) {
             showLapseToast(describeSyncOutcome(result));
         }).catch(function (err) {
             showLapseToast('Sync failed: ' + err.message);
@@ -604,28 +615,48 @@
             subtitleOptionsHtml(subtitles) +
             '  </select>' +
             '</div>' +
-            '<div class="inputContainer">' +
-            '  <label class="inputLabel inputLabelUnfocused">Offset (milliseconds)</label>' +
+            '<div class="lapsePreviewBox" id="lapseShiftPreview">Loading an example line...</div>' +
+            // Slider first, then the number. Dragging is how you find roughly the right
+            // offset; the box is for typing the exact one once you have. The two are the
+            // same value, so whichever you touch moves the other.
+            '<div class="lapseShiftControls">' +
+            '  <input type="range" id="lapseShiftSlider" class="lapseShiftSlider" min="-10000" max="10000" step="50" value="0" />' +
+            '  <div class="lapseShiftScale">' +
+            '    <span>-10s</span><span>0</span><span>+10s</span>' +
+            '  </div>' +
             '  <div class="lapseStepperRow">' +
             '    <button is="emby-button" type="button" class="raised lapseStepButton" id="lapseShiftMinus"><span>&minus;</span></button>' +
-            '    <input is="emby-input" id="lapseShiftOffset" type="number" step="100" value="0" />' +
+            '    <input is="emby-input" id="lapseShiftOffset" class="lapseShiftNumber" type="number" step="100" value="0" />' +
+            '    <span class="lapseShiftUnit">ms</span>' +
             '    <button is="emby-button" type="button" class="raised lapseStepButton" id="lapseShiftPlus"><span>+</span></button>' +
             '  </div>' +
-            '  <div class="fieldDescription">Minus makes subtitles appear earlier, plus later. The buttons move in 100ms steps.</div>' +
+            '  <div class="fieldDescription">Minus makes subtitles appear earlier, plus later. The buttons move in 100ms steps. ' +
+            'The slider covers 10 seconds either way; type a bigger number if you need one.</div>' +
             '</div>' +
-            '<div class="lapsePreviewBox" id="lapseShiftPreview">Loading an example line...</div>' +
             '<div class="lapseDialogButtons">' +
             '  <button is="emby-button" type="button" class="raised" id="lapseShiftCancel"><span>Cancel</span></button>' +
             '  <button is="emby-button" type="button" class="raised button-submit" id="lapseShiftApply"><span>Apply</span></button>' +
-            '</div>');
+            '</div>',
+            // Wide, because a timing line is 29 monospace characters and at the size this
+            // now renders it would otherwise sit in a scrollbox, which defeats the point
+            // of being able to read it at a glance.
+            true);
 
         var select = overlay.querySelector('#lapseShiftSubtitle');
         var offsetInput = overlay.querySelector('#lapseShiftOffset');
+        var slider = overlay.querySelector('#lapseShiftSlider');
         var previewBox = overlay.querySelector('#lapseShiftPreview');
         var currentCue = null;
 
         function currentOffset() {
             return parseInt(offsetInput.value, 10) || 0;
+        }
+
+        // Typing a value outside the slider's range is allowed, so the slider parks at
+        // whichever end it can reach rather than dragging the typed number back into range.
+        function syncSliderFromInput() {
+            var offset = currentOffset();
+            slider.value = Math.max(-10000, Math.min(10000, offset));
         }
 
         function renderPreview() {
@@ -660,11 +691,19 @@
 
         function step(delta) {
             offsetInput.value = currentOffset() + delta;
+            syncSliderFromInput();
             renderPreview();
         }
 
         select.addEventListener('change', loadCue);
-        offsetInput.addEventListener('input', renderPreview);
+        offsetInput.addEventListener('input', function () {
+            syncSliderFromInput();
+            renderPreview();
+        });
+        slider.addEventListener('input', function () {
+            offsetInput.value = slider.value;
+            renderPreview();
+        });
         overlay.querySelector('#lapseShiftMinus').addEventListener('click', function () { step(-100); });
         overlay.querySelector('#lapseShiftPlus').addEventListener('click', function () { step(100); });
 
@@ -763,8 +802,7 @@
 
         lapsePost('Lapse/SyncAllSubtitles', {
             ItemId: itemId,
-            ReferencePath: referencePath,
-            Mode: 'Standard'
+            ReferencePath: referencePath
         }).then(function (result) {
             var failed = result.Results.length - result.SucceededCount;
             showLapseToast(failed === 0
@@ -1110,15 +1148,12 @@
         }
     }
 
+    // The modes come from the engine itself, so this lists exactly what that engine can do
+    // and starts on whatever its default sync mode is set to.
     function modeOptionsFor(engine) {
-        var modes = [
-            { value: 'Standard', label: 'Standard', supported: engine.SupportsStandard },
-            { value: 'Ols', label: 'Standard OLS', supported: engine.SupportsOls },
-            { value: 'Split', label: 'Split', supported: engine.SupportsSplit }
-        ];
-
-        return modes.filter(function (m) { return m.supported; }).map(function (m) {
-            return '<option value="' + m.value + '">' + escapeHtml(m.label) + '</option>';
+        return (engine.Modes || []).map(function (m) {
+            return '<option value="' + escapeHtml(m.Value) + '"' +
+                (m.Value === engine.DefaultMode ? ' selected' : '') + '>' + escapeHtml(m.Label) + '</option>';
         }).join('');
     }
 

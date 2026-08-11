@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Jellyfin.Plugin.Lapse.Configuration;
 using Jellyfin.Plugin.Lapse.Data;
 using Jellyfin.Plugin.Lapse.Engines;
 using MediaBrowser.Controller.Entities;
@@ -170,7 +171,11 @@ public class SyncQueueManager
     /// <param name="item">The item to sync.</param>
     public void EnqueueItem(BaseItem item)
     {
-        if (IsSkipped(item))
+        // The ignore list is a standing "never touch this automatically", and everything
+        // that reaches this method is automatic: auto-sync on a new file, the scheduled
+        // task, the Radarr/Sonarr webhook. A hand press goes straight to the runner and
+        // is deliberately still allowed.
+        if (IsSkipped(item) || LibraryService.IsIgnored(item))
         {
             return;
         }
@@ -260,12 +265,23 @@ public class SyncQueueManager
     /// <returns>A line saying what happened and why.</returns>
     public static string DescribeSkip(SyncResult result)
     {
-        var threshold = Plugin.Instance?.Configuration.SyncConfidenceThreshold ?? 50;
-        var confidence = result.Confidence.HasValue
-            ? (int)Math.Round(result.Confidence.Value * 100)
-            : 0;
+        var threshold = Plugin.Instance?.Configuration.ConfidenceSigma ?? LapseEngine.DefaultConfidenceSigma;
 
-        return $"Left the original alone: the engine only reached {confidence}% confidence, under the {threshold}% threshold.";
+        // The engine's own words for what it thought of the answer. "nothing" means the
+        // audio didn't back it up at all, which nearly always means the subtitle isn't for
+        // this video; "unsure" means it's probably right but not by enough to overwrite.
+        var verdict = result.Verdict switch
+        {
+            "nothing" => "the audio doesn't back that answer up",
+            "unsure" => "it wasn't sure enough to touch the original",
+            _ => "the engine wasn't confident"
+        };
+
+        var measured = result.Sigma.HasValue
+            ? $" (scored {result.Sigma.Value:0.#} against a threshold of {threshold:0.#})"
+            : string.Empty;
+
+        return $"Left the original alone: {verdict}{measured}.";
     }
 
     /// <summary>
@@ -388,6 +404,10 @@ public class SyncQueueManager
         var engine = _registry.GetDefault();
         var penalty = EngineRunner.ResolvePenalty(engine, null);
 
+        // Same mode a manual Sync press uses, so a bulk run and a single press on the same
+        // item can't quietly do two different things.
+        var mode = EngineRunner.ResolveDefaultMode(engine);
+
         // A reference job lines each item's other subtitles up against one of its own,
         // rather than against the audio. Much faster, and more accurate as long as the
         // reference track really is correct.
@@ -416,7 +436,7 @@ public class SyncQueueManager
             var referencePath = reference?.Path ?? item.Path;
 
             var result = await _runner
-                .RunAsync(engine, referencePath, subtitle.Path, SyncMode.Standard, penalty, outputMode: null, destinationOverride: null, cancellationToken)
+                .RunAsync(engine, referencePath, subtitle.Path, mode, penalty, outputMode: null, destinationOverride: null, cancellationToken)
                 .ConfigureAwait(false);
             lastResult = result;
 
@@ -531,6 +551,63 @@ public class SyncQueueManager
         record.Slope = result?.Slope;
         record.Intercept = result?.Intercept;
 
+        AddHistory(plugin, itemId, status, error, result);
+
         plugin.SaveConfiguration();
+    }
+
+    // One line per file the plugin actually wrote, so it can be put back. A run that
+    // deliberately wrote nothing (low confidence, or a failure) has nothing to undo and
+    // doesn't get an entry - the item record already carries the reason.
+    private static void AddHistory(Plugin plugin, Guid itemId, MovieSyncStatus status, string? error, SyncResult? result)
+    {
+        if (result is null || !result.Success || result.Skipped || string.IsNullOrEmpty(result.OutputPath))
+        {
+            return;
+        }
+
+        var history = plugin.Configuration.History;
+
+        history.Add(new SyncHistoryEntry
+        {
+            ItemId = itemId,
+            Status = status,
+            EngineId = result.EngineId,
+            OutputPath = result.OutputPath,
+            BackupPath = result.BackupPath,
+
+            // Nothing was replaced, so undoing this means taking away the file it added
+            // rather than restoring anything over the top of it.
+            WroteNewFile = result.BackupPath is null
+                && !string.Equals(result.OutputPath, result.InputPath, StringComparison.Ordinal),
+            Detail = error ?? DescribeForHistory(result)
+        });
+
+        if (history.Count > PluginConfiguration.MaxHistoryEntries)
+        {
+            history.RemoveRange(0, history.Count - PluginConfiguration.MaxHistoryEntries);
+        }
+    }
+
+    private static string DescribeForHistory(SyncResult result)
+    {
+        var parts = new List<string>();
+
+        if (result.OffsetMs is not null and not 0)
+        {
+            parts.Add($"moved {result.OffsetMs}ms");
+        }
+
+        if (result.Slope.HasValue)
+        {
+            parts.Add($"stretched {result.Slope.Value * 100:0.###}%");
+        }
+
+        if (result.Verdict is not null)
+        {
+            parts.Add(result.Verdict);
+        }
+
+        return parts.Count == 0 ? "synced" : string.Join(", ", parts);
     }
 }

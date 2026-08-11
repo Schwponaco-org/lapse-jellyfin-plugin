@@ -33,7 +33,14 @@ public class SubtitleSyncRequest
     /// <summary>
     /// Gets or sets an explicit file to write the synced subtitle to, leaving the input
     /// alone. Null overwrites the input the way the output mode says. This is what the
-    /// dashboard's "write the result to a new file" option sends.
+    /// dashboard's "write the result to a new file" option sends. A bare file name with no
+    /// folder in it is placed according to <see cref="Placement"/>.
     /// </summary>
     public string? OutputPath { get; set; }
+
+    /// <summary>
+    /// Gets or sets which folder a bare <see cref="OutputPath"/> file name lands in, or
+    /// null for the configured default.
+    /// </summary>
+    public SubToSubPlacement? Placement { get; set; }
 }

@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
+using Jellyfin.Plugin.Lapse.Data;
 
 namespace Jellyfin.Plugin.Lapse.Engines;
 
@@ -64,6 +65,39 @@ public class EngineDownload
     /// because GitHub renamed or dropped the sidecar asset.
     /// </summary>
     public List<EngineSidecarAsset> Sidecars { get; } = new();
+
+    /// <summary>
+    /// Gets the file names inside the archive that belong next to the executable once it's
+    /// unpacked. LAPSE ships its onnxruntime library and the Silero model in the same
+    /// tarball as the binary, and the binary looks for both beside itself, so pulling out
+    /// only the executable would quietly drop it back to the weaker built-in voice
+    /// detection. Same best-effort rule as <see cref="Sidecars"/>: a name that isn't in
+    /// the archive is skipped rather than failing the install.
+    /// </summary>
+    public List<string> CompanionFiles { get; } = new();
+}
+
+/// <summary>
+/// How strongly the plugin stands behind an engine. This is what the backend picker shows
+/// next to each name.
+/// </summary>
+public enum EngineTier
+{
+    /// <summary>
+    /// The engine the plugin is built around and the one new installs get pointed at.
+    /// </summary>
+    Recommended,
+
+    /// <summary>
+    /// A third party engine that works and is kept wired up, but isn't what the plugin is
+    /// designed around.
+    /// </summary>
+    Supported,
+
+    /// <summary>
+    /// Rough enough that people should know before they lean on it.
+    /// </summary>
+    Experimental
 }
 
 /// <summary>
@@ -92,6 +126,43 @@ public class EngineSidecarAsset
     /// Gets the file name to save it under, in the engine's own install folder.
     /// </summary>
     public string FileName { get; }
+}
+
+/// <summary>
+/// One alignment mode an engine offers, with a line saying what it's for. These are per
+/// engine because the modes aren't the same set: LAPSE works out the shape of the problem
+/// on its own, alass always searches for splits unless told not to, and ffsubsync's
+/// piecewise mode only exists when it's given a split penalty.
+/// </summary>
+public class EngineModeOption
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="EngineModeOption"/> class.
+    /// </summary>
+    /// <param name="mode">The mode.</param>
+    /// <param name="label">What the dropdown shows.</param>
+    /// <param name="description">One line saying what it does.</param>
+    public EngineModeOption(SyncMode mode, string label, string description)
+    {
+        Mode = mode;
+        Label = label;
+        Description = description;
+    }
+
+    /// <summary>
+    /// Gets the mode.
+    /// </summary>
+    public SyncMode Mode { get; }
+
+    /// <summary>
+    /// Gets the label shown in the dropdown.
+    /// </summary>
+    public string Label { get; }
+
+    /// <summary>
+    /// Gets the one line explanation.
+    /// </summary>
+    public string Description { get; }
 }
 
 /// <summary>
@@ -133,16 +204,46 @@ public class EngineDescriptor
     public string? BuildGuideUrl { get; set; }
 
     /// <summary>
-    /// Gets or sets a value indicating whether this engine is still rough enough that
-    /// people should know before they lean on it. The dashboard puts (EXPERIMENTAL) after
-    /// the name when this is set.
+    /// Gets or sets how strongly the plugin stands behind this engine. Shown as a badge
+    /// next to the name in the backend picker.
     /// </summary>
-    public bool Experimental { get; set; }
+    public EngineTier Tier { get; set; } = EngineTier.Supported;
+
+    /// <summary>
+    /// Gets or sets a page backing up the tier badge, linked straight under it. For LAPSE
+    /// this is the benchmark write-up, which is the actual reason it's recommended rather
+    /// than an assertion that it is.
+    /// </summary>
+    public string? WhyUrl { get; set; }
+
+    /// <summary>
+    /// Gets or sets the text of the <see cref="WhyUrl"/> link.
+    /// </summary>
+    public string? WhyLabel { get; set; }
 
     /// <summary>
     /// Gets or sets what this engine can do.
     /// </summary>
     public EngineCapabilities Capabilities { get; set; } = new();
+
+    /// <summary>
+    /// Gets the tunables this engine's binary actually accepts, read off its source
+    /// rather than assumed. These become the engine's own Advanced section.
+    /// </summary>
+    public List<EngineParameter> Parameters { get; } = new();
+
+    /// <summary>
+    /// Gets or sets a read-only line at the top of the Advanced section, for saying why
+    /// something an admin might go looking for is deliberately not there.
+    /// </summary>
+    public string? AdvancedNote { get; set; }
+
+    /// <summary>
+    /// Gets the alignment modes this engine can run in, in the order they should be
+    /// offered. The first one is what a fresh install uses for the context menu's Sync
+    /// button until someone picks something else.
+    /// </summary>
+    public List<EngineModeOption> Modes { get; } = new();
 
     /// <summary>
     /// Gets or sets the name of the executable once it's installed, without any platform

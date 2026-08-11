@@ -66,6 +66,12 @@ public class ItemStatusEntry
     public int SyncedSubtitleCount { get; set; }
 
     /// <summary>
+    /// Gets or sets the item's file path, so the dashboard can offer to add it to the
+    /// ignore list by path as well as by id.
+    /// </summary>
+    public string? Path { get; set; }
+
+    /// <summary>
     /// Gets a value indicating whether this item has at least one external subtitle.
     /// </summary>
     public bool HasExternalSubtitle => SubtitleCount > 0;

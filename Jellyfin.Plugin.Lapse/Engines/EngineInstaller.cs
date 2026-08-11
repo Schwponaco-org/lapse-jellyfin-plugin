@@ -53,9 +53,28 @@ public class EngineInstaller
     }
 
     /// <summary>
-    /// Gets a short description of the OS and CPU this server is running on.
+    /// Gets a short description of the OS and CPU this server is running on. Everything
+    /// here is read out of the running process, not baked in at build time, so it is what
+    /// the server actually is - including inside a container, where the host and the image
+    /// can easily disagree.
     /// </summary>
     public static string DetectedOsArch => $"{RuntimeInformation.OSDescription} ({RuntimeInformation.OSArchitecture})";
+
+    /// <summary>
+    /// Gets the CPU architecture the engine download is chosen for. This is the OS
+    /// architecture rather than the process one: engines run as their own processes, so
+    /// what matters is what the machine can execute, not how this .NET process happens to
+    /// have been started.
+    /// </summary>
+    public static string TargetArchitecture => RuntimeInformation.OSArchitecture.ToString();
+
+    /// <summary>
+    /// Gets the architecture this process is running as. Worth showing next to
+    /// <see cref="TargetArchitecture"/> because the two differ under emulation (an x64
+    /// build on Apple silicon, an amd64 image on an arm64 host), and when they do, that is
+    /// usually the explanation for an engine that installs fine and then won't start.
+    /// </summary>
+    public static string ProcessArchitecture => RuntimeInformation.ProcessArchitecture.ToString();
 
     /// <summary>
     /// Explains why an engine can't be downloaded onto this machine, and what to do about
@@ -72,18 +91,10 @@ public class EngineInstaller
             $"{descriptor.DisplayName} doesn't publish a build for {DetectedOsArch}."
         };
 
-        if (OperatingSystem.IsWindows())
-        {
-            lines.Add(
-                "On Windows you have three ways forward: run one of the engines that does ship a Windows build "
-                + "(alass and ffsubsync both do - install one of those from this page and set it as the default), "
-                + "run the engine under WSL or Docker and point the path override at it, "
-                + "or build it yourself and point the path override at the .exe.");
-        }
-        else
-        {
-            lines.Add("Build it yourself and set a binary path override in Settings, or use one of the other engines.");
-        }
+        lines.Add(
+            "LAPSE itself publishes builds for Linux, macOS and Windows on both Intel and ARM, so the "
+            + "simplest way round this is to use LAPSE. Otherwise, build this engine yourself and point "
+            + "its binary path override at what you built.");
 
         if (!string.IsNullOrWhiteSpace(descriptor.BuildGuideUrl))
         {
@@ -133,10 +144,10 @@ public class EngineInstaller
             switch (download.Packaging)
             {
                 case EnginePackaging.TarGz:
-                    await ExtractFromTarGzAsync(tempPath, targetPath, engine, cancellationToken).ConfigureAwait(false);
+                    await ExtractFromTarGzAsync(tempPath, targetPath, engineFolder, engine, download, cancellationToken).ConfigureAwait(false);
                     break;
                 case EnginePackaging.Zip:
-                    ExtractFromZip(tempPath, targetPath, engine);
+                    ExtractFromZip(tempPath, targetPath, engineFolder, engine, download);
                     break;
                 default:
                     File.Move(tempPath, targetPath, overwrite: true);
@@ -243,9 +254,18 @@ public class EngineInstaller
 
     // The archives we deal with have the executable at the root, but don't assume that -
     // walk the whole archive and take the entry that looks most like what we're after.
-    private static async Task ExtractFromTarGzAsync(string archivePath, string targetPath, IEngine engine, CancellationToken cancellationToken)
+    // Anything the descriptor lists as a companion comes out at the same time, next to the
+    // executable, because that is where the engine looks for it.
+    private static async Task ExtractFromTarGzAsync(
+        string archivePath,
+        string targetPath,
+        string engineFolder,
+        IEngine engine,
+        EngineDownload download,
+        CancellationToken cancellationToken)
     {
         var names = new List<string>();
+        var foundExecutable = false;
 
         await using (var fileStream = File.OpenRead(archivePath))
         await using (var gzipStream = new GZipStream(fileStream, CompressionMode.Decompress))
@@ -258,20 +278,36 @@ public class EngineInstaller
                     continue;
                 }
 
+                var name = Path.GetFileName(entry.Name);
                 names.Add(entry.Name);
 
-                if (IsWantedEntry(Path.GetFileName(entry.Name), engine))
+                if (!foundExecutable && IsWantedEntry(name, engine))
                 {
                     await entry.ExtractToFileAsync(targetPath, overwrite: true, cancellationToken).ConfigureAwait(false);
-                    return;
+                    foundExecutable = true;
+                    continue;
+                }
+
+                if (IsCompanion(name, download))
+                {
+                    await entry.ExtractToFileAsync(Path.Combine(engineFolder, name), overwrite: true, cancellationToken)
+                        .ConfigureAwait(false);
                 }
             }
         }
 
-        throw new IOException(BuildNotFoundMessage(engine, names));
+        if (!foundExecutable)
+        {
+            throw new IOException(BuildNotFoundMessage(engine, names));
+        }
     }
 
-    private static void ExtractFromZip(string archivePath, string targetPath, IEngine engine)
+    private static void ExtractFromZip(
+        string archivePath,
+        string targetPath,
+        string engineFolder,
+        IEngine engine,
+        EngineDownload download)
     {
         using var archive = ZipFile.OpenRead(archivePath);
 
@@ -289,6 +325,16 @@ public class EngineInstaller
         }
 
         entry.ExtractToFile(targetPath, overwrite: true);
+
+        foreach (var companion in archive.Entries.Where(e => IsCompanion(e.Name, download)))
+        {
+            companion.ExtractToFile(Path.Combine(engineFolder, companion.Name), overwrite: true);
+        }
+    }
+
+    private static bool IsCompanion(string entryName, EngineDownload download)
+    {
+        return download.CompanionFiles.Exists(name => string.Equals(name, entryName, StringComparison.OrdinalIgnoreCase));
     }
 
     private static ZipArchiveEntry? SingleOrNull(IEnumerable<ZipArchiveEntry> entries)

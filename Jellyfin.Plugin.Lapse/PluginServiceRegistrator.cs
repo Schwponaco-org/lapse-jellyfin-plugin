@@ -42,6 +42,9 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddSingleton<SyncQueueManager>();
 
         serviceCollection.AddSingleton<SeriesSyncService>();
+        serviceCollection.AddSingleton<OpenSubtitlesService>();
+        serviceCollection.AddSingleton<ArrWebhookService>();
+        serviceCollection.AddSingleton<SyncHistoryService>();
 
         // Order here is the order the dashboard lists them in: no setup, then self
         // hosted, then the ones that want a cloud API key.

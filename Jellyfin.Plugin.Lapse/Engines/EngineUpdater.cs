@@ -79,10 +79,20 @@ public class EngineUpdater
 
         if (latest is not null)
         {
+            // The dashboard runs this for every engine on every load, so only write the
+            // config back when the answer actually moved. Saving three times a page load
+            // to record the same tag would be a file write for nothing.
+            var changed = !string.Equals(settings.LatestKnownVersion, latest, StringComparison.Ordinal);
+
             settings.LatestKnownVersion = latest;
-            settings.LastUpdateCheckUtc = DateTime.UtcNow;
             status.LastCheckedUtc = settings.LastUpdateCheckUtc;
-            Plugin.Instance!.SaveConfiguration();
+
+            if (changed)
+            {
+                settings.LastUpdateCheckUtc = DateTime.UtcNow;
+                status.LastCheckedUtc = settings.LastUpdateCheckUtc;
+                Plugin.Instance!.SaveConfiguration();
+            }
         }
 
         status.VersionUnknown = installed && installedVersion is null;

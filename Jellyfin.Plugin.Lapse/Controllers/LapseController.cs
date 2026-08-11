@@ -9,6 +9,7 @@ using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Net.Mime;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.Lapse.Data;
@@ -40,11 +41,15 @@ public class LapseController : ControllerBase
     private readonly EngineRegistry _registry;
     private readonly EngineRunner _runner;
     private readonly EngineInstaller _installer;
+    private readonly EngineCapabilityProbe _probe;
     private readonly EngineUpdater _updater;
     private readonly SubtitleLocator _subtitleLocator;
     private readonly SubtitleShifter _subtitleShifter;
     private readonly TranslationService _translationService;
     private readonly SeriesSyncService _seriesSyncService;
+    private readonly OpenSubtitlesService _openSubtitles;
+    private readonly ArrWebhookService _arrWebhookService;
+    private readonly SyncHistoryService _historyService;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="LapseController"/> class.
@@ -55,11 +60,15 @@ public class LapseController : ControllerBase
     /// <param name="registry">The engines we know about.</param>
     /// <param name="runner">Runs single, synchronous engine calls.</param>
     /// <param name="installer">Downloads and installs engines.</param>
+    /// <param name="probe">Cleared when an engine is removed, since the file has gone.</param>
     /// <param name="updater">Checks for and applies engine updates.</param>
     /// <param name="subtitleLocator">Finds external subtitles for an item.</param>
     /// <param name="subtitleShifter">Nudges subtitle timings by hand.</param>
     /// <param name="translationService">Translates subtitle files.</param>
     /// <param name="seriesSyncService">Expands a series or season into its episodes.</param>
+    /// <param name="openSubtitles">Fetches a subtitle for an item that has none.</param>
+    /// <param name="arrWebhookService">Turns Radarr/Sonarr imports into syncs.</param>
+    /// <param name="historyService">Puts a sync back the way it was.</param>
     public LapseController(
         ILibraryManager libraryManager,
         LibraryService libraryService,
@@ -67,11 +76,15 @@ public class LapseController : ControllerBase
         EngineRegistry registry,
         EngineRunner runner,
         EngineInstaller installer,
+        EngineCapabilityProbe probe,
         EngineUpdater updater,
         SubtitleLocator subtitleLocator,
         SubtitleShifter subtitleShifter,
         TranslationService translationService,
-        SeriesSyncService seriesSyncService)
+        SeriesSyncService seriesSyncService,
+        OpenSubtitlesService openSubtitles,
+        ArrWebhookService arrWebhookService,
+        SyncHistoryService historyService)
     {
         _libraryManager = libraryManager;
         _libraryService = libraryService;
@@ -79,11 +92,15 @@ public class LapseController : ControllerBase
         _registry = registry;
         _runner = runner;
         _installer = installer;
+        _probe = probe;
         _updater = updater;
         _subtitleLocator = subtitleLocator;
         _subtitleShifter = subtitleShifter;
         _translationService = translationService;
         _seriesSyncService = seriesSyncService;
+        _openSubtitles = openSubtitles;
+        _arrWebhookService = arrWebhookService;
+        _historyService = historyService;
     }
 
     // ---------------------------------------------------------------- status and items
@@ -126,11 +143,80 @@ public class LapseController : ControllerBase
                 LastSyncUtc = record?.LastSyncUtc,
                 LastError = record?.LastError,
                 SubtitleCount = subtitles.Count,
-                SyncedSubtitleCount = syncedCount
+                SyncedSubtitleCount = syncedCount,
+                Path = item.Path
             });
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Gets what the dashboard front page needs that the item list can't tell it: which
+    /// engine is active and what has been synced lately.
+    ///
+    /// Deliberately does not count the library. The dashboard already fetches the full
+    /// status list for its own page, and walking every item and stat-ing its subtitles a
+    /// second time to produce numbers the browser can add up itself would double the
+    /// cost of a page load on a large library for nothing.
+    /// </summary>
+    /// <returns>The overview.</returns>
+    [HttpGet("Lapse/Overview")]
+    public ActionResult<DashboardOverview> GetOverview()
+    {
+        var config = Plugin.Instance!.Configuration;
+        var overview = new DashboardOverview();
+
+        foreach (var engine in _registry.All)
+        {
+            if (System.IO.File.Exists(_runner.ResolvePath(engine)))
+            {
+                overview.AnyEngineInstalled = true;
+                break;
+            }
+        }
+
+        var active = _registry.GetDefault();
+        var activeSettings = config.GetEngineSettings(active.Descriptor.Id);
+
+        overview.ActiveEngineId = active.Descriptor.Id;
+        overview.ActiveEngineName = active.Descriptor.DisplayName;
+        overview.ActiveEngineVersion = activeSettings.InstalledVersion;
+        overview.ActiveEngineMode = EngineRunner.ResolveDefaultMode(active).ToString();
+        overview.ActiveEngineReady = System.IO.File.Exists(_runner.ResolvePath(active));
+
+        foreach (var entry in config.History.AsEnumerable().Reverse().Take(15))
+        {
+            var item = _libraryManager.GetItemById(entry.ItemId);
+
+            overview.Recent.Add(new RecentActivityEntry
+            {
+                Id = entry.Id,
+                ItemId = entry.ItemId,
+                Name = item is null ? "(removed from the library)" : SyncQueueManager.DescribeItem(item),
+                Status = entry.Status,
+                WhenUtc = entry.WhenUtc,
+                Detail = entry.Detail,
+                OutputPath = entry.OutputPath,
+                Reverted = entry.Reverted,
+                CanRevert = SyncHistoryService.CanRevert(entry)
+            });
+        }
+
+        return overview;
+    }
+
+    /// <summary>
+    /// Undoes one sync: puts the backup back, or removes the file the run added.
+    /// </summary>
+    /// <param name="id">The history entry.</param>
+    /// <returns>A line saying what happened.</returns>
+    [HttpPost("Lapse/History/{id}/Revert")]
+    [Authorize(Policy = Policies.RequiresElevation)]
+    public ActionResult RevertSync([FromRoute] Guid id)
+    {
+        var outcome = _historyService.Revert(id);
+        return outcome is null ? NotFound("No history entry with that id") : Ok(new { Outcome = outcome });
     }
 
     /// <summary>
@@ -153,6 +239,13 @@ public class LapseController : ControllerBase
         int subtitleCount,
         int syncedCount)
     {
+        // Ignore wins over skip: it's the stronger, standing rule, and showing it as
+        // "skipped" would hide the fact that a series-wide rule is what's stopping this.
+        if (LibraryService.IsIgnored(item))
+        {
+            return MovieSyncStatus.Ignored;
+        }
+
         if (SyncQueueManager.IsSkipped(item))
         {
             return MovieSyncStatus.Skipped;
@@ -234,6 +327,28 @@ public class LapseController : ControllerBase
         }
 
         var subtitles = _subtitleLocator.GetExternalSubtitles(item);
+
+        // Nothing to line up. If subtitle fetching is switched on, go and get one first
+        // rather than turning the sync away.
+        if (subtitles.Count == 0 && Plugin.Instance!.Configuration.OpenSubtitlesEnabled)
+        {
+            var fetched = await _openSubtitles.TryFetchAsync(item).ConfigureAwait(false);
+            if (fetched is not null)
+            {
+                subtitles = _subtitleLocator.GetExternalSubtitles(item);
+
+                // Jellyfin may not have rescanned the folder yet, so the locator can still
+                // come back empty even though the file is right there. Use it directly.
+                if (subtitles.Count == 0)
+                {
+                    subtitles = new List<SubtitleOption>
+                    {
+                        new() { Path = fetched, DisplayName = Path.GetFileName(fetched) }
+                    };
+                }
+            }
+        }
+
         if (subtitles.Count == 0)
         {
             return BadRequest("This item has no external subtitle to sync");
@@ -264,17 +379,18 @@ public class LapseController : ControllerBase
         }
 
         var engine = _registry.Resolve(request.EngineId);
+        var mode = request.Mode ?? EngineRunner.ResolveDefaultMode(engine);
 
         // Don't let a caller ask for something the chosen engine can't do. The dashboard
         // already greys these out, but the API shouldn't rely on the UI behaving.
-        if (!SupportsMode(engine, request.Mode))
+        if (!SupportsMode(engine, mode))
         {
-            return BadRequest($"{engine.Descriptor.DisplayName} doesn't support {request.Mode} alignment");
+            return BadRequest($"{engine.Descriptor.DisplayName} doesn't support {mode} alignment");
         }
 
         var penalty = EngineRunner.ResolvePenalty(engine, request.Penalty);
         var result = await _runner
-            .RunAsync(engine, item.Path, subtitlePath, request.Mode, penalty, request.OutputMode)
+            .RunAsync(engine, item.Path, subtitlePath, mode, penalty, request.OutputMode)
             .ConfigureAwait(false);
 
         SyncQueueManager.SaveRecord(
@@ -331,9 +447,11 @@ public class LapseController : ControllerBase
         }
 
         var engine = _registry.Resolve(request.EngineId);
-        if (!SupportsMode(engine, request.Mode))
+        var mode = request.Mode ?? EngineRunner.ResolveDefaultMode(engine);
+
+        if (!SupportsMode(engine, mode))
         {
-            return BadRequest($"{engine.Descriptor.DisplayName} doesn't support {request.Mode} alignment");
+            return BadRequest($"{engine.Descriptor.DisplayName} doesn't support {mode} alignment");
         }
 
         var penalty = EngineRunner.ResolvePenalty(engine, request.Penalty);
@@ -344,7 +462,7 @@ public class LapseController : ControllerBase
         foreach (var subtitle in others)
         {
             var syncResult = await _runner
-                .RunAsync(engine, reference.Path, subtitle.Path, request.Mode, penalty, request.OutputMode)
+                .RunAsync(engine, reference.Path, subtitle.Path, mode, penalty, request.OutputMode)
                 .ConfigureAwait(false);
 
             if (syncResult.Success)
@@ -658,10 +776,16 @@ public class LapseController : ControllerBase
     /// <summary>
     /// Gets every engine the plugin knows about, whether it's usable, what it can do, and
     /// where it stands against its published releases.
+    ///
+    /// The release check runs here rather than only behind the "Check for updates" button,
+    /// so opening the dashboard is enough to find out something newer is out. It isn't a
+    /// network call per load: GitHubReleaseClient caches its answer for half an hour and
+    /// this asks without forcing, so a page refresh costs nothing.
     /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>One entry per engine.</returns>
     [HttpGet("Lapse/Engines")]
-    public async Task<ActionResult<List<EngineInfo>>> GetEngines()
+    public async Task<ActionResult<List<EngineInfo>>> GetEngines(CancellationToken cancellationToken)
     {
         var config = Plugin.Instance!.Configuration;
         var defaultId = _registry.GetDefault().Descriptor.Id;
@@ -676,19 +800,13 @@ public class LapseController : ControllerBase
             var downloadable = EngineRunner.HasDownload(engine);
 
             var runtime = installed
-                ? await _runner.GetRuntimeInfoAsync(engine).ConfigureAwait(false)
+                ? await _runner.GetRuntimeInfoAsync(engine, cancellationToken).ConfigureAwait(false)
                 : EngineRuntimeInfo.Unknown;
 
-            // What's on disk, from whichever source can answer: the release tag recorded
-            // at install time first, then whatever the binary says about itself. An
-            // engine that was installed before versions were recorded, or while GitHub
-            // was unreachable, still gets a version out of this rather than showing
-            // nothing and refusing to update.
-            var installedVersion = installed
-                ? await _updater.ResolveInstalledVersionAsync(engine).ConfigureAwait(false)
-                : null;
+            var status = await _updater.CheckAsync(engine, force: false, cancellationToken).ConfigureAwait(false);
+            var values = EngineRunner.ResolveParameters(engine);
 
-            result.Add(new EngineInfo
+            var info = new EngineInfo
             {
                 Id = descriptor.Id,
                 DisplayName = descriptor.DisplayName,
@@ -698,33 +816,72 @@ public class LapseController : ControllerBase
                 Installed = installed,
                 Path = path,
                 IsDefault = string.Equals(descriptor.Id, defaultId, StringComparison.OrdinalIgnoreCase),
-                Experimental = descriptor.Experimental,
+                Tier = descriptor.Tier.ToString(),
+                WhyUrl = descriptor.WhyUrl,
+                WhyLabel = descriptor.WhyLabel,
+                AdvancedNote = descriptor.AdvancedNote,
                 DownloadSupported = downloadable,
                 NoDownloadReason = downloadable ? null : EngineInstaller.DescribeMissingBuild(engine),
-                RunCheckError = installed ? await _runner.CheckRunnableAsync(engine).ConfigureAwait(false) : null,
+                RunCheckError = installed ? await _runner.CheckRunnableAsync(engine, cancellationToken).ConfigureAwait(false) : null,
                 SupportsStandard = descriptor.Capabilities.SupportsStandard,
+                SupportsAuto = descriptor.Capabilities.SupportsAuto,
                 SupportsOls = descriptor.Capabilities.SupportsOls,
                 SupportsSplit = descriptor.Capabilities.SupportsSplit,
                 SupportsPenalty = descriptor.Capabilities.SupportsPenalty,
                 Penalty = EngineRunner.ResolvePenalty(engine, null),
+                DefaultPenalty = descriptor.Capabilities.DefaultPenalty,
                 MinPenalty = descriptor.Capabilities.MinPenalty,
                 MaxPenalty = descriptor.Capabilities.MaxPenalty,
+                DefaultMode = EngineRunner.ResolveDefaultMode(engine).ToString(),
                 PathOverride = settings.PathOverride,
-                InstalledVersion = installedVersion,
-                LatestVersion = settings.LatestKnownVersion,
-                VersionUnknown = installed && installedVersion is null,
-                UpdateAvailable = installed
-                    && downloadable
-                    && settings.LatestKnownVersion is not null
-                    && (installedVersion is null
-                        || GitHubReleaseClient.IsNewer(installedVersion, settings.LatestKnownVersion)),
+                InstalledVersion = status.InstalledVersion,
+                LatestVersion = status.LatestVersion,
+                VersionUnknown = status.VersionUnknown,
+                UpdateAvailable = status.UpdateAvailable,
                 AutoUpdate = config.AutoUpdateEngines,
                 ReportedVersion = runtime.Version,
                 DiscoveredFlags = runtime.Probed ? runtime.Flags : null,
                 CapabilitySource = runtime.Source,
                 SupportsOutputFlag = runtime.SupportsOutputFlag,
                 SupportsNoBackupFlag = runtime.SupportsNoBackupFlag
-            });
+            };
+
+            foreach (var mode in descriptor.Modes)
+            {
+                info.Modes.Add(new EngineModeInfo
+                {
+                    Value = mode.Mode.ToString(),
+                    Label = mode.Label,
+                    Description = mode.Description
+                });
+            }
+
+            foreach (var parameter in descriptor.Parameters)
+            {
+                var entry = new EngineParameterInfo
+                {
+                    Key = parameter.Key,
+                    Label = parameter.Label,
+                    Description = parameter.Description,
+                    Flag = parameter.Flag,
+                    Kind = parameter.Kind.ToString(),
+                    DefaultValue = parameter.DefaultValue,
+                    Value = values.GetString(parameter.Key),
+                    Minimum = parameter.Minimum,
+                    Maximum = parameter.Maximum,
+                    Step = parameter.Step,
+                    BlankMeansUnset = parameter.BlankMeansUnset
+                };
+
+                foreach (var option in parameter.Options)
+                {
+                    entry.Options.Add(new EngineModeInfo { Value = option.Value, Label = option.Label });
+                }
+
+                info.Parameters.Add(entry);
+            }
+
+            result.Add(info);
         }
 
         return result;
@@ -774,6 +931,64 @@ public class LapseController : ControllerBase
         {
             return BadRequest(ex.Message);
         }
+    }
+
+    /// <summary>
+    /// Removes an engine's installed copy, freeing the disk it took. Only ever deletes the
+    /// plugin's own engine folder: a binary behind a path override was not put there by
+    /// the plugin and is not the plugin's to delete, so that is refused rather than
+    /// quietly removing someone's hand built build.
+    /// </summary>
+    /// <param name="engineId">Which engine.</param>
+    /// <returns>Ok, or a 400 explaining why it wasn't removed.</returns>
+    [HttpPost("Lapse/Engines/{engineId}/Uninstall")]
+    [Authorize(Policy = Policies.RequiresElevation)]
+    public ActionResult UninstallEngine([FromRoute] string engineId)
+    {
+        var engine = _registry.Find(engineId);
+        if (engine is null)
+        {
+            return NotFound($"No engine called '{engineId}'");
+        }
+
+        var settings = Plugin.Instance!.Configuration.GetEngineSettings(engine.Descriptor.Id);
+        if (!string.IsNullOrWhiteSpace(settings.PathOverride))
+        {
+            return BadRequest(
+                "This engine is pointed at your own binary, so there's nothing here to remove. "
+                + "Clear the binary path override first if you want to stop using it.");
+        }
+
+        var installedPath = _runner.GetInstalledPath(engine);
+        var folder = Path.GetDirectoryName(installedPath);
+
+        try
+        {
+            if (folder is not null && Directory.Exists(folder))
+            {
+                Directory.Delete(folder, recursive: true);
+            }
+            else if (System.IO.File.Exists(installedPath))
+            {
+                System.IO.File.Delete(installedPath);
+            }
+            else
+            {
+                return BadRequest("That engine isn't installed.");
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return BadRequest("Could not remove it: " + ex.Message);
+        }
+
+        // Nothing is on disk any more, so the recorded version would be a lie, and the
+        // probe's cached answer is about a file that has gone.
+        settings.InstalledVersion = null;
+        Plugin.Instance!.SaveConfiguration();
+        _probe.Invalidate();
+
+        return Ok();
     }
 
     /// <summary>
@@ -888,7 +1103,16 @@ public class LapseController : ControllerBase
             OutputMode = config.OutputMode,
             SidecarSuffix = config.SidecarSuffix,
             LowConfidenceAction = config.LowConfidenceAction,
-            SyncConfidenceThreshold = config.SyncConfidenceThreshold,
+            ConfidenceSigma = config.ConfidenceSigma,
+            SubToSubPlacement = config.SubToSubPlacement,
+            SubToSubCustomFolder = config.SubToSubCustomFolder,
+            OpenSubtitlesEnabled = config.OpenSubtitlesEnabled,
+            OpenSubtitlesApiKey = config.OpenSubtitlesApiKey,
+            OpenSubtitlesUsername = config.OpenSubtitlesUsername,
+            OpenSubtitlesPassword = config.OpenSubtitlesPassword,
+            OpenSubtitlesLanguage = config.OpenSubtitlesLanguage,
+            ArrWebhookEnabled = config.ArrWebhookEnabled,
+            ArrWebhookToken = config.ArrWebhookToken,
             AutoUpdateEngines = config.AutoUpdateEngines,
             GoogleTranslateApiKey = config.GoogleTranslateApiKey,
             DeepLApiKey = config.DeepLApiKey,
@@ -906,12 +1130,25 @@ public class LapseController : ControllerBase
         foreach (var engine in _registry.All)
         {
             var engineSettings = config.GetEngineSettings(engine.Descriptor.Id);
-            settings.Engines.Add(new EngineSettingsEntry
+            var entry = new EngineSettingsEntry
             {
                 EngineId = engine.Descriptor.Id,
                 PathOverride = engineSettings.PathOverride,
-                Penalty = engineSettings.Penalty
-            });
+                Penalty = engineSettings.Penalty,
+                DefaultMode = EngineRunner.ResolveDefaultMode(engine).ToString()
+            };
+
+            var values = EngineRunner.ResolveParameters(engine);
+            foreach (var parameter in engine.Descriptor.Parameters)
+            {
+                entry.Parameters.Add(new EngineParameterEntry
+                {
+                    Key = parameter.Key,
+                    Value = values.GetString(parameter.Key)
+                });
+            }
+
+            settings.Engines.Add(entry);
         }
 
         return settings;
@@ -937,13 +1174,194 @@ public class LapseController : ControllerBase
     [HttpGet("Lapse/Diagnostics")]
     public ActionResult<object> GetDiagnostics()
     {
+        var method = WebClientInjection.Evaluate();
+
         return new
         {
-            InjectionMethod = WebClientInjection.Method.ToString(),
+            InjectionMethod = method.ToString(),
+            Working = method != InjectionMethod.None,
             WebClientInjection.Problem,
             WebClientInjection.WebPath,
-            Platform = EngineInstaller.DetectedOsArch
+            Platform = EngineInstaller.DetectedOsArch,
+            EngineInstaller.TargetArchitecture,
+            EngineInstaller.ProcessArchitecture,
+            Framework = System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription,
+            InContainer = string.Equals(
+                Environment.GetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINER"),
+                "true",
+                StringComparison.OrdinalIgnoreCase),
+            ArrWebhookService.LastEvent,
+            ArrWebhookLastEventUtc = ArrWebhookService.LastEventUtc
         };
+    }
+
+    // ------------------------------------------------------------------- ignore list
+
+    /// <summary>
+    /// Gets the ignore list.
+    /// </summary>
+    /// <returns>The rules, newest first.</returns>
+    [HttpGet("Lapse/Ignore")]
+    public ActionResult<List<IgnoreRule>> GetIgnoreRules()
+    {
+        return Plugin.Instance!.Configuration.IgnoreRules
+            .OrderByDescending(r => r.AddedUtc)
+            .ToList();
+    }
+
+    /// <summary>
+    /// Adds something to the ignore list, by item or by path.
+    /// </summary>
+    /// <param name="rule">What to ignore.</param>
+    /// <returns>Ok, or 400 when the rule names neither an item nor a path.</returns>
+    [HttpPost("Lapse/Ignore")]
+    [Authorize(Policy = Policies.RequiresElevation)]
+    public ActionResult AddIgnoreRule([FromBody] IgnoreRule rule)
+    {
+        if (rule is null || (!rule.ItemId.HasValue && string.IsNullOrWhiteSpace(rule.Path)))
+        {
+            return BadRequest("An ignore rule needs either an item or a path");
+        }
+
+        var config = Plugin.Instance!.Configuration;
+
+        if (rule.ItemId.HasValue)
+        {
+            var item = _libraryManager.GetItemById(rule.ItemId.Value);
+            if (item is null)
+            {
+                return NotFound("Item not found");
+            }
+
+            if (config.IgnoreRules.Any(r => r.ItemId == rule.ItemId))
+            {
+                return Ok();
+            }
+
+            config.IgnoreRules.Add(new IgnoreRule
+            {
+                ItemId = item.Id,
+                DisplayName = SyncQueueManager.DescribeItem(item),
+                Kind = item.GetBaseItemKind().ToString(),
+                Path = null
+            });
+        }
+        else
+        {
+            var path = rule.Path!.Trim();
+
+            if (config.IgnoreRules.Any(r => string.Equals(r.Path, path, StringComparison.OrdinalIgnoreCase)))
+            {
+                return Ok();
+            }
+
+            config.IgnoreRules.Add(new IgnoreRule
+            {
+                Path = path,
+                DisplayName = path,
+                Kind = "Path"
+            });
+        }
+
+        Plugin.Instance!.SaveConfiguration();
+        return Ok();
+    }
+
+    /// <summary>
+    /// Takes something off the ignore list.
+    /// </summary>
+    /// <param name="itemId">The item to un-ignore, if it was an item rule.</param>
+    /// <param name="path">The path to un-ignore, if it was a path rule.</param>
+    /// <returns>Ok.</returns>
+    [HttpDelete("Lapse/Ignore")]
+    [Authorize(Policy = Policies.RequiresElevation)]
+    public ActionResult RemoveIgnoreRule([FromQuery] Guid? itemId, [FromQuery] string? path)
+    {
+        var config = Plugin.Instance!.Configuration;
+
+        config.IgnoreRules.RemoveAll(r =>
+            (itemId.HasValue && r.ItemId == itemId)
+            || (!string.IsNullOrWhiteSpace(path) && string.Equals(r.Path, path, StringComparison.OrdinalIgnoreCase)));
+
+        Plugin.Instance!.SaveConfiguration();
+        return Ok();
+    }
+
+    // --------------------------------------------------------- radarr / sonarr webhook
+
+    /// <summary>
+    /// Takes a Radarr or Sonarr webhook and syncs whatever was imported.
+    ///
+    /// Anonymous on purpose: neither app can send a Jellyfin API key, so the shared secret
+    /// in the query string is what stands between this and anyone who can reach the
+    /// server. It's compared in full, the endpoint does nothing at all until it's turned
+    /// on in the settings, and the only thing a valid call can do is queue a sync for a
+    /// file that is already in the library.
+    /// </summary>
+    /// <param name="token">The shared secret from the settings.</param>
+    /// <param name="payload">The webhook body.</param>
+    /// <returns>Ok when the notification was understood.</returns>
+    [HttpPost("Lapse/Webhook/Arr")]
+    [AllowAnonymous]
+    public ActionResult ArrWebhook([FromQuery] string? token, [FromBody] JsonElement payload)
+    {
+        var config = Plugin.Instance!.Configuration;
+
+        if (!config.ArrWebhookEnabled || string.IsNullOrWhiteSpace(config.ArrWebhookToken))
+        {
+            return NotFound();
+        }
+
+        if (!string.Equals(token, config.ArrWebhookToken, StringComparison.Ordinal))
+        {
+            return Unauthorized();
+        }
+
+        var eventType = ArrWebhookService.ReadEventType(payload);
+        ArrWebhookService.LastEvent = eventType ?? "(no event type)";
+        ArrWebhookService.LastEventUtc = DateTime.UtcNow;
+
+        // Radarr and Sonarr both fire a Test when you press the button in their UI. Say
+        // yes to it so the connection tests green, and do nothing else.
+        if (eventType is "test" or null)
+        {
+            return Ok(new { Message = "LAPSE is listening." });
+        }
+
+        // Grabs, renames, health checks and deletes aren't imports. Only the events that
+        // put a new file on disk are worth a sync.
+        if (eventType is not ("download" or "moviefileimported" or "episodefileimported" or "movieadded"))
+        {
+            return Ok(new { Message = "Nothing to do for " + eventType });
+        }
+
+        var paths = ArrWebhookService.ReadPaths(payload);
+        if (paths.Count == 0)
+        {
+            return Ok(new { Message = "No video file path in that notification" });
+        }
+
+        // Answer now and do the waiting in the background: both apps treat a webhook that
+        // takes its time as a failed one, and the item won't be in the library yet anyway.
+        _ = Task.Run(() => _arrWebhookService.SyncWhenScannedAsync(paths, CancellationToken.None));
+
+        return Ok(new { Queued = paths.Count });
+    }
+
+    /// <summary>
+    /// Makes a new shared secret for the webhook URL, replacing whatever was there.
+    /// </summary>
+    /// <returns>The new token.</returns>
+    [HttpPost("Lapse/Webhook/Arr/Token")]
+    [Authorize(Policy = Policies.RequiresElevation)]
+    public ActionResult NewArrWebhookToken()
+    {
+        var token = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
+
+        Plugin.Instance!.Configuration.ArrWebhookToken = token;
+        Plugin.Instance!.SaveConfiguration();
+
+        return Ok(new { Token = token });
     }
 
     /// <summary>
@@ -960,7 +1378,19 @@ public class LapseController : ControllerBase
         config.OutputMode = settings.OutputMode;
         config.SidecarSuffix = string.IsNullOrWhiteSpace(settings.SidecarSuffix) ? ".shifted" : settings.SidecarSuffix.Trim();
         config.LowConfidenceAction = settings.LowConfidenceAction;
-        config.SyncConfidenceThreshold = Math.Clamp(settings.SyncConfidenceThreshold, 0, 100);
+
+        // The engine rejects anything at or below zero, and a runaway value would just mean
+        // nothing is ever confident enough to write.
+        config.ConfidenceSigma = Math.Clamp(settings.ConfidenceSigma, 0.5, 30);
+
+        config.SubToSubPlacement = settings.SubToSubPlacement;
+        config.SubToSubCustomFolder = Blank(settings.SubToSubCustomFolder);
+        config.OpenSubtitlesEnabled = settings.OpenSubtitlesEnabled;
+        config.OpenSubtitlesApiKey = Blank(settings.OpenSubtitlesApiKey);
+        config.OpenSubtitlesUsername = Blank(settings.OpenSubtitlesUsername);
+        config.OpenSubtitlesPassword = Blank(settings.OpenSubtitlesPassword);
+        config.OpenSubtitlesLanguage = Blank(settings.OpenSubtitlesLanguage) ?? "en";
+        config.ArrWebhookEnabled = settings.ArrWebhookEnabled;
         config.AutoUpdateEngines = settings.AutoUpdateEngines;
         config.GoogleTranslateApiKey = Blank(settings.GoogleTranslateApiKey);
         config.DeepLApiKey = Blank(settings.DeepLApiKey);
@@ -988,7 +1418,8 @@ public class LapseController : ControllerBase
 
         foreach (var entry in settings.Engines)
         {
-            if (_registry.Find(entry.EngineId) is null)
+            var engine = _registry.Find(entry.EngineId);
+            if (engine is null)
             {
                 continue;
             }
@@ -996,6 +1427,22 @@ public class LapseController : ControllerBase
             var engineSettings = config.GetEngineSettings(entry.EngineId);
             engineSettings.PathOverride = Blank(entry.PathOverride);
             engineSettings.Penalty = entry.Penalty;
+
+            if (Enum.TryParse<SyncMode>(entry.DefaultMode, ignoreCase: true, out var mode)
+                && engine.Descriptor.Modes.Exists(m => m.Mode == mode))
+            {
+                engineSettings.DefaultMode = mode.ToString();
+            }
+
+            // Only take keys this engine actually has, so a stale form from an older
+            // version can't leave dead settings sitting in the config forever.
+            var known = new HashSet<string>(
+                engine.Descriptor.Parameters.Select(p => p.Key),
+                StringComparer.OrdinalIgnoreCase);
+
+            engineSettings.SetParameters(entry.Parameters
+                .Where(p => known.Contains(p.Key))
+                .Select(p => new KeyValuePair<string, string?>(p.Key, p.Value?.Trim())));
         }
 
         Plugin.Instance!.SaveConfiguration();
@@ -1143,6 +1590,16 @@ public class LapseController : ControllerBase
         // in: it has to be a subtitle, and it can't be aimed at the reference, since that
         // would destroy the very file the sync is measuring against.
         var outputPath = string.IsNullOrWhiteSpace(request.OutputPath) ? null : request.OutputPath.Trim();
+
+        // A bare file name means "use the configured placement", so the caller doesn't
+        // have to know where that is.
+        if (outputPath is not null && string.IsNullOrEmpty(Path.GetDirectoryName(outputPath)))
+        {
+            outputPath = Path.Combine(
+                ResolveSubToSubFolder(request.ReferencePath, request.InputPath, request.Placement),
+                outputPath);
+        }
+
         if (outputPath is not null)
         {
             if (!SubtitleLocator.IsSubtitleFile(outputPath))
@@ -1185,6 +1642,33 @@ public class LapseController : ControllerBase
             IsLinux = OperatingSystem.IsLinux(),
             IsMacOs = OperatingSystem.IsMacOS()
         };
+    }
+
+    /// <summary>
+    /// Works out which folder a subtitle-to-subtitle result belongs in. Beside the
+    /// reference is the default because the reference is the file that is already sitting
+    /// correctly next to its video, so a result there is one Jellyfin will pick up as
+    /// another track for that video. Beside the input leaves things where they were found,
+    /// and a custom folder is for keeping the output out of the library entirely.
+    /// </summary>
+    /// <param name="referencePath">The reference subtitle.</param>
+    /// <param name="inputPath">The subtitle being fixed.</param>
+    /// <param name="requested">What the request asked for, or null for the configured default.</param>
+    /// <returns>The folder to write into.</returns>
+    private static string ResolveSubToSubFolder(string referencePath, string inputPath, SubToSubPlacement? requested)
+    {
+        var config = Plugin.Instance!.Configuration;
+        var placement = requested ?? config.SubToSubPlacement;
+
+        if (placement == SubToSubPlacement.CustomFolder
+            && !string.IsNullOrWhiteSpace(config.SubToSubCustomFolder)
+            && Directory.Exists(config.SubToSubCustomFolder))
+        {
+            return config.SubToSubCustomFolder;
+        }
+
+        var source = placement == SubToSubPlacement.InputFolder ? inputPath : referencePath;
+        return Path.GetDirectoryName(source) ?? Path.GetDirectoryName(inputPath) ?? string.Empty;
     }
 
     private static string? Blank(string? value)
@@ -1248,6 +1732,7 @@ public class LapseController : ControllerBase
         var capabilities = engine.Descriptor.Capabilities;
         return mode switch
         {
+            SyncMode.Auto => capabilities.SupportsAuto,
             SyncMode.Ols => capabilities.SupportsOls,
             SyncMode.Split => capabilities.SupportsSplit,
             _ => capabilities.SupportsStandard

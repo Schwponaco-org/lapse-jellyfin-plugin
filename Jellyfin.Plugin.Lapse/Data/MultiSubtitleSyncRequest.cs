@@ -30,9 +30,9 @@ public class MultiSubtitleSyncRequest
     public string? EngineId { get; set; }
 
     /// <summary>
-    /// Gets or sets the alignment mode.
+    /// Gets or sets the alignment mode, or null for the engine's own default.
     /// </summary>
-    public SyncMode Mode { get; set; } = SyncMode.Standard;
+    public SyncMode? Mode { get; set; }
 
     /// <summary>
     /// Gets or sets the penalty for split mode, or null for the engine's default.
