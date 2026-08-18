@@ -45,3 +45,15 @@ public class IgnoreRule
     /// </summary>
     public DateTime AddedUtc { get; set; } = DateTime.UtcNow;
 }
+
+/// <summary>
+/// What taking something off the ignore list actually did.
+/// </summary>
+public class IgnoreRemovalResult
+{
+    /// <summary>
+    /// Gets or sets how many rules were removed. Zero means the item is ignored through
+    /// something above it - a series, a season, a folder - rather than a rule of its own.
+    /// </summary>
+    public int Removed { get; set; }
+}

@@ -218,8 +218,12 @@
     gap: .35em;
 }
 
+/* A one-pixel border in the accent colour is not much of a difference to spot across a
+   grid of cards, so the active engine gets a ring and a tint as well. */
 .lapseEngineCard-default {
     border-color: var(--lapse-accent, #00A4DC);
+    box-shadow: 0 0 0 1px var(--lapse-accent, #00A4DC);
+    background: rgba(0, 164, 220, .07);
 }
 
 .lapseEngineCard-unavailable {
@@ -417,11 +421,49 @@
     margin-bottom: 1em;
 }
 
+/* The accent bar on the left marks the option that is currently picked, not the one
+   somebody thinks you should pick. A radio dot alone is easy to lose in a list of
+   four options that each run to three lines, so the whole row carries the state. The
+   transparent border is always there so nothing shifts sideways when it lights up. */
 .lapseRadioRow {
     display: flex;
     align-items: flex-start;
     gap: .5em;
     cursor: pointer;
+    border-left: 3px solid transparent;
+    border-radius: .3em;
+    padding: .35em .5em;
+
+    /* Pull back the padding and the bar so the rows still line up with everything else
+       in the panel. */
+    margin-left: calc(-.5em - 3px);
+    transition: background-color .12s ease, border-color .12s ease;
+}
+
+.lapseRadioRow:hover {
+    background: rgba(127, 127, 127, .08);
+}
+
+.lapseRadioRow-active {
+    border-left-color: var(--lapse-accent, #00A4DC);
+    background: rgba(0, 164, 220, .1);
+}
+
+/* The label is a bare text node followed by the note, so the weight goes on the
+   container and the note is put back to normal. */
+.lapseRadioRow-active .lapseRadioLabel {
+    font-weight: 600;
+}
+
+.lapseRadioRow-active .lapseRadioLabel .fieldDescription {
+    font-weight: 400;
+}
+
+/* Keyboard users get the same outline the pointer gets, on the row rather than on the
+   dot, so tabbing through the group is as readable as clicking it. */
+.lapseRadioRow:focus-within {
+    outline: 2px solid var(--lapse-accent, #00A4DC);
+    outline-offset: 1px;
 }
 
 .lapseRadioRow input[type="radio"] {
@@ -1225,10 +1267,9 @@
     font-size: .85em;
 }
 
-.lapseRadioRow-recommended {
-    border-left: 2px solid var(--lapse-accent, #00A4DC);
-    padding-left: .7em;
-}
+/* The left bar used to mark the recommended option, which read as "this one is
+   selected" and fought with the row that actually was. Recommended is a badge now;
+   the bar belongs to .lapseRadioRow-active. */
 
 /* --------------------------------------------------------------- ignore list */
 

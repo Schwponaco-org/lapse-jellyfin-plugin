@@ -328,7 +328,12 @@
     }
 
     function lookUpItem(id) {
-        return ApiClient.getItem(ApiClient.getCurrentUserId(), id).then(function (item) {
+        // getCurrentUserId and getItem both throw synchronously on a client that is
+        // between sessions, so the whole call goes inside the promise rather than only
+        // its result.
+        return Promise.resolve().then(function () {
+            return ApiClient.getItem(ApiClient.getCurrentUserId(), id);
+        }).then(function (item) {
             return { id: item.Id, type: item.Type, name: item.Name };
         }).catch(function (err) {
             log('could not look up item ' + id + ': ' + err);
@@ -385,6 +390,10 @@
                 openShiftPopup(context);
             }));
 
+            scroller.appendChild(makeMenuButton('lapse-convert-subtitles', 'Convert Subtitles', 'swap_horiz', function () {
+                openConvertPopup(context);
+            }));
+
             scroller.appendChild(makeMenuButton('lapse-sync-all-subtitles', 'Sync All Subtitles to Reference', 'compare_arrows', function () {
                 openReferencePopup(context);
             }));
@@ -415,6 +424,11 @@
             } else {
                 log('sheet closed before we could add the buttons');
             }
+        }).catch(function (err) {
+            // A menu that came up without the LAPSE entries is a nuisance; an unhandled
+            // rejection out of a MutationObserver is a console full of noise on every
+            // menu, in a client that is not ours to break.
+            log('could not add the buttons to this menu: ' + err);
         });
     }
 
@@ -488,18 +502,92 @@
 
         lapseGet('Lapse/Items/' + itemId + '/Subtitles').then(function (subtitles) {
             if (subtitles.length === 0) {
-                showLapseToast('No external subtitle found for this item.');
+                showLapseToast('No subtitle found for this item, in a file or in the video.');
                 return;
             }
 
-            if (subtitles.length === 1) {
-                doSync(itemId, subtitles[0].Path);
+            // Picture based tracks hold no text, so nothing here can line them up.
+            var usable = subtitles.filter(function (s) { return s.Supported !== false; });
+
+            if (usable.length === 0) {
+                showLapseToast('The only subtitles on this item are picture based (PGS or VobSub). Those are images of text, so they need OCR before anything can sync them.');
                 return;
             }
 
-            openSubtitlePickerPopup(itemId, subtitles);
+            // Everything left is in a format no engine reads, but the plugin can convert
+            // it into one that they do. Worth offering rather than refusing.
+            var syncable = usable.filter(function (s) { return !s.NeedsConversion; });
+
+            if (syncable.length === 0) {
+                offerConversion(itemId, usable);
+                return;
+            }
+
+            if (syncable.length === 1) {
+                doSync(itemId, syncable[0].Path);
+                return;
+            }
+
+            openSubtitlePickerPopup(itemId, syncable);
         }).catch(function (err) {
             showLapseToast('Could not check subtitles: ' + err.message);
+        });
+    }
+
+    function uncapitalize(text) {
+        return text ? text.charAt(0).toLowerCase() + text.slice(1) : '';
+    }
+
+    // Shown when everything on the item is in a format the engines cannot read. Converting
+    // it is one press, and the setting decides whether the sync follows on its own.
+    function offerConversion(itemId, subtitles) {
+        var formats = subtitles.map(function (s) { return '.' + s.Format; })
+            .filter(function (f, i, all) { return all.indexOf(f) === i; })
+            .join(', ');
+
+        var overlay = openOverlay(
+            '<h3>Format not supported by the engines</h3>' +
+            '<div class="fieldDescription">This item only has ' + escapeHtml(formats) +
+            ', which no sync engine reads. The plugin can convert it first, and then sync the result.</div>' +
+            (subtitles.length > 1
+                ? '<div class="selectContainer">' +
+                  '  <label class="selectLabel">Subtitle</label>' +
+                  '  <select is="emby-select" id="lapseConvertPick" class="emby-select-withcolor emby-select">' +
+                  subtitleOptionsHtml(subtitles) +
+                  '  </select>' +
+                  '</div>'
+                : '') +
+            '<div class="lapseDialogButtons">' +
+            '  <button is="emby-button" type="button" class="raised" id="lapseOfferCancel"><span>Cancel</span></button>' +
+            '  <button is="emby-button" type="button" class="raised button-submit" id="lapseOfferConvert"><span>Convert</span></button>' +
+            '</div>');
+
+        overlay.querySelector('#lapseOfferCancel').addEventListener('click', function () {
+            overlay.remove();
+        });
+
+        overlay.querySelector('#lapseOfferConvert').addEventListener('click', function () {
+            var picker = overlay.querySelector('#lapseConvertPick');
+            var path = picker ? picker.value : subtitles[0].Path;
+
+            overlay.remove();
+            showLapseToast('Converting...');
+
+            // No TargetFormat and no ReplaceOriginal: both come from the Conversion
+            // settings, which is where that decision belongs.
+            lapsePost('Lapse/Convert', { ItemId: itemId, SubtitlePath: path }).then(function (result) {
+                if (result.SyncedAfter && result.Sync) {
+                    // Only the first letter comes down - lowercasing the whole sentence
+                    // used to mangle the file path and the engine's name along with it.
+                    showLapseToast('Converted to ' + result.Format + ' and ' +
+                        uncapitalize(describeSyncOutcome(result.Sync)));
+                    return;
+                }
+
+                showLapseToast('Converted to ' + result.Format + ': ' + result.OutputPath);
+            }).catch(function (err) {
+                showLapseToast('Could not convert: ' + err.message);
+            });
         });
     }
 
@@ -564,10 +652,45 @@
 
         if (result.Skipped) {
             return 'Left the original alone - ' + describeResult(result) +
-                ', which is under the confidence threshold. Change that under File output in the LAPSE dashboard.';
+                ', which is under the confidence threshold. Change what happens then under ' +
+                'File output in the LAPSE dashboard, or, if you are sure the subtitle belongs ' +
+                'to this video, turn on "Sync even when the engine is unsure" under Engines - Advanced.';
         }
 
-        return 'Synced! ' + describeResult(result);
+        var converted = result.ConvertedFrom
+            ? ' Converted from .' + result.ConvertedFrom + ' first, so the result is ' +
+              (result.OutputPath || '').split('.').pop() + '.'
+            : '';
+
+        return 'Synced! ' + describeResult(result) + converted;
+    }
+
+    function describePipelineOutcome(result) {
+        if (result.Error) {
+            return 'Stopped: ' + result.Error;
+        }
+
+        var parts = [];
+
+        if (result.Extracted) {
+            parts.push('Pulled the track out of the video');
+        }
+
+        if (result.ConvertedFrom) {
+            parts.push('converted it from .' + result.ConvertedFrom);
+        }
+
+        if (result.Sync) {
+            parts.push(describeSyncOutcome(result.Sync).replace(/^Synced! /, 'synced: '));
+        }
+
+        if (result.Translation) {
+            parts.push(result.Translation.Success
+                ? ('translated ' + result.Translation.TranslatedCount + ' of ' + result.Translation.LineCount + ' lines to ' + result.Translation.OutputPath)
+                : ('translation failed: ' + result.Translation.Error));
+        }
+
+        return parts.length ? parts.join(', ') + '.' : 'Nothing to do.';
     }
 
     function doSync(itemId, subtitlePath) {
@@ -583,6 +706,127 @@
         });
     }
 
+    // --- "Convert Subtitles" ---
+
+    var CONVERT_FORMATS = ['srt', 'vtt', 'ass', 'ssa'];
+
+    function openConvertPopup(context) {
+        showLapseToast('Checking subtitles...');
+
+        lapseGet('Lapse/Items/' + context.id + '/Subtitles').then(function (subtitles) {
+            var convertible = subtitles.filter(function (s) { return s.Supported !== false; });
+
+            if (convertible.length === 0) {
+                showLapseToast(subtitles.length === 0
+                    ? 'No external subtitle found for this item.'
+                    : 'The subtitles on this item are picture based (PGS or VobSub). There is no text in those to convert - they need OCR first.');
+                return;
+            }
+
+            showConvertDialog(context, convertible);
+        }).catch(function (err) {
+            showLapseToast('Could not check subtitles: ' + err.message);
+        });
+    }
+
+    function showConvertDialog(context, subtitles) {
+        var overlay = openOverlay(
+            '<h3>Convert Subtitles</h3>' +
+            '<div class="fieldDescription">Writes a new file in the format you pick. The original is left ' +
+            'alone unless you say otherwise. Formats no engine reads, like MicroDVD .sub, become plain ' +
+            'srt that everything else here works on.</div>' +
+            '<div class="selectContainer">' +
+            '  <label class="selectLabel">Subtitle</label>' +
+            '  <select is="emby-select" id="lapseConvertSubtitle" class="emby-select-withcolor emby-select">' +
+            subtitleOptionsHtml(subtitles) +
+            '  </select>' +
+            '</div>' +
+            '<div class="selectContainer">' +
+            '  <label class="selectLabel">Convert to</label>' +
+            '  <select is="emby-select" id="lapseConvertFormat" class="emby-select-withcolor emby-select">' +
+            CONVERT_FORMATS.map(function (f) {
+                return '<option value="' + f + '">.' + f + '</option>';
+            }).join('') +
+            '  </select>' +
+            '</div>' +
+            '<label class="emby-checkbox-label lapseStackedCheck">' +
+            '  <input type="checkbox" is="emby-checkbox" id="lapseConvertReplace" />' +
+            '  <span>Delete the original once the new file is written</span>' +
+            '</label>' +
+            '<div class="lapseDialogButtons">' +
+            '  <button is="emby-button" type="button" class="raised" id="lapseConvertCancel"><span>Cancel</span></button>' +
+            '  <button is="emby-button" type="button" class="raised button-submit" id="lapseConvertApply"><span>Convert</span></button>' +
+            '</div>');
+
+        var select = overlay.querySelector('#lapseConvertSubtitle');
+        var formatSelect = overlay.querySelector('#lapseConvertFormat');
+
+        // Default to something that isn't what the file already is, so the first press
+        // does something.
+        function pickDefaultFormat() {
+            var current = currentFormat();
+            formatSelect.value = current === 'srt' ? 'vtt' : 'srt';
+        }
+
+        function currentFormat() {
+            var match = /\.([a-z0-9]+)$/i.exec(select.value || '');
+            return match ? match[1].toLowerCase() : '';
+        }
+
+        select.addEventListener('change', pickDefaultFormat);
+        pickDefaultFormat();
+
+        overlay.querySelector('#lapseConvertCancel').addEventListener('click', function () {
+            overlay.remove();
+        });
+
+        overlay.querySelector('#lapseConvertApply').addEventListener('click', function () {
+            var target = formatSelect.value;
+
+            if (target === currentFormat()) {
+                showLapseToast('That subtitle is already ' + target + '.');
+                return;
+            }
+
+            var replace = overlay.querySelector('#lapseConvertReplace').checked;
+
+            // Read everything off the dialog before it goes, rather than reaching into
+            // detached nodes from the callback.
+            var subtitlePath = select.value;
+
+            overlay.remove();
+            showLapseToast('Converting to ' + target + '...');
+
+            lapsePost('Lapse/Convert', {
+                ItemId: context.id,
+                SubtitlePath: subtitlePath,
+                TargetFormat: target,
+                ReplaceOriginal: replace
+            }).then(function (result) {
+                showLapseToast(describeConvertOutcome(result));
+            }).catch(function (err) {
+                showLapseToast('Could not convert: ' + err.message);
+            });
+        });
+    }
+
+    // Conversion is set to carry on into a sync by default, so a toast that only mentions
+    // the file that was written leaves out the half of the job people actually care about
+    // - including the case where the sync then refused to touch anything.
+    function describeConvertOutcome(result) {
+        var written = 'Wrote ' + result.Cues + ' cues to ' + result.OutputPath;
+
+        if (result.RemovedOriginal) {
+            written += ', and deleted the original';
+        }
+
+        if (!result.SyncedAfter || !result.Sync) {
+            return written + '.';
+        }
+
+        return written + '. ' + describeSyncOutcome(result.Sync);
+    }
+
     // --- "Shift Subtitles" ---
 
     function openShiftPopup(context) {
@@ -590,13 +834,13 @@
 
         lapseGet('Lapse/Items/' + context.id + '/Subtitles').then(function (subtitles) {
             var shiftable = subtitles.filter(function (s) {
-                return /\.(srt|vtt)$/i.test(s.Path);
+                return /\.(srt|vtt|ass|ssa)$/i.test(s.Path);
             });
 
             if (shiftable.length === 0) {
                 showLapseToast(subtitles.length === 0
                     ? 'No external subtitle found for this item.'
-                    : 'Shifting only works on .srt and .vtt files, and this item has neither.');
+                    : 'Shifting works on .srt, .vtt, .ass and .ssa files, and this item has none of those. Convert it first.');
                 return;
             }
 
@@ -740,18 +984,26 @@
     // Same arithmetic the server does, so the preview matches what Apply will produce
     // without a round trip on every keystroke.
     function shiftTimingLine(line, offsetMs) {
-        return line.replace(/(\d{1,3}):(\d{2}):(\d{2})([,.])(\d{1,3})/g, function (all, h, m, s, sep, ms) {
+        return line.replace(/(\d{1,3}):(\d{2}):(\d{2})([,.])(\d{1,3})/g, function (all, h, m, s, sep, frac) {
             var total = (parseInt(h, 10) * 3600000) + (parseInt(m, 10) * 60000) +
-                (parseInt(s, 10) * 1000) + parseInt(ms.padEnd(3, '0'), 10) + offsetMs;
+                (parseInt(s, 10) * 1000) + parseInt(frac.padEnd(3, '0'), 10) + offsetMs;
 
             if (total < 0) {
                 total = 0;
             }
 
-            return pad(Math.floor(total / 3600000), 2) + ':' +
+            // Written back with the same widths it came in with. ass and ssa count in
+            // centiseconds behind a single digit hour, and pushing srt's milliseconds
+            // into one of those would make a file no player will read.
+            var ms = total % 1000;
+            var fraction = frac.length === 2 ? Math.floor(ms / 10)
+                : frac.length === 1 ? Math.floor(ms / 100)
+                : ms;
+
+            return pad(Math.floor(total / 3600000), h.length) + ':' +
                 pad(Math.floor(total / 60000) % 60, 2) + ':' +
                 pad(Math.floor(total / 1000) % 60, 2) + sep +
-                pad(total % 1000, 3);
+                pad(fraction, frac.length);
         });
     }
 
@@ -1029,6 +1281,34 @@
             '  <div class="fieldDescription" id="lapseAdvPenaltyNote"></div>' +
             '</div>' +
             subtitleSection +
+            '<div class="selectContainer">' +
+            '  <label class="selectLabel">Write the result as</label>' +
+            '  <select is="emby-select" id="lapseAdvFormat" class="emby-select-withcolor emby-select">' +
+            '    <option value="">Same format as the subtitle</option>' +
+            CONVERT_FORMATS.map(function (f) {
+                return '<option value="' + f + '">.' + f + '</option>';
+            }).join('') +
+            '  </select>' +
+            '  <div class="fieldDescription">Picking a different format writes the synced result as that ' +
+            'format and leaves the original file where it is.</div>' +
+            '</div>' +
+            '<div class="selectContainer">' +
+            '  <label class="selectLabel">File output</label>' +
+            '  <select is="emby-select" id="lapseAdvOutputMode" class="emby-select-withcolor emby-select">' +
+            '    <option value="">Whatever the settings say</option>' +
+            '    <option value="SidecarOnly">Write a new file</option>' +
+            '    <option value="SidecarWithBackup">Write a new file, keep a backup</option>' +
+            '    <option value="OverwriteWithBackup">Overwrite, keep a backup</option>' +
+            '    <option value="OverwriteNoBackup">Overwrite, no backup</option>' +
+            '  </select>' +
+            '  <div class="fieldDescription">Just for this run. The default is on the File output page.</div>' +
+            '</div>' +
+            '<label class="emby-checkbox-label lapseStackedCheck">' +
+            '  <input type="checkbox" is="emby-checkbox" id="lapseAdvAlsoTranslate" />' +
+            '  <span>Translate it as well, using the boxes further down</span>' +
+            '</label>' +
+            '<div class="fieldDescription">Ticked, Sync does all of it in one go: converts the format if ' +
+            'you picked one, lines it up, then translates what came out. Left alone, Sync only syncs.</div>' +
             '<div class="lapseDialogButtons">' +
             '  <button is="emby-button" type="button" class="raised" id="lapseAdvClose"><span>Close</span></button>' +
             '  <button is="emby-button" type="button" class="raised button-submit" id="lapseAdvSync"' +
@@ -1083,17 +1363,29 @@
         });
 
         overlay.querySelector('#lapseAdvSync').addEventListener('click', function () {
-            overlay.remove();
-            showLapseToast('Syncing...');
+            var alsoTranslate = overlay.querySelector('#lapseAdvAlsoTranslate').checked;
+            var translation = alsoTranslate ? collectTranslationRequest() : null;
 
-            lapsePost('Lapse/Sync', {
+            if (alsoTranslate && !translation) {
+                showLapseToast('Fill in the target language further down before asking for a translation too.');
+                return;
+            }
+
+            overlay.remove();
+            showLapseToast(alsoTranslate ? 'Syncing and translating...' : 'Syncing...');
+
+            lapsePost('Lapse/Pipeline', {
                 ItemId: context.id,
+                SubtitlePath: selectedSubtitlePath(),
                 EngineId: currentEngine().Id,
                 Mode: modeSelect.value,
                 Penalty: currentPenalty(),
-                SubtitlePath: selectedSubtitlePath()
+                Sync: true,
+                OutputFormat: overlay.querySelector('#lapseAdvFormat').value || null,
+                OutputMode: overlay.querySelector('#lapseAdvOutputMode').value || null,
+                Translation: translation
             }).then(function (result) {
-                showLapseToast(describeSyncOutcome(result));
+                showLapseToast(describePipelineOutcome(result));
             }).catch(function (err) {
                 showLapseToast('Sync failed: ' + err.message);
             });
@@ -1113,6 +1405,29 @@
             confidenceSlider.addEventListener('input', function () {
                 overlay.querySelector('#lapseAdvConfidenceValue').textContent = confidenceSlider.value;
             });
+        }
+
+        // The translation boxes are further down the same dialog, so a combined run can
+        // read them without asking twice.
+        function collectTranslationRequest() {
+            var targetInput = overlay.querySelector('#lapseAdvTargetLang');
+            var target = targetInput ? (targetInput.value || '').trim() : '';
+
+            if (!target) {
+                return null;
+            }
+
+            var slider = overlay.querySelector('#lapseAdvConfidence');
+
+            return {
+                ItemId: context.id,
+                SubtitlePath: selectedSubtitlePath(),
+                SourceLanguage: (overlay.querySelector('#lapseAdvSourceLang').value || '').trim() || null,
+                TargetLanguage: target,
+                Provider: overlay.querySelector('#lapseAdvProvider').value,
+                ConfidenceThreshold: slider ? parseInt(slider.value, 10) : 70,
+                IncludeMetadataHeader: overlay.querySelector('#lapseAdvMetadataHeader').checked
+            };
         }
 
         var translateButton = overlay.querySelector('#lapseAdvTranslate');

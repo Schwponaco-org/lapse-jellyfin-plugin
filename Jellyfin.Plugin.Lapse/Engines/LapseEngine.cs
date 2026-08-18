@@ -34,8 +34,8 @@ public partial class LapseEngine : IEngine
     /// </summary>
     public const double DefaultConfidenceSigma = 8.0;
 
-    private const string RepoUrl = "https://github.com/rs-jensen/lapse";
-    private const string BenchmarksUrl = "https://github.com/rs-jensen/lapse/blob/main/docs/benchmarks.md";
+    private const string RepoUrl = "https://github.com/Schwponaco-org/lapse";
+    private const string BenchmarksUrl = "https://github.com/Schwponaco-org/lapse/blob/main/docs/benchmarks.md";
 
     // The files that ship in the same archive as the binary and have to land beside it.
     // silero.cpp's loader looks for these next to the executable and quietly falls back to
@@ -187,7 +187,7 @@ public partial class LapseEngine : IEngine
                 + "language either of them is in. Works out on its own whether the file is shifted, "
                 + "stretched, split or re-cut, and says how sure it is about the answer.",
             ProjectUrl = RepoUrl,
-            GitHubRepo = "rs-jensen/lapse",
+            GitHubRepo = "Schwponaco-org/lapse",
             BuildGuideUrl = RepoUrl + "#building",
             ExecutableName = "lapse",
             EditsInPlace = true,

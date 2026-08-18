@@ -24,4 +24,39 @@ public class SubtitleOption
     /// Gets or sets the subtitle language, if Jellyfin knows it.
     /// </summary>
     public string? Language { get; set; }
+
+    /// <summary>
+    /// Gets or sets the format, without the dot: srt, vtt, ass, ssa, sub and so on.
+    /// </summary>
+    public string Format { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether this file has to be converted to srt
+    /// before an engine can touch it. True for the text formats the engines don't read,
+    /// like MicroDVD .sub.
+    /// </summary>
+    public bool NeedsConversion { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether the plugin can do anything with this file
+    /// at all. False for the picture based formats (PGS, VobSub), which hold no text.
+    /// </summary>
+    public bool Supported { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether this track is still inside the video file
+    /// rather than sitting beside it. Those get pulled out to a real file the first time
+    /// something needs to work on them.
+    /// </summary>
+    public bool IsEmbedded { get; set; }
+
+    /// <summary>
+    /// Gets or sets the codec of an embedded track, as Jellyfin reported it.
+    /// </summary>
+    public string? Codec { get; set; }
+
+    /// <summary>
+    /// Gets a value indicating whether this file's timings can be shifted by hand.
+    /// </summary>
+    public bool Shiftable => !IsEmbedded && Services.SubtitleFormats.IsNative(Path);
 }

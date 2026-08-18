@@ -26,11 +26,17 @@ You need Jellyfin 10.11 or newer.
 
 Every film, episode and loose video gets two new entries in its three dot menu.
 
-**Sync Subtitles** is the one you will use. Press it, press Sync, wait. If the item has several subtitle files it asks which one. There is an Advanced button in there too if you want to pick a different mode, translate the subtitle, or nudge the timing by hand.
+**Sync Subtitles** is the one you will use. Press it, press Sync, wait. If the item has several subtitles it asks which one. There is an Advanced button in there too if you want to pick a different mode, a different output format, translate the subtitle, or nudge the timing by hand.
+
+Subtitles that came inside the video file count. Most films only ever have those, and an engine cannot read a track that only exists inside an mkv, so the first time you sync one the plugin copies it out to a file next to the video and works on that. It is a one off: from then on it is an ordinary subtitle file, and Jellyfin picks it up as another track on its next scan. Picture based tracks (PGS, VobSub) are listed but cannot be synced, because they are images of text rather than text.
 
 **Sync All Subtitles to Reference** is for items with several subtitle tracks where one of them is already correct. Pick that one and everything else on the item gets lined up against it. Matching a subtitle against another subtitle skips the audio entirely, so it takes a second or two instead of a minute, and it is usually more accurate than syncing each track separately.
 
-There is also a **Shift Subtitles** entry for when a sync gets close but is still a hair off. It shows you a real line from the file, a slider, and a millisecond box, and the preview updates as you drag. It does not touch the engine, so it works even before you have installed one.
+There is also a **Shift Subtitles** entry for when a sync gets close but is still a hair off. It shows you a real line from the file, a slider, and a millisecond box, and the preview updates as you drag. It does not touch the engine, so it works even before you have installed one. Works on `.srt`, `.vtt`, `.ass` and `.ssa`.
+
+**Convert Subtitles** writes one of the item's subtitles out as `.srt`, `.vtt`, `.ass` or `.ssa`. The original stays where it is unless you tell it to delete it. Useful on its own when a player only takes one format, and it is also how you get a hand-editable `.srt` or `.vtt` out of an `.ass`/`.ssa` file before shifting it. The Advanced sync dialog has the same choice built in as "Write the result as", along with a file output mode for that one run and a tick box for translating as well, so one press can convert, sync and translate in that order. Subtitles in a text format no engine reads, MicroDVD, SAMI, SubViewer and a few others, get converted automatically the first time you sync one: the plugin turns it into `.srt` behind the scenes and syncs that. Picture-based subtitles (PGS, VobSub) hold no text at all, so there is nothing here to convert. Those need OCR first, with something like Subtitle Edit.
+
+Who besides you can use any of this on an item they can already see is controlled from Settings > Access, described below.
 
 ## The dashboard
 
@@ -42,7 +48,11 @@ What is behind that Settings group:
 
 **Libraries** has an on/off switch per library and an optional schedule with a day and a time. A library you have never touched counts as on, so an update never quietly stops syncing something.
 
-**File output** decides what happens to the file you synced. This is the setting worth reading before you run a bulk sync.
+**Access** decides who besides you can sync, shift, convert and translate. Admin only by default.
+
+**File output** decides what happens to the file you synced. This is the setting worth reading before you run a bulk sync. It is about synced files only; converted ones have their own page.
+
+**Conversion** is where format changing lives: which format to convert to (srt by default, since everything reads it), whether the file it read is kept or deleted (kept by default, so there is always something to go back to), and whether a subtitle that had to be converted before an engine could read it then gets synced automatically (it does by default).
 
 **Ignore list** is for things you never want touched automatically. Ignoring a series or a folder covers everything inside it, and ignored items show up greyed out and struck through in the status list so you can see at a glance what is being left alone. You can still sync an ignored item by hand.
 
@@ -54,6 +64,17 @@ What is behind that Settings group:
 
 Outside the Settings group there is a **Sync status** list of every syncable item with search and filters, a **Bulk sync** page for running the whole library or one folder, and **Subtitle to subtitle** for lining up two files without going through a library item at all.
 
+## Access
+
+The item menu entries (Sync, Shift, Convert, Translate) are admin only until you say otherwise in Settings > Access. Everything else, the dashboard itself, engines, libraries, bulk sync, the ignore list, stays admin only no matter what is picked here, since that is server configuration rather than something done to one item.
+
+| Mode | Who |
+|---|---|
+| Administrators only | Nobody else. The default, and how LAPSE has always behaved. |
+| Anyone allowed to manage subtitles | Users with Jellyfin's own "manage subtitles" permission, the same one that already lets them download a subtitle file into the library. |
+| Only the users I pick | Named people, whatever other permissions they have. Picked from a list on the Access page. |
+| Every signed in user | Anyone with an account. Worth being sure about, since it lets them rewrite subtitle files in your library. |
+
 ## Engines
 
 **LAPSE** is the one this plugin is built around and the one to use. It listens to the audio and works out on its own whether the subtitle is simply early, drifting because it was made for a different framerate, split across a re-cut, or some combination, then fixes whichever it is. It also says how sure it is about the answer, which none of the others do. Builds are published for Linux, macOS and Windows on both Intel and ARM, so it runs wherever Jellyfin does.
@@ -62,7 +83,7 @@ Outside the Settings group there is a **Sync status** list of every syncable ite
 
 **ffsubsync** shifts the whole subtitle and can correct a framerate mismatch. It also has a split mode when you give it a split penalty. Builds for Linux x86_64 and arm64, Windows x64, and macOS on Intel and Apple silicon.
 
-If you want the actual numbers rather than my word for it, there is a [benchmark writeup](https://github.com/rs-jensen/lapse/blob/main/docs/benchmarks.md) comparing all three across 39 films picked to be hard, with timings and failure cases. The [engine repo](https://github.com/rs-jensen/lapse) has the rest of the detail.
+If you want the actual numbers rather than my word for it, there is a [benchmark writeup](https://github.com/Schwponaco-org/lapse/blob/main/docs/benchmarks.md) comparing all three across 39 films picked to be hard, with timings and failure cases. The [engine repo](https://github.com/Schwponaco-org/lapse) has the rest of the detail.
 
 Engines install into your Jellyfin data folder under `lapse/engines/<engine>`.
 
@@ -98,6 +119,8 @@ There are four ways a sync can end up on disk:
 | Overwrite, no backup | Replaces the subtitle and keeps nothing. |
 
 Jellyfin picks up a new file as an extra subtitle track on its next scan, so with the sidecar modes you end up with both timings and can switch between them in the player. The `.shifted` part is configurable.
+
+Subtitle files are not all UTF-8. Arabic ones are usually Windows-1256, Russian ones Windows-1251, and older Western European ones Windows-1252. The plugin works out which before reading, so nothing turns into question marks on the way through, and writes everything back as UTF-8, which every player reads correctly whatever the language or its writing direction.
 
 Whatever the mode, the engine writes to a temporary file first and it is only moved into place once the run finished and actually produced something. A crashed or cancelled run cannot destroy a working subtitle.
 

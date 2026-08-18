@@ -95,6 +95,14 @@ public class SyncResult
     public string? OutputPath { get; set; }
 
     /// <summary>
+    /// Gets or sets the format the subtitle was in before the plugin converted it so an
+    /// engine could read it, or null when no conversion was needed. Worth surfacing,
+    /// since it explains why the result has a different extension from the file that was
+    /// picked.
+    /// </summary>
+    public string? ConvertedFrom { get; set; }
+
+    /// <summary>
     /// Gets or sets the path of the backup that was taken before overwriting, if the
     /// output mode asked for one.
     /// </summary>

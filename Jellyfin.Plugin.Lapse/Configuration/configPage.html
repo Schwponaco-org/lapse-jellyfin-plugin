@@ -69,6 +69,14 @@
                             <span class="lapseNavLabel">File output</span>
                             <span class="lapseNavHint" id="lapseOutputHint"></span>
                         </button>
+                        <button type="button" class="lapseNavItem" data-panel="lapsePanelConversion">
+                            <span class="lapseNavLabel">Conversion</span>
+                            <span class="lapseNavHint" id="lapseConversionHint"></span>
+                        </button>
+                        <button type="button" class="lapseNavItem" data-panel="lapsePanelAccess">
+                            <span class="lapseNavLabel">Access</span>
+                            <span class="lapseNavHint" id="lapseAccessHint"></span>
+                        </button>
                         <button type="button" class="lapseNavItem" data-panel="lapsePanelIgnore">
                             <span class="lapseNavLabel">Ignore list</span>
                             <span class="lapseNavHint" id="lapseIgnoreHint"></span>
@@ -271,6 +279,11 @@
                             <input is="emby-input" id="lapseSidecarSuffix" type="text" />
                             <div class="fieldDescription" id="lapseSidecarPreview"></div>
                         </div>
+                        <div class="fieldDescription lapseTightNote">
+                            This page is about synced files. Changing a subtitle's format, and what
+                            happens to the file it was converted from, is on the <strong>Conversion</strong>
+                            page instead.
+                        </div>
 
                         <h3 class="lapseSubHeading">Confidence</h3>
                         <div class="fieldDescription lapseTightNote">
@@ -293,6 +306,56 @@
 
                         <button is="emby-button" type="button" id="btnSaveOutput" class="raised button-submit lapseSmallButton">
                             <span>Save output settings</span>
+                        </button>
+                    </section>
+
+                    <section class="lapsePanel" id="lapsePanelConversion">
+                        <h2 class="lapsePanelTitle">Conversion</h2>
+                        <div class="fieldDescription lapseTightNote">
+                            Everything about changing a subtitle's format lives here, including where
+                            converted files land. The File output page decides that for synced files, not
+                            for converted ones.
+                        </div>
+
+                        <h3 class="lapseSubHeading">Convert to</h3>
+                        <div id="lapseConversionFormats" class="lapseRadioGroup"></div>
+
+                        <h3 class="lapseSubHeading">What happens to the file it read</h3>
+                        <div id="lapseConversionOriginal" class="lapseRadioGroup"></div>
+
+                        <h3 class="lapseSubHeading">When a subtitle has to be converted before it can be synced</h3>
+                        <div class="fieldDescription lapseTightNote">
+                            Some formats no engine reads at all, MicroDVD and SAMI among them. Those get
+                            turned into a format that works before anything else can happen.
+                        </div>
+                        <div id="lapseConversionSync" class="lapseRadioGroup"></div>
+
+                        <button is="emby-button" type="button" id="btnSaveConversion" class="raised button-submit lapseSmallButton">
+                            <span>Save conversion settings</span>
+                        </button>
+                    </section>
+
+                    <section class="lapsePanel" id="lapsePanelAccess">
+                        <h2 class="lapsePanelTitle">Access</h2>
+                        <div class="fieldDescription lapseTightNote">
+                            Who, besides administrators, can sync, shift, convert and translate the
+                            subtitles of an item they can already see. This is only about the entries in
+                            the item menu: this dashboard, the engines, the libraries and the bulk runs
+                            stay administrator only whatever is picked here.
+                        </div>
+                        <div id="lapseAccessModes" class="lapseRadioGroup"></div>
+
+                        <div id="lapseAccessUsersContainer" class="hide">
+                            <h3 class="lapseSubHeading">Who</h3>
+                            <div class="fieldDescription lapseTightNote">
+                                Users with a tick can work on subtitles. Administrators always can and
+                                aren't listed.
+                            </div>
+                            <div id="lapseAccessUsers" class="lapseAccessUsers"></div>
+                        </div>
+
+                        <button is="emby-button" type="button" id="btnSaveAccess" class="raised button-submit lapseSmallButton">
+                            <span>Save access settings</span>
                         </button>
                     </section>
 

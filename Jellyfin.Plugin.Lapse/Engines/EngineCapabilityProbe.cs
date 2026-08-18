@@ -106,20 +106,35 @@ public partial class EngineCapabilityProbe
         }
 
         var fromUsage = await TryUsageTextAsync(binaryPath, cancellationToken).ConfigureAwait(false);
+
+        // Most engines that don't answer --capabilities still answer --version, and that's
+        // the only way to put a version on a binary the plugin didn't install itself. It's
+        // asked for either way now: a binary whose usage text gives up nothing still has a
+        // version worth showing, and that used to be thrown away with the rest.
+        var version = await TryVersionCallAsync(binaryPath, cancellationToken).ConfigureAwait(false);
+
         if (fromUsage is not null)
         {
-            // Most engines that don't answer --capabilities still answer --version, and
-            // that's the only way to put a version on a binary the plugin didn't install
-            // itself. Nothing breaks when it isn't supported: the engine prints its usage
-            // text, no version comes out of it, and the card just doesn't show one.
-            fromUsage.Version = await TryVersionCallAsync(binaryPath, cancellationToken).ConfigureAwait(false);
+            fromUsage.Version = version;
 
             _logger.LogDebug(
                 "{Path} has no --capabilities, read {Flags} out of its usage text instead (version {Version})",
                 binaryPath,
                 string.Join(", ", fromUsage.Flags),
-                fromUsage.Version ?? "not reported");
+                version ?? "not reported");
             return fromUsage;
+        }
+
+        if (version is not null)
+        {
+            _logger.LogDebug("{Path} only answered --version ({Version}), sticking to the safe flags", binaryPath, version);
+
+            return new EngineRuntimeInfo
+            {
+                Probed = true,
+                Source = "version",
+                Version = version
+            };
         }
 
         _logger.LogDebug("Could not work out what {Path} supports, falling back to the safe defaults", binaryPath);
@@ -138,13 +153,31 @@ public partial class EngineCapabilityProbe
         // things that aren't versions, so only trust output that is short enough to be a
         // real answer.
         var text = (stdout + "\n" + stderr).Trim();
-        if (text.Length == 0 || text.Length > 120)
+
+        // An engine that doesn't know --version prints its whole usage text, which is
+        // full of numbers that aren't versions. A real answer is a line or two, so
+        // anything longer is treated as usage text and ignored.
+        if (text.Length == 0 || text.Length > 200 || CountLines(text) > 3)
         {
             return null;
         }
 
         var match = VersionRegex().Match(text);
         return match.Success ? match.Groups["version"].Value : null;
+    }
+
+    private static int CountLines(string text)
+    {
+        var lines = 1;
+        foreach (var c in text)
+        {
+            if (c == '\n')
+            {
+                lines++;
+            }
+        }
+
+        return lines;
     }
 
     private async Task<EngineRuntimeInfo?> TryCapabilitiesCallAsync(string binaryPath, CancellationToken cancellationToken)

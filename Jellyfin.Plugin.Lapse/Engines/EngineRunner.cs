@@ -9,6 +9,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.Lapse.Data;
+using Jellyfin.Plugin.Lapse.Services;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller.MediaEncoding;
 using Microsoft.Extensions.Logging;
@@ -26,6 +27,7 @@ public class EngineRunner
     private readonly EngineRegistry _registry;
     private readonly EngineCapabilityProbe _probe;
     private readonly IMediaEncoder _mediaEncoder;
+    private readonly SubtitleConverter _converter;
     private readonly ILogger<EngineRunner> _logger;
 
     /// <summary>
@@ -35,18 +37,21 @@ public class EngineRunner
     /// <param name="registry">The known engines.</param>
     /// <param name="probe">Asks the installed binary which flags it understands.</param>
     /// <param name="mediaEncoder">Used to find the ffmpeg Jellyfin already ships.</param>
+    /// <param name="converter">Turns subtitles the engines can't read into ones they can.</param>
     /// <param name="logger">Logger.</param>
     public EngineRunner(
         IApplicationPaths applicationPaths,
         EngineRegistry registry,
         EngineCapabilityProbe probe,
         IMediaEncoder mediaEncoder,
+        SubtitleConverter converter,
         ILogger<EngineRunner> logger)
     {
         _applicationPaths = applicationPaths;
         _registry = registry;
         _probe = probe;
         _mediaEncoder = mediaEncoder;
+        _converter = converter;
         _logger = logger;
     }
 
@@ -161,12 +166,15 @@ public class EngineRunner
     /// </summary>
     /// <param name="subtitlePath">The subtitle that's being synced.</param>
     /// <param name="mode">The output mode.</param>
+    /// <param name="outputFormat">The format the result should be written in, without a
+    /// dot, or null to keep the one it came in. Asking for a different format always
+    /// leaves the original file alone, since the result can no longer take its name.</param>
     /// <returns>Where to write the result.</returns>
-    public static string ResolveDestination(string subtitlePath, OutputMode mode)
+    public static string ResolveDestination(string subtitlePath, OutputMode mode, string? outputFormat = null)
     {
         if (mode is OutputMode.OverwriteWithBackup or OutputMode.OverwriteNoBackup)
         {
-            return subtitlePath;
+            return ApplyFormat(subtitlePath, outputFormat);
         }
 
         var suffix = Plugin.Instance?.Configuration.SidecarSuffix;
@@ -190,7 +198,18 @@ public class EngineRunner
             stem = stem[..^suffix.Length];
         }
 
-        return Path.Combine(directory, stem + suffix + extension);
+        return ApplyFormat(Path.Combine(directory, stem + suffix + extension), outputFormat);
+    }
+
+    private static string ApplyFormat(string path, string? outputFormat)
+    {
+        if (string.IsNullOrEmpty(outputFormat)
+            || string.Equals(Path.GetExtension(path).TrimStart('.'), outputFormat, StringComparison.OrdinalIgnoreCase))
+        {
+            return path;
+        }
+
+        return Path.ChangeExtension(path, "." + outputFormat);
     }
 
     /// <summary>
@@ -275,6 +294,8 @@ public class EngineRunner
     /// <param name="destinationOverride">An explicit file to write to, which wins over the
     /// output mode's own choice of destination. The mode still decides whether a file
     /// already sitting at that path gets backed up first.</param>
+    /// <param name="outputFormat">The format to write the result in (srt, vtt, ass, ssa),
+    /// or null to keep the format the subtitle came in.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The parsed result.</returns>
     [System.Diagnostics.CodeAnalysis.SuppressMessage(
@@ -289,6 +310,7 @@ public class EngineRunner
         int penalty,
         OutputMode? outputMode = null,
         string? destinationOverride = null,
+        string? outputFormat = null,
         CancellationToken cancellationToken = default)
     {
         var enginePath = ResolvePath(engine);
@@ -304,12 +326,56 @@ public class EngineRunner
         }
 
         var runtime = await _probe.ProbeAsync(enginePath, cancellationToken).ConfigureAwait(false);
+
+        // The engines only read srt, vtt, ass and ssa. Anything else text based - MicroDVD
+        // and the like - gets turned into srt first and the sync runs on that, since the
+        // alternative is turning the item away for a format the plugin can perfectly well
+        // read. The result then has to come out as srt too: there's no writing a MicroDVD
+        // file back, and quietly leaving the old one in place would be worse.
+        string? convertedInput = null;
+        var enginePathIn = subtitlePath;
+
+        if (!SubtitleFormats.IsNative(subtitlePath))
+        {
+            if (_converter.GetConversionProblem(subtitlePath) is { } conversionProblem)
+            {
+                return new SyncResult
+                {
+                    Success = false,
+                    Mode = mode,
+                    EngineId = engine.Descriptor.Id,
+                    Error = conversionProblem
+                };
+            }
+
+            convertedInput = subtitlePath + ".lapse-converted.srt";
+
+            try
+            {
+                await _converter.ConvertAsync(subtitlePath, convertedInput, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is NotSupportedException or InvalidDataException or IOException or TimeoutException)
+            {
+                CleanUp(convertedInput);
+                return new SyncResult
+                {
+                    Success = false,
+                    Mode = mode,
+                    EngineId = engine.Descriptor.Id,
+                    Error = "Could not convert that subtitle into something the engine can read: " + ex.Message
+                };
+            }
+
+            enginePathIn = convertedInput;
+            outputFormat ??= "srt";
+        }
+
         var resolvedOutputMode = ResolveOutputMode(outputMode);
         var destination = string.IsNullOrWhiteSpace(destinationOverride)
-            ? ResolveDestination(subtitlePath, resolvedOutputMode)
+            ? ResolveDestination(subtitlePath, resolvedOutputMode, outputFormat)
             : destinationOverride;
 
-        var workPath = subtitlePath + ".lapse-tmp" + Path.GetExtension(subtitlePath);
+        var workPath = subtitlePath + ".lapse-tmp" + Path.GetExtension(enginePathIn);
 
         try
         {
@@ -318,14 +384,14 @@ public class EngineRunner
                 // this engine rewrites whatever file it's pointed at, so give it a copy to
                 // chew on. For the others we leave the work path missing on purpose, so
                 // "did anything get written" below is a real check rather than always true.
-                File.Copy(subtitlePath, workPath, overwrite: true);
+                File.Copy(enginePathIn, workPath, overwrite: true);
             }
 
             var ffmpegDirectory = GetFfmpegDirectory();
             var args = engine.BuildArguments(new EngineRunOptions
             {
                 ReferencePath = referencePath,
-                InputPath = subtitlePath,
+                InputPath = enginePathIn,
                 OutputPath = workPath,
                 Mode = mode,
                 Penalty = penalty,
@@ -396,21 +462,62 @@ public class EngineRunner
                 {
                     // Keep the original where it is and put the doubtful result beside it,
                     // whatever the output mode would normally have done.
-                    destination = ResolveDestination(subtitlePath, OutputMode.SidecarOnly);
+                    destination = ResolveDestination(subtitlePath, OutputMode.SidecarOnly, outputFormat);
                     resolvedOutputMode = OutputMode.SidecarOnly;
                 }
             }
 
             result.BackupPath = TakeBackup(destination, resolvedOutputMode);
-            File.Move(workPath, destination, overwrite: true);
+
+            if (NeedsFormatChange(workPath, destination))
+            {
+                // The engine wrote in the format it was given; the caller asked for a
+                // different one. Converting on the way out means one file lands, in the
+                // format that was asked for, rather than a synced file plus a stray copy.
+                await _converter.ConvertAsync(workPath, destination, cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                File.Move(workPath, destination, overwrite: true);
+            }
+
             result.OutputPath = destination;
             result.InputPath = subtitlePath;
+            result.ConvertedFrom = convertedInput is null ? null : SubtitleFormats.GetName(subtitlePath);
             return result;
+        }
+        catch (Exception ex) when (ex is NotSupportedException or InvalidDataException or TimeoutException or IOException)
+        {
+            // Only the format conversion on the way out throws these, and by here the
+            // engine has already done its work, so this is a write failure rather than a
+            // sync failure. Either way nothing landed.
+            _logger.LogWarning(ex, "Could not write the synced subtitle as {Format}", outputFormat);
+
+            return new SyncResult
+            {
+                Success = false,
+                Mode = mode,
+                EngineId = engine.Descriptor.Id,
+                Error = "The sync worked, but writing the result out as " + outputFormat + " didn't: " + ex.Message
+            };
         }
         finally
         {
             CleanUp(workPath);
+
+            if (convertedInput is not null)
+            {
+                CleanUp(convertedInput);
+            }
         }
+    }
+
+    private static bool NeedsFormatChange(string workPath, string destination)
+    {
+        return !string.Equals(
+            Path.GetExtension(workPath),
+            Path.GetExtension(destination),
+            StringComparison.OrdinalIgnoreCase);
     }
 
     // Older LAPSE builds always write a .bak next to the file they edit, and the file they

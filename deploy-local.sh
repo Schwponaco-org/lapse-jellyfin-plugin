@@ -9,7 +9,7 @@ BUILD_OUTPUT="$PROJECT_DIR/Jellyfin.Plugin.Lapse/bin/Debug/net9.0"
 # Match the latest published GitHub release (not just any local/pushed tag,
 # which may exist without a finished release if CI failed on it), since
 # build.yaml's version field is not wired into the build.
-LATEST_TAG="$(curl -fsS "https://api.github.com/repos/rs-jensen/lapse-jellyfin-plugin/releases/latest" 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('tag_name',''))" 2>/dev/null)"
+LATEST_TAG="$(curl -fsS "https://api.github.com/repos/Schwponaco-org/lapse-jellyfin-plugin/releases/latest" 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('tag_name',''))" 2>/dev/null)"
 if [ -z "$LATEST_TAG" ]; then
   echo "==> Could not reach GitHub releases API, falling back to latest local tag"
   LATEST_TAG="$(git -C "$PROJECT_DIR" describe --tags --abbrev=0 2>/dev/null || echo v0.0.0)"

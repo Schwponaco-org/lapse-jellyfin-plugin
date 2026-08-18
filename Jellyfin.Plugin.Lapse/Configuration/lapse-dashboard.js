@@ -6,6 +6,7 @@
     'use strict';
 
     var queuePollHandle = null;
+    var queueWasRunning = false;
     var allItems = [];
     var allEngines = [];
     var allLibraries = [];
@@ -14,6 +15,14 @@
     var currentSettings = null;
     var currentOverview = null;
     var currentDiagnostics = null;
+    var currentUsers = [];
+    var ignoreSearchPending = false;
+    var ignoreSearchFetched = false;
+
+    // Said wherever a result was refused for lack of confidence. The way to overrule the
+    // engine is a checkbox two panels away, and nobody finds it by looking.
+    var FORCE_HINT = 'If you are sure the subtitle belongs to this video, turn on ' +
+        '"Sync even when the engine is unsure" under Settings, Engines - Advanced, and run it again.';
 
     var OUTPUT_MODES = [
         {
@@ -35,6 +44,69 @@
             value: 'OverwriteNoBackup',
             label: 'Overwrite, no backup',
             note: 'Replaces the subtitle and keeps nothing.'
+        }
+    ];
+
+    var CONVERSION_FORMATS = [
+        {
+            value: 'srt',
+            label: '.srt',
+            recommended: true,
+            note: 'Read by everything, and the timestamps are the easiest to edit by hand afterwards.'
+        },
+        { value: 'vtt', label: '.vtt', note: 'What browsers use. Same timings as srt with a different separator.' },
+        { value: 'ass', label: '.ass', note: 'Carries positioning and styling. Converting to it does not invent styling that was not there.' },
+        { value: 'ssa', label: '.ssa', note: 'The older version of ass. Pick it only if something you use will not take ass.' }
+    ];
+
+    var CONVERSION_ORIGINAL_MODES = [
+        {
+            value: 'keep',
+            label: 'Keep it, write the new format alongside',
+            recommended: true,
+            note: 'You end up with both files. If the conversion is not what you wanted, delete the new one and nothing was lost.'
+        },
+        {
+            value: 'replace',
+            label: 'Delete it once the new file is written',
+            note: 'Leaves one file behind instead of two. There is no undo for this.'
+        }
+    ];
+
+    var CONVERSION_SYNC_MODES = [
+        {
+            value: 'sync',
+            label: 'Convert it, then sync it',
+            recommended: true,
+            note: 'Converting was only ever the way to get the subtitle into a shape an engine can read, so it carries straight on and syncs.'
+        },
+        {
+            value: 'convert',
+            label: 'Just convert it',
+            note: 'Stops after the conversion and leaves the syncing to you.'
+        }
+    ];
+
+    var ACCESS_MODES = [
+        {
+            value: 'AdminsOnly',
+            label: 'Administrators only',
+            note: 'Nobody else sees a result from the sync entries in the item menu. This is how LAPSE has always behaved.'
+        },
+        {
+            value: 'SubtitleManagers',
+            label: 'Anyone allowed to manage subtitles',
+            note: 'Users with Jellyfin\'s own "subtitle management" permission, which already lets them download subtitle files into the library.'
+        },
+        {
+            value: 'SelectedUsers',
+            label: 'Only the users I pick',
+            note: 'Hand it to named people, whatever other permissions they have.'
+        },
+        {
+            value: 'Everyone',
+            label: 'Every signed in user',
+            note: 'Anyone with an account can rewrite subtitle files in your library. Worth being sure about.'
         }
     ];
 
@@ -519,8 +591,8 @@
             }).join('') +
             '</div>' +
             '<div class="lapseButtonRow">' +
-            '<a is="emby-linkbutton" class="button-link" href="https://github.com/rs-jensen/lapse-jellyfin-plugin" target="_blank" rel="noopener">Plugin on GitHub</a>' +
-            '<a is="emby-linkbutton" class="button-link" href="https://github.com/rs-jensen/lapse" target="_blank" rel="noopener">Engine on GitHub</a>' +
+            '<a is="emby-linkbutton" class="button-link" href="https://github.com/Schwponaco-org/lapse-jellyfin-plugin" target="_blank" rel="noopener">Plugin on GitHub</a>' +
+            '<a is="emby-linkbutton" class="button-link" href="https://github.com/Schwponaco-org/lapse" target="_blank" rel="noopener">Engine on GitHub</a>' +
             '</div>';
     }
 
@@ -1226,10 +1298,13 @@
 
     function refreshQueue(view) {
         return lapseGet('Lapse/Queue').then(function (snapshot) {
-            var section = view.querySelector('#lapseQueueSection');
-            section.classList.toggle('hide', !snapshot.Running);
+            snapshot = snapshot || {};
 
-            if (snapshot.Running) {
+            var section = view.querySelector('#lapseQueueSection');
+            var running = !!snapshot.Running;
+            section.classList.toggle('hide', !running);
+
+            if (running) {
                 var pct = snapshot.Total === 0 ? 0 : Math.round((snapshot.Completed / snapshot.Total) * 100);
                 var unit = snapshot.UnitName || 'item';
                 var plural = snapshot.Total === 1 ? unit : unit + 's';
@@ -1239,10 +1314,20 @@
                     (snapshot.JobName ? snapshot.JobName + ': ' : '') +
                     snapshot.Completed + ' / ' + snapshot.Total + ' ' + plural + ' processed' +
                     (snapshot.CurrentItemName ? (' - ' + snapshot.CurrentItemName) : '');
-            } else if (queuePollHandle) {
+            } else if (queueWasRunning) {
+                // Only on the tick where a job finished. Doing it whenever the queue is
+                // idle meant Lapse/Status - which walks every item in every enabled
+                // library and stats its subtitles - ran every two seconds for as long as
+                // this page was open.
                 refreshItemList(view);
                 refreshOverview(view);
             }
+
+            queueWasRunning = running;
+        }).catch(function (err) {
+            // This runs on a timer, so a server that is restarting or briefly unreachable
+            // must not turn into a rejection every two seconds.
+            console.warn('LAPSE: could not read the sync queue', err);
         });
     }
 
@@ -1304,7 +1389,8 @@
     function renderItemList(view, items) {
         var container = view.querySelector('#lapseItemList');
 
-        allItems = items;
+        allItems = items || [];
+        items = allItems;
 
         // libraries that scan in unrelated video files (phone backups, personal clips,
         // whatever) fill up with items that have no external subtitle at all, so hide
@@ -1325,7 +1411,7 @@
         var search = (view.querySelector('#lapseItemSearch').value || '').trim().toLowerCase();
         if (search) {
             shown = shown.filter(function (i) {
-                return i.Name.toLowerCase().indexOf(search) !== -1;
+                return (i.Name || '').toLowerCase().indexOf(search) !== -1;
             });
         }
 
@@ -1402,6 +1488,15 @@
                 var isIgnored = row.classList.contains('lapseItemRow-ignored');
                 var request = isIgnored
                     ? lapseDelete('Lapse/Ignore?itemId=' + encodeURIComponent(itemId))
+                        .then(function (result) {
+                            // Nothing came off, so this item is covered by a rule on its
+                            // series or its folder and the row will still be greyed out.
+                            if (result && result.Removed === 0) {
+                                Dashboard.alert('This one is not on the list itself - it is ' +
+                                    'covered by a rule on its series or its folder. Take that ' +
+                                    'rule off under Settings, Ignore list.');
+                            }
+                        })
                     : lapsePost('Lapse/Ignore', { ItemId: itemId });
 
                 request.then(function () {
@@ -1547,7 +1642,7 @@
         if (result.Skipped) {
             Dashboard.alert(name + ': left the original alone (' + describeResult(result) + ').\n\n' +
                 'The engine was not confident enough, and File output is set to keep the original ' +
-                'when that happens.');
+                'when that happens.\n\n' + FORCE_HINT);
             return;
         }
 
@@ -1684,6 +1779,17 @@
             '    <div class="fieldDescription" id="lapseAdvPenaltyNote">Higher values = fewer splits.</div>' +
             '  </div>' +
             subtitlePickerHtml +
+            '  <div class="selectContainer">' +
+            '    <label class="selectLabel" for="lapseAdvFormat">Write the result as</label>' +
+            '    <select is="emby-select" id="lapseAdvFormat" class="emby-select-withcolor emby-select">' +
+            '      <option value="">Same format as the subtitle</option>' +
+            '      <option value="srt">.srt</option>' +
+            '      <option value="vtt">.vtt</option>' +
+            '      <option value="ass">.ass</option>' +
+            '      <option value="ssa">.ssa</option>' +
+            '    </select>' +
+            '    <div class="fieldDescription">Converts on the way out. The original file stays where it is.</div>' +
+            '  </div>' +
             '  <div class="lapseDialogButtons">' +
             '    <button is="emby-button" type="button" class="raised" id="lapseAdvCancel"><span>Cancel</span></button>' +
             '    <button is="emby-button" type="button" class="raised button-submit" id="lapseAdvSync" ' + (subtitles.length === 0 ? 'disabled' : '') + '><span>Sync</span></button>' +
@@ -1697,7 +1803,7 @@
             '      <input is="emby-input" id="lapseAdvNudge" type="number" step="0.1" value="0" />' +
             '      <button is="emby-button" type="button" class="raised lapseSmallButton" id="lapseAdvNudgeApply" ' + (subtitles.length === 0 ? 'disabled' : '') + '><span>Shift</span></button>' +
             '    </div>' +
-            '    <div class="fieldDescription">Still slightly off? Minus makes subtitles show up earlier, plus later. Works on .srt and .vtt, and does not use an engine.</div>' +
+            '    <div class="fieldDescription">Still slightly off? Minus makes subtitles show up earlier, plus later. Works on .srt, .vtt, .ass and .ssa, and does not use an engine.</div>' +
             '  </div>');
 
         var engineSelect = overlay.querySelector('#lapseAdvEngine');
@@ -1773,7 +1879,8 @@
                 EngineId: currentEngine().Id,
                 Mode: modeSelect.value,
                 Penalty: currentPenalty(),
-                SubtitlePath: selectedSubtitlePath()
+                SubtitlePath: selectedSubtitlePath(),
+                OutputFormat: overlay.querySelector('#lapseAdvFormat').value || null
             }).then(function (result) {
                 Dashboard.hideLoadingMsg();
                 overlay.remove();
@@ -1980,8 +2087,14 @@
         });
     }
 
-    // Searches whatever is already loaded in the sync status list, which covers films,
-    // episodes and loose videos. Adding a whole series is done by ignoring its folder.
+    // Searches the sync status list, which covers films, episodes and loose videos.
+    // Adding a whole series is done by ignoring its folder.
+    //
+    // That list is normally already loaded, but this panel can't rely on it: the load on
+    // pageshow can still be running behind a large library, or it can have failed, and
+    // either way searching an empty array used to answer "nothing matches that" - which
+    // reads as a dead button. So an empty list is fetched here first, and only then is
+    // the answer a real one.
     function searchForIgnore(view) {
         var container = view.querySelector('#lapseIgnoreSearchResults');
         var term = (view.querySelector('#lapseIgnoreSearch').value || '').trim().toLowerCase();
@@ -1991,17 +2104,51 @@
             return;
         }
 
+        // Only worth one attempt: a library that really is empty must not send this round
+        // again on the next keystroke, or on the call the fetch itself makes below.
+        if (allItems.length === 0 && !ignoreSearchFetched) {
+            if (ignoreSearchPending) {
+                return;
+            }
+
+            ignoreSearchPending = true;
+            ignoreSearchFetched = true;
+            container.innerHTML = '<div class="fieldDescription lapseTightNote">Looking through the library...</div>';
+
+            refreshItemList(view).then(function () {
+                ignoreSearchPending = false;
+
+                // Whatever is in the box now, not what was in it when the fetch started.
+                searchForIgnore(view);
+            }).catch(function (err) {
+                ignoreSearchPending = false;
+
+                // A failed read is worth retrying, unlike an empty one.
+                ignoreSearchFetched = false;
+                container.innerHTML = '<div class="fieldDescription lapseTightNote">Could not read the library: ' +
+                    escapeHtml(err.message || 'unknown error') + '</div>';
+            });
+
+            return;
+        }
+
+        renderIgnoreMatches(view, container, term);
+    }
+
+    function renderIgnoreMatches(view, container, term) {
         var matches = allItems.filter(function (i) {
-            return i.Name.toLowerCase().indexOf(term) !== -1 && i.Status !== 'Ignored';
+            return (i.Name || '').toLowerCase().indexOf(term) !== -1 && i.Status !== 'Ignored';
         }).slice(0, 25);
 
         if (matches.length === 0) {
-            container.innerHTML = '<div class="fieldDescription lapseTightNote">Nothing in the library matches that.</div>';
+            container.innerHTML = '<div class="fieldDescription lapseTightNote">' +
+                'Nothing matches that. Only items in a library that is turned on under Settings, ' +
+                'Libraries can be searched here - use the path box below for anything else.</div>';
             return;
         }
 
         container.innerHTML = matches.map(function (item) {
-            return '<div class="lapseIgnoreCandidate" data-id="' + item.ItemId + '">' +
+            return '<div class="lapseIgnoreCandidate" data-id="' + escapeHtml(item.ItemId) + '">' +
                 '<span class="lapseIgnoreCandidateName">' + escapeHtml(item.Name) + '</span>' +
                 '<span class="lapseMuted">' + escapeHtml(item.ItemType) + '</span>' +
                 '<button is="emby-button" type="button" class="raised lapseSmallButton lapseBtnIgnoreAdd">Ignore</button>' +
@@ -2142,7 +2289,8 @@
             if (!result.Success) {
                 Dashboard.alert('Sync failed: ' + result.Error);
             } else if (result.Skipped) {
-                Dashboard.alert('Left the input alone (' + describeResult(result) + '), which is under the confidence threshold.');
+                Dashboard.alert('Left the input alone (' + describeResult(result) +
+                    '), which is under the confidence threshold.\n\n' + FORCE_HINT);
             } else {
                 Dashboard.alert('Synced! (' + describeResult(result) + ')\nWrote ' + result.OutputPath);
             }
@@ -2154,24 +2302,59 @@
 
     // --- settings: output, translation, appearance, engines ---
 
-    function renderRadioGroup(container, name, modes, selected, onChange) {
+    // `options.hideRecommended` drops the badge without changing which entry is the
+    // default - the conversion panel wants the sensible choice pre-picked but not
+    // labelled, since every option there is a legitimate one to want.
+    //
+    // The picked row is marked with a class as well as the radio's own state. A radio
+    // dot is easy to lose in a list of four multi-line options, so the class is what
+    // draws the accent bar and the tint that make the current choice obvious.
+    function renderRadioGroup(container, name, modes, selected, onChange, options) {
+        var showRecommended = !(options && options.hideRecommended);
+
+        // Nothing matching means the stored value is gone or was never set, so the entry
+        // marked recommended stands in - otherwise the group renders with no dot at all
+        // and saving would quietly write whatever `selectedRadio`'s fallback is.
+        var hasSelection = modes.some(function (mode) { return mode.value === selected; });
+        if (!hasSelection) {
+            var fallback = modes.filter(function (mode) { return mode.recommended; })[0] || modes[0];
+            selected = fallback && fallback.value;
+        }
+
         container.innerHTML = modes.map(function (mode) {
+            var active = selected === mode.value;
+
             return '' +
-                '<label class="lapseRadioRow' + (mode.recommended ? ' lapseRadioRow-recommended' : '') + '">' +
-                '  <input type="radio" name="' + name + '" value="' + mode.value + '"' +
-                (selected === mode.value ? ' checked' : '') + ' />' +
+                '<label class="lapseRadioRow' + (active ? ' lapseRadioRow-active' : '') + '">' +
+                '  <input type="radio" name="' + name + '" value="' + escapeHtml(mode.value) + '"' +
+                (active ? ' checked' : '') + ' />' +
                 '  <span class="lapseRadioLabel">' + escapeHtml(mode.label) +
-                (mode.recommended ? '<span class="lapseChip lapseChip-recommended">Recommended</span>' : '') +
+                (mode.recommended && showRecommended
+                    ? '<span class="lapseChip lapseChip-recommended">Recommended</span>'
+                    : '') +
                 '    <span class="fieldDescription">' + escapeHtml(mode.note) + '</span>' +
                 '  </span>' +
                 '</label>';
         }).join('');
 
-        if (onChange) {
-            container.querySelectorAll('input[name="' + name + '"]').forEach(function (radio) {
-                radio.addEventListener('change', onChange);
+        container.querySelectorAll('input[name="' + name + '"]').forEach(function (radio) {
+            radio.addEventListener('change', function () {
+                markActiveRadio(container, name);
+
+                if (onChange) {
+                    onChange();
+                }
             });
-        }
+        });
+    }
+
+    function markActiveRadio(container, name) {
+        container.querySelectorAll('input[name="' + name + '"]').forEach(function (radio) {
+            var row = radio.closest('.lapseRadioRow');
+            if (row) {
+                row.classList.toggle('lapseRadioRow-active', radio.checked);
+            }
+        });
     }
 
     function selectedRadio(view, name, fallback) {
@@ -2215,6 +2398,121 @@
         view.querySelector('#lapseConfidenceSigmaNote').textContent = note;
     }
 
+    // No "Recommended" badges in here. Which format you want depends on what is going to
+    // read the file, so the badge was telling people their own answer was the wrong one.
+    // The sensible entry is still the one that comes pre-picked.
+    function renderConversion(view) {
+        var settings = currentSettings || {};
+        var plain = { hideRecommended: true };
+
+        renderRadioGroup(
+            view.querySelector('#lapseConversionFormats'),
+            'lapseConversionFormat',
+            CONVERSION_FORMATS,
+            settings.ConversionFormat || 'srt',
+            function () { updateConversionHint(view); },
+            plain);
+
+        renderRadioGroup(
+            view.querySelector('#lapseConversionOriginal'),
+            'lapseConversionOriginal',
+            CONVERSION_ORIGINAL_MODES,
+            settings.ConversionReplaceOriginal ? 'replace' : 'keep',
+            null,
+            plain);
+
+        renderRadioGroup(
+            view.querySelector('#lapseConversionSync'),
+            'lapseConversionSync',
+            CONVERSION_SYNC_MODES,
+            settings.ConversionSyncAfter === false ? 'convert' : 'sync',
+            null,
+            plain);
+
+        updateConversionHint(view);
+    }
+
+    function updateConversionHint(view) {
+        view.querySelector('#lapseConversionHint').textContent =
+            '.' + selectedRadio(view, 'lapseConversionFormat', 'srt');
+    }
+
+    function renderAccess(view) {
+        var mode = (currentSettings && currentSettings.SubtitleAccess) || 'AdminsOnly';
+
+        renderRadioGroup(
+            view.querySelector('#lapseAccessModes'),
+            'lapseAccessMode',
+            ACCESS_MODES,
+            mode,
+            function () { updateAccessPanel(view); });
+
+        renderAccessUsers(view);
+        updateAccessPanel(view);
+    }
+
+    function renderAccessUsers(view) {
+        var container = view.querySelector('#lapseAccessUsers');
+        var allowed = (currentSettings && currentSettings.SubtitleAccessUserIds) || [];
+
+        var pickable = currentUsers.filter(function (user) { return !user.IsAdministrator; });
+
+        if (!pickable.length) {
+            container.innerHTML = '<div class="fieldDescription">This server has no non-administrator users.</div>';
+            return;
+        }
+
+        container.innerHTML = pickable.map(function (user) {
+            var checked = allowed.some(function (id) { return sameUserId(id, user.Id); });
+
+            return '' +
+                '<label class="emby-checkbox-label lapseStackedCheck">' +
+                '  <input type="checkbox" is="emby-checkbox" class="lapseAccessUser" data-id="' + escapeHtml(user.Id) + '"' +
+                (checked ? ' checked' : '') + ' />' +
+                '  <span>' + escapeHtml(user.Name) +
+                (user.CanManageSubtitles ? '<span class="lapseChip">can manage subtitles</span>' : '') +
+                '</span>' +
+                '</label>';
+        }).join('');
+    }
+
+    // Ids come back without dashes, but a config written by hand might have them.
+    function sameUserId(left, right) {
+        return String(left || '').replace(/-/g, '').toLowerCase() ===
+            String(right || '').replace(/-/g, '').toLowerCase();
+    }
+
+    function updateAccessPanel(view) {
+        var mode = selectedRadio(view, 'lapseAccessMode', 'AdminsOnly');
+        var chosen = ACCESS_MODES.filter(function (m) { return m.value === mode; })[0];
+
+        view.querySelector('#lapseAccessUsersContainer').classList.toggle('hide', mode !== 'SelectedUsers');
+        view.querySelector('#lapseAccessHint').textContent = chosen ? chosen.label : '';
+    }
+
+    function selectedAccessUserIds(view) {
+        var ids = [];
+
+        view.querySelectorAll('.lapseAccessUser').forEach(function (input) {
+            if (input.checked) {
+                ids.push(input.getAttribute('data-id'));
+            }
+        });
+
+        return ids;
+    }
+
+    function refreshUsers(view) {
+        return lapseGet('Lapse/Users').then(function (users) {
+            currentUsers = users || [];
+            renderAccessUsers(view);
+        }).catch(function () {
+            // Not fatal: the rest of the access panel still works, the picker just can't
+            // be filled in.
+            currentUsers = [];
+        });
+    }
+
     function renderSettings(view) {
         renderRadioGroup(
             view.querySelector('#lapseOutputModes'),
@@ -2249,6 +2547,8 @@
         renderWebhookUrl(view);
 
         renderAppearance(view);
+        renderAccess(view);
+        renderConversion(view);
         updateSidecarPreview(view);
 
         // the suggested name for a subtitle-to-subtitle output uses the sidecar suffix, so
@@ -2471,6 +2771,11 @@
 
         var payload = {
             OutputMode: selectedOutputMode(view),
+            SubtitleAccess: selectedRadio(view, 'lapseAccessMode', 'AdminsOnly'),
+            ConversionFormat: selectedRadio(view, 'lapseConversionFormat', 'srt'),
+            ConversionReplaceOriginal: selectedRadio(view, 'lapseConversionOriginal', 'keep') === 'replace',
+            ConversionSyncAfter: selectedRadio(view, 'lapseConversionSync', 'sync') === 'sync',
+            SubtitleAccessUserIds: selectedAccessUserIds(view),
             SidecarSuffix: view.querySelector('#lapseSidecarSuffix').value,
             LowConfidenceAction: selectedRadio(view, 'lapseLowConfidence', 'Sidecar'),
             ConfidenceSigma: parseFloat(view.querySelector('#lapseConfidenceSigma').value) || 8,
@@ -2590,19 +2895,18 @@
 
     // --- wire everything up ---
 
-    document.querySelector('#LapseConfigPage').addEventListener('pageshow', function (e) {
-        var view = e.target;
-
-        setUpNavigation(view);
+    function refreshEverything(view) {
+        ignoreSearchFetched = false;
         Dashboard.showLoadingMsg();
 
         // engines and settings first, the advanced dialog and result messages both need those
-        Promise.all([refreshEngines(view), refreshSettings(view), refreshLibraries(view)]).then(function () {
+        return Promise.all([refreshEngines(view), refreshSettings(view), refreshLibraries(view)]).then(function () {
             return Promise.all([
                 refreshOverview(view),
                 refreshProviders(view),
                 refreshItemList(view),
                 refreshIgnoreRules(view),
+                refreshUsers(view),
                 refreshFolders(view),
                 refreshQueue(view),
                 refreshPlatform(view),
@@ -2610,9 +2914,35 @@
             ]);
         }).then(function () {
             Dashboard.hideLoadingMsg();
-            openDeepLinkedAdvancedDialogIfNeeded(view);
-        }).catch(function () {
+        }).catch(function (err) {
+            // Swallowing this used to leave half a dashboard with no explanation, and
+            // every panel fed from the failed call looking like a broken button.
             Dashboard.hideLoadingMsg();
+            console.error('LAPSE: could not load the dashboard', err);
+            Dashboard.alert('Some of the dashboard could not be loaded: ' +
+                ((err && err.message) || 'the server did not answer') +
+                '. Reload the page, and check the Jellyfin log if it keeps happening.');
+        });
+    }
+
+    document.querySelector('#LapseConfigPage').addEventListener('pageshow', function (e) {
+        var view = e.target;
+
+        // pageshow fires again every time the page is navigated back to, and the view
+        // element is the same one. Without this the listeners below get added a second
+        // time, and every button then fires its request twice.
+        if (view.lapseWired) {
+            refreshEverything(view);
+            startQueuePolling(view);
+            return;
+        }
+
+        view.lapseWired = true;
+
+        setUpNavigation(view);
+
+        refreshEverything(view).then(function () {
+            openDeepLinkedAdvancedDialogIfNeeded(view);
         });
 
         startQueuePolling(view);
@@ -2687,6 +3017,12 @@
         });
         view.querySelector('#lapseConfidenceSigma').addEventListener('input', function () {
             updateConfidenceNote(view);
+        });
+        view.querySelector('#btnSaveConversion').addEventListener('click', function () {
+            saveSettings(view, 'Conversion settings saved.');
+        });
+        view.querySelector('#btnSaveAccess').addEventListener('click', function () {
+            saveSettings(view, 'Access settings saved.');
         });
         view.querySelector('#btnSaveOutput').addEventListener('click', function () {
             saveSettings(view, 'Output settings saved.');
