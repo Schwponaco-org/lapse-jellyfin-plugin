@@ -13,7 +13,7 @@ This repo is just the Jellyfin plugin. The thing doing the actual alignment is a
 Add the repository in Jellyfin under **Dashboard > Plugins > Repositories**:
 
 ```
-https://raw.githubusercontent.com/r-stisen/lapse-jellyfin-plugin/main/manifest.json
+https://raw.githubusercontent.com/rs-jensen/lapse-jellyfin-plugin/main/manifest.json
 ```
 
 Then find LAPSE in the **Catalog** tab, install it, and restart Jellyfin.
