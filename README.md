@@ -20,7 +20,7 @@ Then find LAPSE in the **Catalog** tab, install it, and restart Jellyfin.
 
 Now open the plugin from **Dashboard > Plugins > LAPSE**. This part matters: a fresh install has no engine on disk and cannot sync anything yet. Download it from the **Engines** tab in the plugin dashboard, or press the Install button the dashboard shows you on a fresh install. Either way it is one download and then you are set up.
 
-You need Jellyfin 10.11 or newer.
+You need Jellyfin 10.11.11 or newer.
 
 ## Using it
 
@@ -77,7 +77,7 @@ The item menu entries (Sync, Shift, Convert, Translate) are admin only until you
 
 ## Engines
 
-**LAPSE** is the one this plugin is built around and the one to use. It listens to the audio and works out on its own whether the subtitle is simply early, drifting because it was made for a different framerate, split across a re-cut, or some combination, then fixes whichever it is. It also says how sure it is about the answer, which none of the others do. Builds are published for Linux, macOS and Windows on both Intel and ARM, so it runs wherever Jellyfin does.
+**LAPSE** is the one this plugin is built around and the one to use. It listens to the audio and works out on its own whether the subtitle is simply early, drifting because it was made for a different framerate, split across a re-cut, or some combination, then fixes whichever it is. It also says how sure it is about the answer, which none of the others do. Builds are published for Linux, macOS and Windows, so it runs wherever Jellyfin does.
 
 **alass** splits the file into sections and times each one separately. Handy for recordings cut around ad breaks. Only x86_64 builds are published, for Linux and Windows.
 
