@@ -195,6 +195,18 @@
         return div.innerHTML;
     }
 
+    // Two ids for the same thing, compared without caring how they were written. Guids
+    // reach the browser dashed from some endpoints and undashed from others depending on
+    // how the server serialised them, and a plain === between the two forms silently
+    // matches nothing.
+    function sameId(a, b) {
+        if (!a || !b) {
+            return false;
+        }
+
+        return String(a).replace(/-/g, '').toLowerCase() === String(b).replace(/-/g, '').toLowerCase();
+    }
+
     function findEngine(id) {
         for (var i = 0; i < allEngines.length; i++) {
             if (allEngines[i].Id === id) {
@@ -430,10 +442,21 @@
             engineProblem = '<div class="lapseEngineError">Not installed. Install it under Settings, Engines.</div>';
         } else if (engine && engine.RunCheckError) {
             engineProblem = '<div class="lapseEngineError">' + escapeHtml(engine.RunCheckError) + '</div>';
-        } else if (engine && engine.UpdateAvailable && engine.LatestVersion) {
-            engineProblem = '<div class="lapseEngineVersion">' + escapeHtml(engine.LatestVersion) +
-                ' is out. Update it under Settings, Engines.</div>';
         }
+
+        // An update is worth acting on where it is noticed, so the dashboard offers the
+        // button itself rather than sending people to Settings, Engines to press the same
+        // thing.
+        var updateAvailable = !!(engine && overview.ActiveEngineReady && !engine.RunCheckError && engine.UpdateAvailable);
+        if (updateAvailable) {
+            engineProblem = '<div class="lapseEngineVersion">' +
+                escapeHtml(engine.LatestVersion || 'A newer release') + ' is out.</div>';
+        }
+
+        var updateButton = updateAvailable
+            ? '      <button is="emby-button" type="button" class="raised button-submit lapseSmallButton" id="lapseUpdateEngine">' +
+              '<span>Update to ' + escapeHtml(engine.LatestVersion || 'the latest') + '</span></button>'
+            : '';
 
         var counts = countStatuses();
         var modeLabel = overview.ActiveEngineMode || '';
@@ -498,7 +521,9 @@
             '    <div class="lapseActiveEngineMode">' + escapeHtml(modeLabel) + ' mode</div>' +
             engineProblem +
             '    <div class="lapseHeroActions">' +
-            '      <button is="emby-button" type="button" class="raised button-submit lapseSmallButton" id="lapseGoBulk"><span>Sync everything</span></button>' +
+            updateButton +
+            '      <button is="emby-button" type="button" class="raised' + (updateAvailable ? '' : ' button-submit') +
+            ' lapseSmallButton" id="lapseGoBulk"><span>Sync everything</span></button>' +
             '      <button is="emby-button" type="button" class="raised lapseSmallButton" id="lapseGoEngines"><span>Change engine</span></button>' +
             '    </div>' +
             '  </div>' +
@@ -515,6 +540,13 @@
 
             '<h3 class="lapseSubHeading">Recent activity</h3>' +
             recent;
+
+        var updateNow = container.querySelector('#lapseUpdateEngine');
+        if (updateNow) {
+            updateNow.addEventListener('click', function () {
+                updateEngine(view, engine.Id, updateNow);
+            });
+        }
 
         container.querySelector('#lapseGoBulk').addEventListener('click', function () {
             showPanel('lapsePanelBulk');
@@ -651,20 +683,6 @@
         }
 
         return '';
-    }
-
-    function renderEngineStates(view) {
-        view.querySelector('#lapseEngineStates').innerHTML = allEngines.map(function (engine) {
-            var cls = 'lapseEngineState';
-            if (engine.Installed && engine.RunCheckError) {
-                cls += ' lapseEngineState-broken';
-            }
-
-            return '<span class="' + cls + '">' +
-                escapeHtml(engine.DisplayName) + ' ' +
-                '<span class="lapseMuted">' + escapeHtml(engineStateText(engine)) + '</span>' +
-                '</span>';
-        }).join('');
     }
 
     // What the binary itself said it understands. ffsubsync alone lists about fifty flags,
@@ -1003,7 +1021,6 @@
     function refreshEngines(view) {
         return lapseGet('Lapse/Engines').then(function (engines) {
             allEngines = engines;
-            renderEngineStates(view);
             renderEngineCards(view);
             updateSubToSubEngineNote(view);
             view.querySelector('#lapseAutoUpdateEngines').checked =
@@ -1147,11 +1164,16 @@
         });
     }
 
+    // Only the libraries that are turned on, because those are the only ones the status
+    // list has any items from - offering a disabled library here just gives you a filter
+    // that can never match anything.
     function renderLibraryFilter(view) {
         var select = view.querySelector('#lapseItemLibraryFilter');
         var previous = select.value;
 
-        select.innerHTML = '<option value="">All libraries</option>' + allLibraries.map(function (library) {
+        select.innerHTML = '<option value="">All libraries</option>' + allLibraries.filter(function (library) {
+            return library.Enabled;
+        }).map(function (library) {
             return '<option value="' + library.ItemId + '">' + escapeHtml(library.Name) + '</option>';
         }).join('');
 
@@ -1400,7 +1422,7 @@
 
         var libraryId = view.querySelector('#lapseItemLibraryFilter').value;
         if (libraryId) {
-            shown = shown.filter(function (i) { return i.LibraryId === libraryId; });
+            shown = shown.filter(function (i) { return sameId(i.LibraryId, libraryId); });
         }
 
         var status = view.querySelector('#lapseItemStatusFilter').value;
@@ -2401,6 +2423,16 @@
     // No "Recommended" badges in here. Which format you want depends on what is going to
     // read the file, so the badge was telling people their own answer was the wrong one.
     // The sensible entry is still the one that comes pre-picked.
+    // srt on a fresh install, and srt again whenever the stored value is blank or is
+    // something this list doesn't offer. Leaving that to renderRadioGroup's generic
+    // fallback meant an unrecognised stored format landed on whichever entry happened to
+    // be first in the array rather than on the one this plugin actually defaults to.
+    function conversionFormat(stored) {
+        var value = String(stored || '').trim().replace(/^\./, '').toLowerCase();
+        var known = CONVERSION_FORMATS.some(function (f) { return f.value === value; });
+        return known ? value : 'srt';
+    }
+
     function renderConversion(view) {
         var settings = currentSettings || {};
         var plain = { hideRecommended: true };
@@ -2409,7 +2441,7 @@
             view.querySelector('#lapseConversionFormats'),
             'lapseConversionFormat',
             CONVERSION_FORMATS,
-            settings.ConversionFormat || 'srt',
+            conversionFormat(settings.ConversionFormat),
             function () { updateConversionHint(view); },
             plain);
 

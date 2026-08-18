@@ -27,25 +27,6 @@
     margin: 0 0 .1em 0;
 }
 
-.lapseEngineStates {
-    display: flex;
-    gap: .9em;
-    flex-wrap: wrap;
-    font-size: .85em;
-    opacity: .85;
-}
-
-.lapseEngineState {
-    display: flex;
-    align-items: center;
-    gap: .35em;
-    white-space: nowrap;
-}
-
-.lapseEngineState-broken {
-    color: #d84343;
-}
-
 .lapseMuted {
     opacity: .6;
 }

@@ -114,9 +114,9 @@ public class LibraryService
     }
 
     /// <summary>
-    /// Finds which library an item belongs to, by walking up its parents until one of
-    /// them is a library root. Returns null for anything outside a library the plugin
-    /// can see, which includes items that have been removed since they were queued.
+    /// Finds which library an item belongs to. Returns null for anything outside a
+    /// library the plugin can see, which includes items that have been removed since they
+    /// were queued.
     /// </summary>
     /// <param name="item">The item.</param>
     /// <param name="libraryIds">A set from <see cref="GetLibraryIdSet"/>, or null to
@@ -131,6 +131,23 @@ public class LibraryService
             if (libraryIds.Contains(current.Id))
             {
                 return current.Id;
+            }
+        }
+
+        // The parent chain is the physical folder structure, and a library's
+        // CollectionFolder is not always on it - it depends on how the library's paths
+        // were set up. Jellyfin's own ancestor lookup is the reliable answer, and it is
+        // the same relation the item queries use, so falling back to it here keeps
+        // "which library is this in" agreeing with "which library did this come from".
+        //
+        // Without this, every caller downstream reads null and treats the item as being
+        // outside any library: auto-sync on a new file, the Radarr/Sonarr webhook and the
+        // library filter on the status list all quietly did nothing.
+        foreach (var folder in _libraryManager.GetCollectionFolders(item))
+        {
+            if (libraryIds.Contains(folder.Id))
+            {
+                return folder.Id;
             }
         }
 
@@ -212,38 +229,56 @@ public class LibraryService
     /// <returns>The items.</returns>
     public List<BaseItem> GetItems(Guid? libraryId = null, bool includeSkipped = false)
     {
-        var items = new List<BaseItem>();
+        var result = new List<BaseItem>();
 
-        if (libraryId.HasValue)
+        foreach (var entry in GetItemsWithLibrary(libraryId, includeSkipped))
         {
-            items.AddRange(QueryLibrary(libraryId.Value));
+            result.Add(entry.Item);
         }
-        else
-        {
-            foreach (var id in GetEnabledLibraryIds())
-            {
-                items.AddRange(QueryLibrary(id));
-            }
-        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// The same walk as <see cref="GetItems"/>, but each item comes back paired with the
+    /// library it was found in.
+    ///
+    /// The pairing is taken from the query that produced the item rather than by walking
+    /// the item's parents afterwards. Both should agree, but the parent walk quietly
+    /// returns null whenever an item's ancestor chain doesn't lead back to a
+    /// CollectionFolder the plugin can see, and a null there is what left every row in the
+    /// status list unattributable - so the library filter matched nothing at all.
+    /// </summary>
+    /// <param name="libraryId">The library to look in, or null for all enabled ones.</param>
+    /// <param name="includeSkipped">True to include items marked as skip or ignore.</param>
+    /// <returns>The items, each with its library id.</returns>
+    public List<(BaseItem Item, Guid LibraryId)> GetItemsWithLibrary(Guid? libraryId = null, bool includeSkipped = false)
+    {
+        var searched = libraryId.HasValue
+            ? new List<Guid> { libraryId.Value }
+            : GetEnabledLibraryIds();
 
         // a library can appear under more than one virtual folder path, and Jellyfin will
         // happily hand back the same item twice for that
         var seen = new HashSet<Guid>();
-        var result = new List<BaseItem>();
+        var result = new List<(BaseItem Item, Guid LibraryId)>();
 
-        foreach (var item in items)
+        foreach (var id in searched)
         {
-            if (!seen.Add(item.Id))
+            foreach (var item in QueryLibrary(id))
             {
-                continue;
-            }
+                if (!seen.Add(item.Id))
+                {
+                    continue;
+                }
 
-            if (!includeSkipped && (SyncQueueManager.IsSkipped(item) || IsIgnored(item)))
-            {
-                continue;
-            }
+                if (!includeSkipped && (SyncQueueManager.IsSkipped(item) || IsIgnored(item)))
+                {
+                    continue;
+                }
 
-            result.Add(item);
+                result.Add((item, id));
+            }
         }
 
         return result;

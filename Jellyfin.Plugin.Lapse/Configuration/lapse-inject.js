@@ -761,20 +761,16 @@
         var select = overlay.querySelector('#lapseConvertSubtitle');
         var formatSelect = overlay.querySelector('#lapseConvertFormat');
 
-        // Default to something that isn't what the file already is, so the first press
-        // does something.
-        function pickDefaultFormat() {
-            var current = currentFormat();
-            formatSelect.value = current === 'srt' ? 'vtt' : 'srt';
-        }
-
         function currentFormat() {
             var match = /\.([a-z0-9]+)$/i.exec(select.value || '');
             return match ? match[1].toLowerCase() : '';
         }
 
-        select.addEventListener('change', pickDefaultFormat);
-        pickDefaultFormat();
+        // srt is what people convert to almost every time, so it is the standing default
+        // and stays selected unless it is deliberately changed. This used to pick whatever
+        // the file was not, which meant the common case - an srt that wants tidying up -
+        // opened on .vtt.
+        formatSelect.value = 'srt';
 
         overlay.querySelector('#lapseConvertCancel').addEventListener('click', function () {
             overlay.remove();
