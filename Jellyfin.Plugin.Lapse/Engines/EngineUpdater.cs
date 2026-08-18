@@ -97,6 +97,12 @@ public class EngineUpdater
 
         status.VersionUnknown = installed && installedVersion is null;
         status.UpdateAvailable = installed
+
+            // A binary behind a path override is not ours to replace. Offering an update
+            // for one was worse than saying nothing: installing writes to the managed
+            // path, which is not the file being run, so the button appeared to do nothing
+            // and the same update kept being offered afterwards.
+            && string.IsNullOrWhiteSpace(settings.PathOverride)
             && engine.Descriptor.GetDownloadForThisMachine() is not null
             && latest is not null
 
@@ -209,7 +215,13 @@ public class EngineUpdater
                 {
                     results[engine.Descriptor.Id] = await UpdateAsync(engine, force: false, cancellationToken).ConfigureAwait(false);
                 }
-                catch (Exception ex) when (ex is HttpRequestException or NotSupportedException or IOException)
+
+                // Deliberately broad, short of cancellation. One engine that cannot be
+                // written (a read-only volume, a permissions problem, a half-extracted
+                // archive) used to throw straight out of the loop and take every engine
+                // after it down with it, so a single bad install quietly stopped the
+                // nightly update for everything else.
+                catch (Exception ex) when (ex is not OperationCanceledException)
                 {
                     _logger.LogWarning(ex, "Auto-update failed for {Engine}", engine.Descriptor.DisplayName);
                     results[engine.Descriptor.Id] = "failed: " + ex.Message;

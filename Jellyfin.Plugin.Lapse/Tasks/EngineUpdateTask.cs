@@ -63,6 +63,15 @@ public class EngineUpdateTask : IScheduledTask, IConfigurableScheduledTask
             {
                 Type = TaskTriggerInfoType.DailyTrigger,
                 TimeOfDayTicks = TimeSpan.FromHours(4).Ticks
+            },
+
+            // A server that isn't up at 04:00 - anything on a desktop, anything that gets
+            // shut down overnight - would never see a new engine release on the daily
+            // trigger alone, which is most of what "auto-update doesn't seem to happen"
+            // turns out to be. Running once at startup covers those.
+            new TaskTriggerInfo
+            {
+                Type = TaskTriggerInfoType.StartupTrigger
             }
         };
     }

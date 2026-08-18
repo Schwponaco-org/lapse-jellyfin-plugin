@@ -201,10 +201,9 @@ public class LapseController : ControllerBase
     {
         var config = Plugin.Instance!.Configuration;
         var libraryNames = _libraryService.GetLibraries().ToDictionary(l => l.ItemId, l => l.Name);
-        var libraryIds = _libraryService.GetLibraryIdSet();
         var result = new List<ItemStatusEntry>();
 
-        foreach (var item in _libraryService.GetItems(includeSkipped: true))
+        foreach (var (item, libraryId) in _libraryService.GetItemsWithLibrary(includeSkipped: true))
         {
             var record = config.MovieRecords.FirstOrDefault(r => r.ItemId == item.Id);
             var subtitles = _subtitleLocator.GetExternalSubtitles(item);
@@ -217,15 +216,13 @@ public class LapseController : ControllerBase
                 : subtitles.Count(s => record.SyncedSubtitles
                     .Any(r => string.Equals(r.Path, s.Path, StringComparison.Ordinal)));
 
-            var libraryId = _libraryService.GetLibraryIdFor(item, libraryIds);
-
             result.Add(new ItemStatusEntry
             {
                 ItemId = item.Id,
                 Name = SyncQueueManager.DescribeItem(item),
                 ItemType = item.GetBaseItemKind().ToString(),
                 LibraryId = libraryId,
-                LibraryName = libraryId.HasValue && libraryNames.TryGetValue(libraryId.Value, out var name) ? name : null,
+                LibraryName = libraryNames.TryGetValue(libraryId, out var name) ? name : null,
                 Status = ResolveDisplayStatus(item, record, subtitles.Count, syncedCount),
                 LastSyncUtc = record?.LastSyncUtc,
                 LastError = record?.LastError,
@@ -1333,7 +1330,12 @@ public class LapseController : ControllerBase
             ConfidenceSigma = config.ConfidenceSigma,
             SubToSubPlacement = config.SubToSubPlacement,
             SubToSubCustomFolder = config.SubToSubCustomFolder,
-            ConversionFormat = config.ConversionFormat,
+            // srt is the default this ships with, so a config written before this setting
+            // existed - or one holding a format that is no longer offered - reads back as
+            // srt rather than leaving the dashboard to pick something for it.
+            ConversionFormat = SubtitleFormats.TryNormalizeOutputFormat(config.ConversionFormat, out var storedFormat)
+                ? storedFormat
+                : "srt",
             ConversionReplaceOriginal = config.ConversionReplaceOriginal,
             ConversionSyncAfter = config.ConversionSyncAfter,
             SubtitleAccess = config.SubtitleAccess,

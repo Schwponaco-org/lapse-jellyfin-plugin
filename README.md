@@ -1,4 +1,6 @@
-<img src="Jellyfin.Plugin.Lapse/Configuration/LAPSE.png" alt="LAPSE" width="420">
+<p align="center">
+  <img src="Jellyfin.Plugin.Lapse/Configuration/LAPSE.png" alt="LAPSE" width="420">
+</p>
 
 # LAPSE for Jellyfin
 

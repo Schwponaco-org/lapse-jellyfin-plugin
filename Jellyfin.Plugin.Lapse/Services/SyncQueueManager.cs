@@ -23,7 +23,7 @@ namespace Jellyfin.Plugin.Lapse.Services;
 /// external subtitle an item has - there's no UI in the background path to pick
 /// engine/mode/penalty/subtitle.
 /// </summary>
-public class SyncQueueManager
+public class SyncQueueManager : IDisposable
 {
     private readonly ILibraryManager _libraryManager;
     private readonly LibraryService _libraryService;
@@ -35,6 +35,14 @@ public class SyncQueueManager
     private readonly List<QueueItem> _items = new();
     private readonly Queue<Guid> _pending = new();
     private readonly HashSet<Guid> _queuedIds = new();
+
+    // Only one item is ever synced at a time. The worker loop is one caller; the
+    // scheduled task's RunBatchAsync is another, and it runs items itself rather than
+    // handing them to the worker so that Jellyfin's task runner has something to wait on.
+    // Nothing stopped those two overlapping, which meant a per-library schedule firing
+    // during the nightly run had both of them driving engines over the same library, and
+    // potentially over the same file.
+    private readonly SemaphoreSlim _runGate = new(1, 1);
     private Task? _worker;
     private string? _jobName;
     private string? _unitName;
@@ -379,7 +387,40 @@ public class SyncQueueManager
         }
     }
 
+    /// <inheritdoc />
+    public void Dispose()
+    {
+        Dispose(true);
+        GC.SuppressFinalize(this);
+    }
+
+    /// <summary>
+    /// Releases the resources this holds.
+    /// </summary>
+    /// <param name="disposing">True when called from <see cref="Dispose()"/>.</param>
+    protected virtual void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            _runGate.Dispose();
+        }
+    }
+
     private async Task<bool> ProcessOneAsync(Guid itemId, CancellationToken cancellationToken)
+    {
+        await _runGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+        try
+        {
+            return await SyncOneAsync(itemId, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _runGate.Release();
+        }
+    }
+
+    private async Task<bool> SyncOneAsync(Guid itemId, CancellationToken cancellationToken)
     {
         SetItemStatus(itemId, QueueItemStatus.Running);
 
