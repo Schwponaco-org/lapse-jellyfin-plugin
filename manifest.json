@@ -6,8 +6,16 @@
     "description": "Lines up subtitles against a film or episode's audio, or against another subtitle file, using the LAPSE alignment engine. Adds a Sync Subtitles button to the item context menu, a dashboard for bulk syncing and engine setup, auto sync for newly added media, and manual fine tuning for when a sync lands close but not perfect. After installing, open the plugin from Dashboard, Plugins, LAPSE to install the engine and configure it. Nothing syncs until you do.",
     "owner": "rs-jensen",
     "category": "General",
-    "imageUrl": "https://raw.githubusercontent.com/rs-jensen/lapse-jellyfin-plugin/v1.5.0/Jellyfin.Plugin.Lapse/Configuration/LAPSE.png",
+    "imageUrl": "https://raw.githubusercontent.com/Schwponaco-org/lapse-jellyfin-plugin/v1.5.1/Jellyfin.Plugin.Lapse/Configuration/LAPSE.png",
     "versions": [
+      {
+        "version": "1.5.1.0",
+        "changelog": "See the release notes on GitHub.",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/Schwponaco-org/lapse-jellyfin-plugin/releases/download/v1.5.1/lapse-jellyfin-plugin-v1.5.1.zip",
+        "checksum": "27c347c6a94c6f0c0f82eca424cbafac",
+        "timestamp": "2026-08-18T09:21:14Z"
+      },
       {
         "version": "1.5.0.0",
         "changelog": "See the release notes on GitHub.",
