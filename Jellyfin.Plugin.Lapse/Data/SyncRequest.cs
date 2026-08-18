@@ -43,4 +43,12 @@ public class SyncRequest
     /// Gets or sets where the result should land, or null for the configured default.
     /// </summary>
     public OutputMode? OutputMode { get; set; }
+
+    /// <summary>
+    /// Gets or sets the format to write the result in - srt, vtt, ass or ssa - or null to
+    /// keep whatever the subtitle already was. A subtitle in a format no engine reads is
+    /// converted to srt on the way in whatever this says, since there's no other way to
+    /// sync it at all.
+    /// </summary>
+    public string? OutputFormat { get; set; }
 }

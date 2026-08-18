@@ -196,6 +196,44 @@ public class PluginConfiguration : BasePluginConfiguration
     public string? SubToSubCustomFolder { get; set; }
 
     /// <summary>
+    /// Gets or sets the format conversions produce when nothing asks for a specific one.
+    /// srt by default: it's the format everything reads, and the one whose timestamps are
+    /// simplest to edit by hand afterwards.
+    /// </summary>
+    public string ConversionFormat { get; set; } = "srt";
+
+    /// <summary>
+    /// Gets or sets a value indicating whether converting deletes the file it read.
+    /// Off by default, so a conversion adds a file and takes nothing away - if the result
+    /// is wrong, the original is still sitting there.
+    /// </summary>
+    public bool ConversionReplaceOriginal { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether a subtitle that had to be converted before
+    /// an engine could read it then gets synced, rather than the conversion being the
+    /// whole job. On by default: converting was only ever a means to syncing.
+    /// </summary>
+    public bool ConversionSyncAfter { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets who besides administrators may sync, shift, convert and translate the
+    /// subtitles of an item they can see. Admin only until an admin opens it up.
+    /// </summary>
+    public SubtitleAccessMode SubtitleAccess { get; set; } = SubtitleAccessMode.AdminsOnly;
+
+    /// <summary>
+    /// Gets or sets the users allowed to work on subtitles when
+    /// <see cref="SubtitleAccess"/> is <see cref="SubtitleAccessMode.SelectedUsers"/>,
+    /// as Jellyfin user ids.
+    /// </summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Usage",
+        "CA2227:Collection properties should be read only",
+        Justification = "The XML config serializer needs to be able to assign the list when it loads the file.")]
+    public List<string> SubtitleAccessUserIds { get; set; } = new();
+
+    /// <summary>
     /// Gets or sets a value indicating whether a sync on an item with no subtitle at all
     /// may go and fetch one from OpenSubtitles first. Experimental.
     /// </summary>

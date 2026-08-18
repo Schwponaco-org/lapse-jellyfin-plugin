@@ -96,6 +96,35 @@ public class PluginSettings
     public string? SubToSubCustomFolder { get; set; }
 
     /// <summary>
+    /// Gets or sets the format conversions produce by default.
+    /// </summary>
+    public string ConversionFormat { get; set; } = "srt";
+
+    /// <summary>
+    /// Gets or sets a value indicating whether converting deletes the original.
+    /// </summary>
+    public bool ConversionReplaceOriginal { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether a converted subtitle then gets synced.
+    /// </summary>
+    public bool ConversionSyncAfter { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets who besides admins may sync, shift, convert and translate.
+    /// </summary>
+    public SubtitleAccessMode SubtitleAccess { get; set; }
+
+    /// <summary>
+    /// Gets or sets the user ids allowed when the access mode is the picked-users one.
+    /// </summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Usage",
+        "CA2227:Collection properties should be read only",
+        Justification = "Bound from a request body; System.Text.Json skips collection properties it can't assign to, which would make the user picker silently save nothing.")]
+    public List<string> SubtitleAccessUserIds { get; set; } = new();
+
+    /// <summary>
     /// Gets or sets a value indicating whether missing subtitles may be fetched from
     /// OpenSubtitles before syncing.
     /// </summary>

@@ -45,7 +45,7 @@ public class SyncQueueManager
     /// </summary>
     /// <param name="libraryManager">Used to look up items.</param>
     /// <param name="libraryService">Works out which items are eligible.</param>
-    /// <param name="subtitleLocator">Finds external subtitles for an item.</param>
+    /// <param name="subtitleLocator">Finds every subtitle for an item.</param>
     /// <param name="registry">Used to pick the configured default engine.</param>
     /// <param name="runner">Runs the engine.</param>
     /// <param name="logger">Logger.</param>
@@ -281,7 +281,10 @@ public class SyncQueueManager
             ? $" (scored {result.Sigma.Value:0.#} against a threshold of {threshold:0.#})"
             : string.Empty;
 
-        return $"Left the original alone: {verdict}{measured}.";
+        // Anyone reading this has already decided the engine is being too careful, so the
+        // way to overrule it goes in the message rather than being left to be found.
+        return $"Left the original alone: {verdict}{measured}. To sync it anyway, turn on "
+            + "\"Sync even when the engine is unsure\" under Settings, Engines, Advanced.";
     }
 
     /// <summary>
@@ -388,7 +391,14 @@ public class SyncQueueManager
             return false;
         }
 
-        var subtitles = _subtitleLocator.GetExternalSubtitles(item);
+        // Background runs - bulk, scheduled, the Radarr/Sonarr webhook - only ever touch
+        // subtitles that are already files. An embedded track came with the release and is
+        // usually right already, so quietly rewriting every one of them across a whole
+        // library on a schedule risks doing more harm than the drift it might fix. Syncing
+        // one is still there, it just has to be a deliberate press on that one item.
+        var subtitles = _subtitleLocator.GetExternalSubtitles(item)
+            .FindAll(s => !s.IsEmbedded && s.Supported);
+
         if (subtitles.Count == 0)
         {
             SaveRecord(itemId, MovieSyncStatus.Failed, "No external subtitle found");
@@ -436,7 +446,7 @@ public class SyncQueueManager
             var referencePath = reference?.Path ?? item.Path;
 
             var result = await _runner
-                .RunAsync(engine, referencePath, subtitle.Path, mode, penalty, outputMode: null, destinationOverride: null, cancellationToken)
+                .RunAsync(engine, referencePath, subtitle.Path, mode, penalty, outputMode: null, destinationOverride: null, outputFormat: null, cancellationToken)
                 .ConfigureAwait(false);
             lastResult = result;
 

@@ -53,7 +53,7 @@ public class SubtitleTextFile
     public static async Task<SubtitleTextFile> LoadAsync(string path, CancellationToken cancellationToken = default)
     {
         var extension = Path.GetExtension(path).ToLowerInvariant();
-        var lines = (await File.ReadAllLinesAsync(path, cancellationToken).ConfigureAwait(false)).ToList();
+        var lines = (await SubtitleEncoding.ReadAllLinesAsync(path, cancellationToken).ConfigureAwait(false)).ToList();
 
         var spans = extension switch
         {
@@ -109,7 +109,7 @@ public class SubtitleTextFile
 
         output.AddRange(_lines);
 
-        await File.WriteAllLinesAsync(path, output, new UTF8Encoding(false), cancellationToken).ConfigureAwait(false);
+        await File.WriteAllLinesAsync(path, output, SubtitleEncoding.Utf8NoBom, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>

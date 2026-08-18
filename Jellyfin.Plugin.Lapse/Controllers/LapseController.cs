@@ -16,19 +16,28 @@ using Jellyfin.Plugin.Lapse.Data;
 using Jellyfin.Plugin.Lapse.Engines;
 using Jellyfin.Plugin.Lapse.Services;
 using Jellyfin.Plugin.Lapse.Services.Translation;
+using Jellyfin.Data;
+using Jellyfin.Database.Implementations.Entities;
+using Jellyfin.Database.Implementations.Enums;
 using Jellyfin.Plugin.Lapse.Web;
 using MediaBrowser.Common.Api;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Jellyfin.Plugin.Lapse.Controllers;
 
 /// <summary>
 /// API endpoints for the LAPSE dashboard and the injected context menu.
-/// Read-only endpoints just need a logged in user, anything that runs the engine or
-/// touches disk needs an admin (RequiresElevation).
+///
+/// Read-only endpoints just need a logged in user. Anything that changes the plugin
+/// itself - settings, engines, library configuration, bulk runs - needs an admin
+/// (RequiresElevation). Working on one item's subtitles sits in between: it goes through
+/// Jellyfin's own subtitle management permission, so the people already trusted to
+/// download subtitles into the library can line them up too, unless an admin has turned
+/// that off in the settings.
 /// </summary>
 [Authorize]
 [ApiController]
@@ -36,6 +45,7 @@ namespace Jellyfin.Plugin.Lapse.Controllers;
 public class LapseController : ControllerBase
 {
     private readonly ILibraryManager _libraryManager;
+    private readonly IUserManager _userManager;
     private readonly LibraryService _libraryService;
     private readonly SyncQueueManager _queueManager;
     private readonly EngineRegistry _registry;
@@ -45,6 +55,8 @@ public class LapseController : ControllerBase
     private readonly EngineUpdater _updater;
     private readonly SubtitleLocator _subtitleLocator;
     private readonly SubtitleShifter _subtitleShifter;
+    private readonly SubtitleConverter _converter;
+    private readonly SubtitleExtractor _extractor;
     private readonly TranslationService _translationService;
     private readonly SeriesSyncService _seriesSyncService;
     private readonly OpenSubtitlesService _openSubtitles;
@@ -55,6 +67,7 @@ public class LapseController : ControllerBase
     /// Initializes a new instance of the <see cref="LapseController"/> class.
     /// </summary>
     /// <param name="libraryManager">Used to look up items.</param>
+    /// <param name="userManager">Used to check who the caller is.</param>
     /// <param name="libraryService">Libraries and which of their items are eligible.</param>
     /// <param name="queueManager">Runs bulk/background sync jobs.</param>
     /// <param name="registry">The engines we know about.</param>
@@ -64,6 +77,8 @@ public class LapseController : ControllerBase
     /// <param name="updater">Checks for and applies engine updates.</param>
     /// <param name="subtitleLocator">Finds external subtitles for an item.</param>
     /// <param name="subtitleShifter">Nudges subtitle timings by hand.</param>
+    /// <param name="converter">Writes subtitles out in another format.</param>
+    /// <param name="extractor">Pulls subtitle tracks out of video files.</param>
     /// <param name="translationService">Translates subtitle files.</param>
     /// <param name="seriesSyncService">Expands a series or season into its episodes.</param>
     /// <param name="openSubtitles">Fetches a subtitle for an item that has none.</param>
@@ -71,6 +86,7 @@ public class LapseController : ControllerBase
     /// <param name="historyService">Puts a sync back the way it was.</param>
     public LapseController(
         ILibraryManager libraryManager,
+        IUserManager userManager,
         LibraryService libraryService,
         SyncQueueManager queueManager,
         EngineRegistry registry,
@@ -80,6 +96,8 @@ public class LapseController : ControllerBase
         EngineUpdater updater,
         SubtitleLocator subtitleLocator,
         SubtitleShifter subtitleShifter,
+        SubtitleConverter converter,
+        SubtitleExtractor extractor,
         TranslationService translationService,
         SeriesSyncService seriesSyncService,
         OpenSubtitlesService openSubtitles,
@@ -87,6 +105,7 @@ public class LapseController : ControllerBase
         SyncHistoryService historyService)
     {
         _libraryManager = libraryManager;
+        _userManager = userManager;
         _libraryService = libraryService;
         _queueManager = queueManager;
         _registry = registry;
@@ -96,11 +115,79 @@ public class LapseController : ControllerBase
         _updater = updater;
         _subtitleLocator = subtitleLocator;
         _subtitleShifter = subtitleShifter;
+        _converter = converter;
+        _extractor = extractor;
         _translationService = translationService;
         _seriesSyncService = seriesSyncService;
         _openSubtitles = openSubtitles;
         _arrWebhookService = arrWebhookService;
         _historyService = historyService;
+    }
+
+    // The role name Jellyfin puts in the token for an administrator. Its own constant
+    // lives in the server assembly, which plugins don't reference.
+    private const string AdministratorRole = "Administrator";
+
+    // Jellyfin's own claim for the signed in user's id. Same source the server's
+    // authorization handlers read, and it's what makes the picked-users list work.
+    private const string UserIdClaim = "Jellyfin-UserId";
+
+    private const string AccessDeniedMessage =
+        "Only administrators can do this. An admin can open it up to other users under Access in the LAPSE settings.";
+
+    /// <summary>
+    /// Checks whether the caller may work on an item's subtitles. Administrators always
+    /// may; everyone else depends on what an admin chose in the settings.
+    /// </summary>
+    /// <returns>Null when allowed, otherwise the result to return.</returns>
+    private ActionResult? CheckSubtitleAccess()
+    {
+        if (User.IsInRole(AdministratorRole))
+        {
+            return null;
+        }
+
+        var config = Plugin.Instance!.Configuration;
+
+        switch (config.SubtitleAccess)
+        {
+            case SubtitleAccessMode.Everyone:
+                return null;
+
+            case SubtitleAccessMode.SubtitleManagers:
+                return GetCallingUser()?.HasPermission(PermissionKind.EnableSubtitleManagement) == true
+                    ? null
+                    : StatusCode(StatusCodes.Status403Forbidden, AccessDeniedMessage);
+
+            case SubtitleAccessMode.SelectedUsers:
+                var user = GetCallingUser();
+                return user is not null
+                    && config.SubtitleAccessUserIds.Exists(id =>
+                        Guid.TryParse(id, out var parsed) && parsed.Equals(user.Id))
+                    ? null
+                    : StatusCode(StatusCodes.Status403Forbidden, AccessDeniedMessage);
+
+            default:
+                return StatusCode(StatusCodes.Status403Forbidden, AccessDeniedMessage);
+        }
+    }
+
+    // Both ways Jellyfin identifies the caller: the id claim its own handlers use, and
+    // the user name, which is there on every token and is unique server wide.
+    private User? GetCallingUser()
+    {
+        var id = User.FindFirst(UserIdClaim)?.Value;
+        if (Guid.TryParse(id, out var userId) && !userId.Equals(default))
+        {
+            var byId = _userManager.GetUserById(userId);
+            if (byId is not null)
+            {
+                return byId;
+            }
+        }
+
+        var name = User.Identity?.Name;
+        return string.IsNullOrEmpty(name) ? null : _userManager.GetUserByName(name);
     }
 
     // ---------------------------------------------------------------- status and items
@@ -303,6 +390,11 @@ public class LapseController : ControllerBase
             return NotFound("That subtitle doesn't belong to this item");
         }
 
+        if (match.IsEmbedded)
+        {
+            return NotFound("That track is still inside the video file. Sync or convert it once and it becomes a subtitle file this can read.");
+        }
+
         var preview = await SubtitleShifter.ReadFirstCueAsync(match.Path, cancellationToken).ConfigureAwait(false);
         return preview is null ? NotFound("That subtitle has no cues in it") : preview;
     }
@@ -317,9 +409,20 @@ public class LapseController : ControllerBase
     /// <param name="request">Which item, which mode, and which subtitle.</param>
     /// <returns>The engine result.</returns>
     [HttpPost("Lapse/Sync")]
-    [Authorize(Policy = Policies.RequiresElevation)]
     public async Task<ActionResult<SyncResult>> Sync([FromBody] SyncRequest request)
     {
+        if (CheckSubtitleAccess() is { } denied)
+        {
+            return denied;
+        }
+
+        // A body that didn't parse arrives as null, and reading through it is a 500 where
+        // the caller deserves to be told what was wrong with the request.
+        if (request is null)
+        {
+            return BadRequest("A sync request body is required");
+        }
+
         var item = _libraryManager.GetItemById(request.ItemId);
         if (item is null || string.IsNullOrEmpty(item.Path))
         {
@@ -327,13 +430,15 @@ public class LapseController : ControllerBase
         }
 
         var subtitles = _subtitleLocator.GetExternalSubtitles(item);
+        string? fetchError = null;
 
         // Nothing to line up. If subtitle fetching is switched on, go and get one first
         // rather than turning the sync away.
         if (subtitles.Count == 0 && Plugin.Instance!.Configuration.OpenSubtitlesEnabled)
         {
             var fetched = await _openSubtitles.TryFetchAsync(item).ConfigureAwait(false);
-            if (fetched is not null)
+
+            if (fetched.Path is { } fetchedPath)
             {
                 subtitles = _subtitleLocator.GetExternalSubtitles(item);
 
@@ -343,26 +448,47 @@ public class LapseController : ControllerBase
                 {
                     subtitles = new List<SubtitleOption>
                     {
-                        new() { Path = fetched, DisplayName = Path.GetFileName(fetched) }
+                        new()
+                        {
+                            Path = fetchedPath,
+                            DisplayName = Path.GetFileName(fetchedPath),
+                            Format = SubtitleFormats.GetName(fetchedPath)
+                        }
                     };
                 }
+            }
+            else
+            {
+                // Whatever went wrong goes back to whoever pressed Sync. Quietly returning
+                // "no subtitle" here was the reason fetching looked like it did nothing.
+                fetchError = fetched.Error;
             }
         }
 
         if (subtitles.Count == 0)
         {
-            return BadRequest("This item has no external subtitle to sync");
+            return BadRequest(fetchError is null
+                ? "This item has no subtitle to sync"
+                : "This item has no subtitle, and fetching one didn't work: " + fetchError);
         }
 
-        string subtitlePath;
+        // Picture based tracks can't be lined up by anything here, so they don't count
+        // towards "which one did you mean".
+        var usable = subtitles.FindAll(s => s.Supported);
+        if (usable.Count == 0)
+        {
+            return BadRequest("The only subtitles on this item are picture based (PGS or VobSub). There's no text in those to line up - they need OCR first, with something like Subtitle Edit.");
+        }
+
+        SubtitleOption picked;
         if (string.IsNullOrWhiteSpace(request.SubtitlePath))
         {
-            if (subtitles.Count > 1)
+            if (usable.Count > 1)
             {
-                return BadRequest("This item has more than one external subtitle - pick one with subtitlePath");
+                return BadRequest("This item has more than one subtitle - pick one with subtitlePath");
             }
 
-            subtitlePath = subtitles[0].Path;
+            picked = usable[0];
         }
         else
         {
@@ -375,7 +501,18 @@ public class LapseController : ControllerBase
                 return BadRequest("That subtitle doesn't belong to this item");
             }
 
-            subtitlePath = match.Path;
+            if (!match.Supported)
+            {
+                return BadRequest("That's a picture based subtitle (PGS or VobSub). There's no text in it to line up - it needs OCR first, with something like Subtitle Edit.");
+            }
+
+            picked = match;
+        }
+
+        var (subtitlePath, resolveError) = await ResolveToFileAsync(item, picked, HttpContext.RequestAborted).ConfigureAwait(false);
+        if (subtitlePath is null)
+        {
+            return BadRequest(resolveError ?? "Could not get that subtitle out of the video file.");
         }
 
         var engine = _registry.Resolve(request.EngineId);
@@ -388,9 +525,15 @@ public class LapseController : ControllerBase
             return BadRequest($"{engine.Descriptor.DisplayName} doesn't support {mode} alignment");
         }
 
+        if (request.OutputFormat is not null
+            && !SubtitleFormats.TryNormalizeOutputFormat(request.OutputFormat, out _))
+        {
+            return BadRequest("The output format has to be srt, vtt, ass or ssa");
+        }
+
         var penalty = EngineRunner.ResolvePenalty(engine, request.Penalty);
         var result = await _runner
-            .RunAsync(engine, item.Path, subtitlePath, mode, penalty, request.OutputMode)
+            .RunAsync(engine, item.Path, subtitlePath, mode, penalty, request.OutputMode, outputFormat: request.OutputFormat)
             .ConfigureAwait(false);
 
         SyncQueueManager.SaveRecord(
@@ -422,11 +565,23 @@ public class LapseController : ControllerBase
     /// of the tracks is known to be right.
     /// </summary>
     /// <param name="request">The item and which of its subtitles is the reference.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>One result per non-reference subtitle.</returns>
     [HttpPost("Lapse/SyncAllSubtitles")]
-    [Authorize(Policy = Policies.RequiresElevation)]
-    public async Task<ActionResult<MultiSubtitleSyncResult>> SyncAllSubtitles([FromBody] MultiSubtitleSyncRequest request)
+    public async Task<ActionResult<MultiSubtitleSyncResult>> SyncAllSubtitles(
+        [FromBody] MultiSubtitleSyncRequest request,
+        CancellationToken cancellationToken)
     {
+        if (CheckSubtitleAccess() is { } denied)
+        {
+            return denied;
+        }
+
+        if (request is null)
+        {
+            return BadRequest("A request body is required");
+        }
+
         var item = _libraryManager.GetItemById(request.ItemId);
         if (item is null)
         {
@@ -440,10 +595,17 @@ public class LapseController : ControllerBase
             return BadRequest("That reference subtitle doesn't belong to this item");
         }
 
-        var others = subtitles.Where(s => !string.Equals(s.Path, reference.Path, StringComparison.Ordinal)).ToList();
+        // Only ever line something up against a reference that's actually correct.
+        // Picture based tracks have no text to compare, so they can't be a reference.
+        if (!reference.Supported)
+        {
+            return BadRequest("That's a picture based subtitle (PGS or VobSub), so it can't be used as a reference - there's no text in it.");
+        }
+
+        var others = subtitles.Where(s => !string.Equals(s.Path, reference.Path, StringComparison.Ordinal) && s.Supported).ToList();
         if (others.Count == 0)
         {
-            return BadRequest("This item only has the one subtitle, so there's nothing to line up against it");
+            return BadRequest("This item only has the one usable subtitle, so there's nothing to line up against it");
         }
 
         var engine = _registry.Resolve(request.EngineId);
@@ -454,16 +616,41 @@ public class LapseController : ControllerBase
             return BadRequest($"{engine.Descriptor.DisplayName} doesn't support {mode} alignment");
         }
 
+        // This is a deliberate action on one item, same as the plain Sync button, so an
+        // embedded reference or track is worth pulling out rather than turning away - the
+        // caller picked this item on purpose.
+        var (referencePath, referenceError) = await ResolveToFileAsync(item, reference, cancellationToken).ConfigureAwait(false);
+        if (referencePath is null)
+        {
+            return BadRequest(referenceError ?? "Could not get the reference subtitle out of the video file.");
+        }
+
         var penalty = EngineRunner.ResolvePenalty(engine, request.Penalty);
-        var result = new MultiSubtitleSyncResult { ReferencePath = reference.Path };
+        var result = new MultiSubtitleSyncResult { ReferencePath = referencePath };
 
         // Sequential on purpose: these engines are CPU heavy and running a handful of them
         // at once on a media server tends to make everything else stutter.
         foreach (var subtitle in others)
         {
-            var syncResult = await _runner
-                .RunAsync(engine, reference.Path, subtitle.Path, mode, penalty, request.OutputMode)
-                .ConfigureAwait(false);
+            var (subtitlePath, subtitleError) = await ResolveToFileAsync(item, subtitle, cancellationToken).ConfigureAwait(false);
+
+            SyncResult syncResult;
+            if (subtitlePath is null)
+            {
+                syncResult = new SyncResult
+                {
+                    Success = false,
+                    Mode = mode,
+                    EngineId = engine.Descriptor.Id,
+                    Error = subtitleError ?? "Could not get that subtitle out of the video file."
+                };
+            }
+            else
+            {
+                syncResult = await _runner
+                    .RunAsync(engine, referencePath, subtitlePath, mode, penalty, request.OutputMode, cancellationToken: cancellationToken)
+                    .ConfigureAwait(false);
+            }
 
             if (syncResult.Success)
             {
@@ -472,7 +659,7 @@ public class LapseController : ControllerBase
 
             result.Results.Add(new SubtitleSyncOutcome
             {
-                Path = subtitle.Path,
+                Path = subtitlePath ?? subtitle.Path,
                 DisplayName = subtitle.DisplayName,
                 Result = syncResult
             });
@@ -483,7 +670,7 @@ public class LapseController : ControllerBase
         var writtenPaths = result.Results
             .Where(o => o.Result is { Success: true, Skipped: false })
             .Select(o => o.Path)
-            .Append(reference.Path)
+            .Append(referencePath)
             .ToList();
 
         SyncQueueManager.SaveRecord(
@@ -506,6 +693,11 @@ public class LapseController : ControllerBase
     [Authorize(Policy = Policies.RequiresElevation)]
     public ActionResult BulkSync([FromBody] BulkSyncRequest request)
     {
+        if (request is null)
+        {
+            return BadRequest("A request body is required");
+        }
+
         var started = request.Scope == BulkSyncScope.Folder && request.FolderId.HasValue
             ? _queueManager.EnqueueFolder(request.FolderId.Value)
             : _queueManager.EnqueueLibrary();
@@ -561,9 +753,18 @@ public class LapseController : ControllerBase
     /// <param name="request">The series or season, and optionally a reference track.</param>
     /// <returns>How many episodes were queued, or 409 if a job is already running.</returns>
     [HttpPost("Lapse/Series/Sync")]
-    [Authorize(Policy = Policies.RequiresElevation)]
     public ActionResult SyncSeries([FromBody] SeriesSyncRequest request)
     {
+        if (CheckSubtitleAccess() is { } denied)
+        {
+            return denied;
+        }
+
+        if (request is null)
+        {
+            return BadRequest("A request body is required");
+        }
+
         var item = _libraryManager.GetItemById(request.ItemId);
         if (item is null)
         {
@@ -663,6 +864,11 @@ public class LapseController : ControllerBase
     [Authorize(Policy = Policies.RequiresElevation)]
     public ActionResult Skip([FromBody] SkipRequest request)
     {
+        if (request is null)
+        {
+            return BadRequest("A request body is required");
+        }
+
         var config = Plugin.Instance!.Configuration;
 
         if (request.Skip)
@@ -1087,6 +1293,27 @@ public class LapseController : ControllerBase
         return Ok();
     }
 
+    /// <summary>
+    /// Gets the server's users, so the settings page can offer a list to pick from when
+    /// subtitle access is handed to named people.
+    /// </summary>
+    /// <returns>One entry per user.</returns>
+    [HttpGet("Lapse/Users")]
+    [Authorize(Policy = Policies.RequiresElevation)]
+    public ActionResult<List<object>> GetUsers()
+    {
+        return _userManager.GetUsers()
+            .OrderBy(u => u.Username, StringComparer.OrdinalIgnoreCase)
+            .Select(u => (object)new
+            {
+                Id = u.Id.ToString("N", CultureInfo.InvariantCulture),
+                Name = u.Username,
+                IsAdministrator = u.HasPermission(PermissionKind.IsAdministrator),
+                CanManageSubtitles = u.HasPermission(PermissionKind.EnableSubtitleManagement)
+            })
+            .ToList();
+    }
+
     // --------------------------------------------------------------------- settings
 
     /// <summary>
@@ -1106,6 +1333,11 @@ public class LapseController : ControllerBase
             ConfidenceSigma = config.ConfidenceSigma,
             SubToSubPlacement = config.SubToSubPlacement,
             SubToSubCustomFolder = config.SubToSubCustomFolder,
+            ConversionFormat = config.ConversionFormat,
+            ConversionReplaceOriginal = config.ConversionReplaceOriginal,
+            ConversionSyncAfter = config.ConversionSyncAfter,
+            SubtitleAccess = config.SubtitleAccess,
+            SubtitleAccessUserIds = new List<string>(config.SubtitleAccessUserIds),
             OpenSubtitlesEnabled = config.OpenSubtitlesEnabled,
             OpenSubtitlesApiKey = config.OpenSubtitlesApiKey,
             OpenSubtitlesUsername = config.OpenSubtitlesUsername,
@@ -1272,19 +1504,31 @@ public class LapseController : ControllerBase
     /// </summary>
     /// <param name="itemId">The item to un-ignore, if it was an item rule.</param>
     /// <param name="path">The path to un-ignore, if it was a path rule.</param>
-    /// <returns>Ok.</returns>
+    /// <returns>How many rules were taken off.</returns>
     [HttpDelete("Lapse/Ignore")]
     [Authorize(Policy = Policies.RequiresElevation)]
-    public ActionResult RemoveIgnoreRule([FromQuery] Guid? itemId, [FromQuery] string? path)
+    public ActionResult<IgnoreRemovalResult> RemoveIgnoreRule([FromQuery] Guid? itemId, [FromQuery] string? path)
     {
+        if (!itemId.HasValue && string.IsNullOrWhiteSpace(path))
+        {
+            return BadRequest("Say which item or path to take off the list");
+        }
+
         var config = Plugin.Instance!.Configuration;
 
-        config.IgnoreRules.RemoveAll(r =>
+        var removed = config.IgnoreRules.RemoveAll(r =>
             (itemId.HasValue && r.ItemId == itemId)
             || (!string.IsNullOrWhiteSpace(path) && string.Equals(r.Path, path, StringComparison.OrdinalIgnoreCase)));
 
-        Plugin.Instance!.SaveConfiguration();
-        return Ok();
+        if (removed > 0)
+        {
+            Plugin.Instance!.SaveConfiguration();
+        }
+
+        // An item can be ignored because a rule on its series or its folder covers it, and
+        // there is nothing on its own id to take off. Saying so beats a button that looks
+        // like it did nothing.
+        return new IgnoreRemovalResult { Removed = removed };
     }
 
     // --------------------------------------------------------- radarr / sonarr webhook
@@ -1385,6 +1629,20 @@ public class LapseController : ControllerBase
 
         config.SubToSubPlacement = settings.SubToSubPlacement;
         config.SubToSubCustomFolder = Blank(settings.SubToSubCustomFolder);
+        config.ConversionFormat = SubtitleFormats.TryNormalizeOutputFormat(settings.ConversionFormat, out var conversionFormat)
+            ? conversionFormat
+            : "srt";
+        config.ConversionReplaceOriginal = settings.ConversionReplaceOriginal;
+        config.ConversionSyncAfter = settings.ConversionSyncAfter;
+        config.SubtitleAccess = settings.SubtitleAccess;
+
+        // Keep only ids that are still real users, so deleting a user doesn't leave a
+        // stale grant sitting in the config waiting for a recycled id.
+        config.SubtitleAccessUserIds = settings.SubtitleAccessUserIds
+            .Where(id => Guid.TryParse(id, out var parsed) && _userManager.GetUserById(parsed) is not null)
+            .Select(id => Guid.Parse(id).ToString("N", CultureInfo.InvariantCulture))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
         config.OpenSubtitlesEnabled = settings.OpenSubtitlesEnabled;
         config.OpenSubtitlesApiKey = Blank(settings.OpenSubtitlesApiKey);
         config.OpenSubtitlesUsername = Blank(settings.OpenSubtitlesUsername);
@@ -1459,11 +1717,20 @@ public class LapseController : ControllerBase
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>What happened.</returns>
     [HttpPost("Lapse/Translate")]
-    [Authorize(Policy = Policies.RequiresElevation)]
     public async Task<ActionResult<TranslationResult>> Translate(
         [FromBody] TranslationRequest request,
         CancellationToken cancellationToken)
     {
+        if (CheckSubtitleAccess() is { } denied)
+        {
+            return denied;
+        }
+
+        if (request is null)
+        {
+            return BadRequest("A request body is required");
+        }
+
         var item = _libraryManager.GetItemById(request.ItemId);
         if (item is null)
         {
@@ -1480,7 +1747,13 @@ public class LapseController : ControllerBase
             return BadRequest("That subtitle doesn't belong to this item");
         }
 
-        return await _translationService.TranslateAsync(match.Path, request, cancellationToken).ConfigureAwait(false);
+        var (translatePath, translateError) = await ResolveToFileAsync(item, match, cancellationToken).ConfigureAwait(false);
+        if (translatePath is null)
+        {
+            return BadRequest(translateError ?? "Could not get that subtitle out of the video file.");
+        }
+
+        return await _translationService.TranslateAsync(translatePath, request, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -1524,11 +1797,15 @@ public class LapseController : ControllerBase
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>What the shift did.</returns>
     [HttpPost("Lapse/Shift")]
-    [Authorize(Policy = Policies.RequiresElevation)]
     public async Task<ActionResult<ShiftResult>> Shift(
         [FromBody] ShiftRequest request,
         CancellationToken cancellationToken)
     {
+        if (CheckSubtitleAccess() is { } denied)
+        {
+            return denied;
+        }
+
         if (request is null || string.IsNullOrWhiteSpace(request.SubtitlePath))
         {
             return BadRequest("A subtitle path is required");
@@ -1543,16 +1820,328 @@ public class LapseController : ControllerBase
             return BadRequest("That subtitle doesn't belong to this item, or the item doesn't exist");
         }
 
+        var (shiftPath, shiftError) = await ResolveToFileAsync(
+            _libraryManager.GetItemById(request.ItemId)!,
+            match,
+            cancellationToken).ConfigureAwait(false);
+
+        if (shiftPath is null)
+        {
+            return BadRequest(shiftError ?? "Could not get that subtitle out of the video file.");
+        }
+
         try
         {
             return await _subtitleShifter
-                .ShiftAsync(match.Path, request.ResolveOffsetSeconds(), request.OutputMode, cancellationToken)
+                .ShiftAsync(shiftPath, request.ResolveOffsetSeconds(), request.OutputMode, cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is NotSupportedException or FileNotFoundException or IOException)
         {
             return BadRequest(ex.Message);
         }
+    }
+
+    /// <summary>
+    /// Writes one of an item's subtitles out in a different format, without syncing it.
+    /// The source is left alone unless the request asks for it to be replaced.
+    ///
+    /// This is also the way in for the formats no engine reads. A MicroDVD .sub can't be
+    /// synced or shifted as it stands, but converting it to srt first makes it an
+    /// ordinary subtitle that everything else here works on.
+    /// </summary>
+    /// <param name="request">Which subtitle, and what to write it as.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>What was written.</returns>
+    [HttpPost("Lapse/Convert")]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Security",
+        "CA3003:Review code for file path injection vulnerabilities",
+        Justification = "The source is a subtitle the library lists for this item and the destination is that path with a different extension.")]
+    public async Task<ActionResult<ConvertResult>> ConvertSubtitle(
+        [FromBody] ConvertRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (CheckSubtitleAccess() is { } denied)
+        {
+            return denied;
+        }
+
+        if (request is null || string.IsNullOrWhiteSpace(request.SubtitlePath))
+        {
+            return BadRequest("A subtitle path is required");
+        }
+
+        var config = Plugin.Instance!.Configuration;
+
+        // An empty format means "whatever the Conversion settings say", so the menu entry
+        // doesn't have to know what that is.
+        var requestedFormat = string.IsNullOrWhiteSpace(request.TargetFormat) ? config.ConversionFormat : request.TargetFormat;
+
+        if (!SubtitleFormats.TryNormalizeOutputFormat(requestedFormat, out var target))
+        {
+            return BadRequest("The target format has to be srt, vtt, ass or ssa");
+        }
+
+        var replaceOriginal = request.ReplaceOriginal ?? config.ConversionReplaceOriginal;
+
+        // Same rule as everywhere else: only ever read a subtitle the library lists for
+        // this item, and work from its copy of the path rather than the request's.
+        var match = FindSubtitle(request.ItemId, request.SubtitlePath);
+        if (match is null)
+        {
+            return BadRequest("That subtitle doesn't belong to this item, or the item doesn't exist");
+        }
+
+        var (sourcePath, sourceError) = await ResolveToFileAsync(
+            _libraryManager.GetItemById(request.ItemId)!,
+            match,
+            cancellationToken).ConfigureAwait(false);
+
+        if (sourcePath is null)
+        {
+            return BadRequest(sourceError ?? "Could not get that subtitle out of the video file.");
+        }
+
+        var sourceFormat = SubtitleFormats.GetName(sourcePath);
+        if (string.Equals(sourceFormat, target, StringComparison.Ordinal))
+        {
+            return BadRequest($"That subtitle is already {target}.");
+        }
+
+        var destination = Path.ChangeExtension(sourcePath, "." + target);
+
+        // Converting shouldn't be able to write over a subtitle that's already there -
+        // most obviously the file this one was converted from last time.
+        var attempt = 1;
+        while (System.IO.File.Exists(destination))
+        {
+            destination = Path.ChangeExtension(sourcePath, null)
+                + "." + attempt.ToString(CultureInfo.InvariantCulture) + "." + target;
+            attempt++;
+        }
+
+        try
+        {
+            var cues = await _converter.ConvertAsync(sourcePath, destination, cancellationToken).ConfigureAwait(false);
+
+            var removed = false;
+
+            // An embedded track was extracted to get here, so there is no original to
+            // replace - the file at sourcePath is one this request just made, and the
+            // track is still in the video either way.
+            if (replaceOriginal && !match.IsEmbedded)
+            {
+                try
+                {
+                    System.IO.File.Delete(sourcePath);
+                    removed = true;
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    // The conversion itself worked, so reporting a failure over a file
+                    // that is merely still there would be the wrong answer. RemovedOriginal
+                    // stays false, which is what the caller needs to know.
+                    _ = ex;
+                }
+            }
+
+            var result = new ConvertResult
+            {
+                OutputPath = destination,
+                Format = target,
+                SourceFormat = sourceFormat,
+                Cues = cues,
+                RemovedOriginal = removed
+            };
+
+            // Converting is usually a step on the way to syncing rather than the point of
+            // the exercise, so unless told otherwise it carries straight on.
+            if (request.SyncAfter ?? config.ConversionSyncAfter)
+            {
+                var item = _libraryManager.GetItemById(request.ItemId);
+
+                if (item is not null && !string.IsNullOrEmpty(item.Path))
+                {
+                    var engine = _registry.Resolve(request.EngineId);
+
+                    result.Sync = await _runner
+                        .RunAsync(
+                            engine,
+                            item.Path,
+                            destination,
+                            EngineRunner.ResolveDefaultMode(engine),
+                            EngineRunner.ResolvePenalty(engine, null),
+                            cancellationToken: cancellationToken)
+                        .ConfigureAwait(false);
+
+                    result.SyncedAfter = true;
+
+                    SyncQueueManager.SaveRecord(
+                        request.ItemId,
+                        ResolveRecordStatus(result.Sync),
+                        result.Sync.Success && result.Sync.Skipped ? SyncQueueManager.DescribeSkip(result.Sync) : result.Sync.Error,
+                        result.Sync,
+                        result.Sync.Success && !result.Sync.Skipped ? new[] { destination } : null);
+                }
+            }
+
+            return result;
+        }
+        catch (Exception ex) when (ex is NotSupportedException or InvalidDataException or IOException or TimeoutException)
+        {
+            return BadRequest(ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Runs several steps over one subtitle in a single request: change its format, sync
+    /// it, translate it, or any combination. The order is fixed, because it's the only one
+    /// that works - the format has to change before an engine can read the file, and the
+    /// timings have to be right before a translation copies them.
+    ///
+    /// Doing this server side rather than as three calls from the dialog matters: each
+    /// step works on the file the one before it produced, and that file doesn't exist yet
+    /// when the browser would have to name it.
+    /// </summary>
+    /// <param name="request">Which subtitle, and which steps to run.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>What each step did.</returns>
+    [HttpPost("Lapse/Pipeline")]
+    public async Task<ActionResult<PipelineResult>> RunPipeline(
+        [FromBody] PipelineRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (CheckSubtitleAccess() is { } denied)
+        {
+            return denied;
+        }
+
+        if (request is null)
+        {
+            return BadRequest("Nothing to do");
+        }
+
+        var item = _libraryManager.GetItemById(request.ItemId);
+        if (item is null || string.IsNullOrEmpty(item.Path))
+        {
+            return NotFound("Item not found, or it has no video file");
+        }
+
+        var subtitles = _subtitleLocator.GetExternalSubtitles(item);
+        var picked = string.IsNullOrWhiteSpace(request.SubtitlePath)
+            ? subtitles.Find(s => s.Supported)
+            : subtitles.Find(s => string.Equals(s.Path, request.SubtitlePath, StringComparison.Ordinal));
+
+        if (picked is null)
+        {
+            return BadRequest("That subtitle doesn't belong to this item");
+        }
+
+        if (!picked.Supported)
+        {
+            return BadRequest("That's a picture based subtitle (PGS or VobSub). There's no text in it to work with - it needs OCR first.");
+        }
+
+        if (request.OutputFormat is not null && !SubtitleFormats.TryNormalizeOutputFormat(request.OutputFormat, out _))
+        {
+            return BadRequest("The output format has to be srt, vtt, ass or ssa");
+        }
+
+        var result = new PipelineResult { Extracted = picked.IsEmbedded };
+
+        var (path, resolveError) = await ResolveToFileAsync(item, picked, cancellationToken).ConfigureAwait(false);
+        if (path is null)
+        {
+            result.Error = resolveError ?? "Could not get that subtitle out of the video file.";
+            return result;
+        }
+
+        result.SubtitlePath = path;
+
+        if (request.Sync)
+        {
+            var engine = _registry.Resolve(request.EngineId);
+            var mode = request.Mode ?? EngineRunner.ResolveDefaultMode(engine);
+
+            if (!SupportsMode(engine, mode))
+            {
+                result.Error = $"{engine.Descriptor.DisplayName} doesn't support {mode} alignment";
+                return result;
+            }
+
+            var sync = await _runner
+                .RunAsync(
+                    engine,
+                    item.Path,
+                    path,
+                    mode,
+                    EngineRunner.ResolvePenalty(engine, request.Penalty),
+                    request.OutputMode,
+                    outputFormat: request.OutputFormat,
+                    cancellationToken: cancellationToken)
+                .ConfigureAwait(false);
+
+            result.Sync = sync;
+            result.ConvertedFrom = sync.ConvertedFrom;
+
+            SyncQueueManager.SaveRecord(
+                request.ItemId,
+                ResolveRecordStatus(sync),
+                sync.Success && sync.Skipped ? SyncQueueManager.DescribeSkip(sync) : sync.Error,
+                sync,
+                sync.Success && !sync.Skipped ? new[] { path } : null);
+
+            if (!sync.Success)
+            {
+                result.Error = sync.Error;
+                return result;
+            }
+
+            // Everything after this works on what the sync wrote, not on what went in.
+            if (!string.IsNullOrEmpty(sync.OutputPath))
+            {
+                result.SubtitlePath = sync.OutputPath;
+            }
+        }
+        else if (request.OutputFormat is not null
+            && !string.Equals(SubtitleFormats.GetName(path), request.OutputFormat, StringComparison.OrdinalIgnoreCase))
+        {
+            // No sync asked for, so the conversion is the whole job here.
+            SubtitleFormats.TryNormalizeOutputFormat(request.OutputFormat, out var target);
+            var destination = Path.ChangeExtension(path, "." + target);
+
+            try
+            {
+                await _converter.ConvertAsync(path, destination, cancellationToken).ConfigureAwait(false);
+                result.ConvertedFrom = SubtitleFormats.GetName(path);
+                result.SubtitlePath = destination;
+            }
+            catch (Exception ex) when (ex is NotSupportedException or InvalidDataException or IOException or TimeoutException)
+            {
+                result.Error = ex.Message;
+                return result;
+            }
+        }
+
+        if (request.Translation is not null)
+        {
+            result.Translation = await _translationService
+                .TranslateAsync(result.SubtitlePath, request.Translation, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Gets the formats a subtitle can be converted to.
+    /// </summary>
+    /// <returns>The format names.</returns>
+    [HttpGet("Lapse/Convert/Formats")]
+    public ActionResult<IReadOnlyList<string>> GetConvertFormats()
+    {
+        return Ok(SubtitleFormats.OutputFormats);
     }
 
     /// <summary>
@@ -1725,6 +2314,18 @@ public class LapseController : ControllerBase
 
         return _subtitleLocator.GetExternalSubtitles(item)
             .Find(s => string.Equals(s.Path, path, StringComparison.Ordinal));
+    }
+
+    // Turns a picked subtitle into something on disk. External ones already are; a track
+    // still inside the video gets extracted next to it, which is a one-off - from then on
+    // it's an ordinary sidecar that everything else here works on, and that Jellyfin picks
+    // up as another track on its next scan.
+    private Task<(string? Path, string? Error)> ResolveToFileAsync(
+        BaseItem item,
+        SubtitleOption option,
+        CancellationToken cancellationToken)
+    {
+        return _extractor.ResolveAsync(item, option, cancellationToken);
     }
 
     private static bool SupportsMode(IEngine engine, SyncMode mode)

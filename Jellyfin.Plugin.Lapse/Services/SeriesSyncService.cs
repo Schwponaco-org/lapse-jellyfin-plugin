@@ -139,8 +139,17 @@ public class SeriesSyncService
             // English look twice as common as it is
             var keysHere = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
+            // Kept to the same subtitles a background run will actually match against -
+            // see the exclusion in SyncQueueManager.ProcessOneAsync. Offering an embedded
+            // track here would put a reference in the dropdown that then matches nothing
+            // once the run itself filters it back out.
             foreach (var subtitle in _subtitleLocator.GetExternalSubtitles(episode))
             {
+                if (subtitle.IsEmbedded || !subtitle.Supported)
+                {
+                    continue;
+                }
+
                 var key = BuildKey(episode, subtitle);
                 if (key is not null)
                 {
