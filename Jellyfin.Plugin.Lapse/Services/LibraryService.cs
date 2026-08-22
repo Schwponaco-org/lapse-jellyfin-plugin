@@ -71,7 +71,11 @@ public class LibraryService
                 // no entry means the user has never touched this library in the dashboard,
                 // and those default to on so an upgrade doesn't quietly stop syncing
                 Enabled = settings?.Enabled ?? true,
-                AutoSyncEnabled = settings?.AutoSyncEnabled ?? true,
+
+                // Unlike Enabled, these two start off. Being eligible for a sync somebody
+                // asks for is one thing; having files rewritten unprompted is another, and
+                // that shouldn't begin because an update added the option.
+                AutoSyncEnabled = settings?.AutoSyncEnabled ?? false,
                 ScheduleEnabled = settings?.ScheduleEnabled ?? false,
                 ScheduleFrequency = (settings?.ScheduleFrequency ?? Data.ScheduleFrequency.Daily).ToString(),
                 ScheduleDay = settings?.ScheduleDay?.ToString(),
@@ -187,7 +191,7 @@ public class LibraryService
 
     /// <summary>
     /// Says whether a newly added item should be picked up straight away. Eligibility on
-    /// its own isn't enough: a library can be turned on for scheduled and bulk runs while
+    /// its own isn't enough: a library can be turned on for bulk and scheduled runs while
     /// still not wanting every new file grabbed the moment it lands.
     /// </summary>
     /// <param name="item">The item that was just added.</param>
@@ -208,8 +212,9 @@ public class LibraryService
         var settings = Plugin.Instance!.Configuration.Libraries
             .FirstOrDefault(l => l.LibraryId == libraryId.Value);
 
-        // A library nobody has configured counts as on, same as everywhere else here
-        return settings?.AutoSyncEnabled ?? true;
+        // A library nobody has set this on doesn't get it. Nothing starts touching files
+        // by itself until somebody ticks the box.
+        return settings?.AutoSyncEnabled ?? false;
     }
 
     /// <summary>

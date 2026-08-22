@@ -17,7 +17,7 @@ description: >
   dashboard walks you through installing the alignment engine, which is a
   single download. Nothing syncs until that is done.
 category: "General"
-owner: "rs-jensen"
+owner: "r-stisen"
 artifacts:
 - "Jellyfin.Plugin.Lapse.dll"
 changelog: >

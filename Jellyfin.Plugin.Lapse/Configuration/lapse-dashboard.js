@@ -851,27 +851,71 @@
             '</div>';
     }
 
-    // Which subtitle formats this engine takes as they are. Read off the installed binary
-    // where it can say, so it is the truth about the build on disk rather than a claim.
-    function engineFormatsLine(engine) {
-        var formats = engine.SubtitleExtensions || [];
-
-        if (formats.length === 0) {
-            return '';
+    // One box under the cards covering all three engines, rather than a line of formats
+    // inside each card. The question people actually have is "which of these reads my
+    // files", and that is a comparison, so it wants them side by side.
+    function renderEngineFormats(view) {
+        var box = view.querySelector('#lapseEngineFormats');
+        if (!box) {
+            return;
         }
 
-        return '<div class="fieldDescription lapseParamNote">Reads and writes ' +
-            escapeHtml(formats.join(', ')) + '. Anything else is converted first.</div>';
+        var withFormats = allEngines.filter(function (e) {
+            return (e.SubtitleExtensions || []).length > 0;
+        });
+
+        if (withFormats.length === 0) {
+            box.classList.add('hide');
+            return;
+        }
+
+        box.classList.remove('hide');
+        box.innerHTML =
+            '<div class="lapseBoxTitle">Subtitle formats</div>' +
+            '<div class="lapseFormatTable">' +
+            withFormats.map(function (engine) {
+                return '<div class="lapseFormatName">' + escapeHtml(engine.DisplayName) +
+                    (engine.IsDefault ? ' <span class="lapseFormatInUse">in use</span>' : '') + '</div>' +
+                    '<div class="lapseFormatList">' +
+                    (engine.SubtitleExtensions || []).map(function (f) {
+                        return '<code>' + escapeHtml(f) + '</code>';
+                    }).join(' ') +
+                    '</div>';
+            }).join('') +
+            '</div>' +
+            '<p>Each engine writes a file back in the format it read it in. Anything the engine ' +
+            'in use cannot read is converted to .srt first and synced as that, so nothing is ' +
+            'turned away for its format alone.</p>' +
+            '<p>.sup (PGS) and .idx (VobSub) are pictures of text rather than text. LAPSE can ' +
+            'still move their timing, because timing is timing, but converting, translating and ' +
+            'shifting by hand all need words and cannot touch them. Those need OCR first, with ' +
+            'something like Subtitle Edit.</p>';
     }
 
-    function engineDeploymentHtml(engine) {
-        if (!engine.DeploymentNote) {
-            return '';
+    // Anything worth knowing about running an engine outside Jellyfin. Only LAPSE has one
+    // of these, but it is driven off the data rather than hardcoded to it.
+    function renderEngineDeployment(view) {
+        var box = view.querySelector('#lapseEngineDeployment');
+        if (!box) {
+            return;
         }
 
-        return '<div class="fieldDescription lapseParamNote">' + escapeHtml(engine.DeploymentNote) +
-            ' <a is="emby-linkbutton" class="button-link" href="' + escapeHtml(engine.ProjectUrl) +
-            '" target="_blank" rel="noopener">Read more on GitHub</a></div>';
+        var withNotes = allEngines.filter(function (e) { return e.DeploymentNote; });
+
+        if (withNotes.length === 0) {
+            box.classList.add('hide');
+            return;
+        }
+
+        box.classList.remove('hide');
+        box.innerHTML =
+            '<div class="lapseBoxTitle">Worth considering</div>' +
+            withNotes.map(function (engine) {
+                return '<p>' + escapeHtml(engine.DeploymentNote) +
+                    ' <a is="emby-linkbutton" class="button-link" href="' + escapeHtml(engine.ProjectUrl) +
+                    '" target="_blank" rel="noopener">' + escapeHtml(engine.DisplayName) +
+                    ' on GitHub</a></p>';
+            }).join('');
     }
 
     function renderEngineCards(view) {
@@ -949,11 +993,9 @@
                 '    <span>' + escapeHtml(updateNote || engineStateText(engine)) + '</span>' +
                 '  </div>' +
                 whyLink +
-                engineFormatsLine(engine) +
                 problem +
                 '  <div class="lapseEngineActions">' + actions + '</div>' +
                 engineAdvancedHtml(engine) +
-                engineDeploymentHtml(engine) +
                 '</div>';
         }).join('');
 
@@ -1082,6 +1124,8 @@
         return lapseGet('Lapse/Engines').then(function (engines) {
             allEngines = engines;
             renderEngineCards(view);
+            renderEngineFormats(view);
+            renderEngineDeployment(view);
             updateSubToSubEngineNote(view);
             renderConversionEngineNote(view);
             view.querySelector('#lapseAutoUpdateEngines').checked =
@@ -1134,11 +1178,11 @@
                 '    <span class="lapseMuted lapseLibraryType">' + escapeHtml(library.CollectionType || 'mixed') + '</span>' +
                 '  </div>' +
                 '  <div class="lapseLibrarySchedule">' +
-                '    <label class="emby-checkbox-label lapseInlineCheck" title="Sync anything added to this library as it turns up, without waiting for the schedule.">' +
-                '      <input type="checkbox" is="emby-checkbox" class="lapseChkAutoSync"' + (library.AutoSyncEnabled !== false ? ' checked' : '') + ' />' +
+                '    <label class="emby-checkbox-label lapseInlineCheck" title="Sync anything added to this library as it turns up. Nothing already in the library is touched.">' +
+                '      <input type="checkbox" is="emby-checkbox" class="lapseChkAutoSync"' + (library.AutoSyncEnabled ? ' checked' : '') + ' />' +
                 '      <span>New items</span>' +
                 '    </label>' +
-                '    <label class="emby-checkbox-label lapseInlineCheck">' +
+                '    <label class="emby-checkbox-label lapseInlineCheck" title="Run over everything in this library on a timer.">' +
                 '      <input type="checkbox" is="emby-checkbox" class="lapseChkSchedule"' + (library.ScheduleEnabled ? ' checked' : '') + ' />' +
                 '      <span>Schedule</span>' +
                 '    </label>' +
@@ -1159,6 +1203,25 @@
             var daySelect = row.querySelector('.lapseScheduleDay');
             var timeInput = row.querySelector('.lapseScheduleTime');
 
+            // New items and a schedule are one choice between two, so ticking either one
+            // unticks the other rather than leaving both on and letting the schedule redo
+            // work that was already done as the files arrived.
+            autoSyncCheck.addEventListener('change', function () {
+                if (autoSyncCheck.checked) {
+                    scheduleCheck.checked = false;
+                }
+
+                syncRowState();
+            });
+
+            scheduleCheck.addEventListener('change', function () {
+                if (scheduleCheck.checked) {
+                    autoSyncCheck.checked = false;
+                }
+
+                syncRowState();
+            });
+
             // Nothing about the schedule is shown until there is one, and the day only
             // means anything for the frequencies that repeat on one - "every day" has no
             // day to pick, so it never gets offered one.
@@ -1178,7 +1241,6 @@
                 daySelect.disabled = !needsDay;
             }
 
-            scheduleCheck.addEventListener('change', syncRowState);
             enabledCheck.addEventListener('change', syncRowState);
             frequencySelect.addEventListener('change', syncRowState);
             syncRowState();
@@ -1186,8 +1248,19 @@
 
         var enabled = allLibraries.filter(function (l) { return l.Enabled; }).length;
         var scheduled = allLibraries.filter(function (l) { return l.Enabled && l.ScheduleEnabled; }).length;
+        var automatic = allLibraries.filter(function (l) { return l.Enabled && l.AutoSyncEnabled; }).length;
+
+        var extra = [];
+        if (automatic) {
+            extra.push(automatic + ' on new items');
+        }
+
+        if (scheduled) {
+            extra.push(scheduled + ' scheduled');
+        }
+
         view.querySelector('#lapseLibrariesHint').textContent =
-            enabled + ' of ' + allLibraries.length + ' on' + (scheduled ? (', ' + scheduled + ' scheduled') : '');
+            enabled + ' of ' + allLibraries.length + ' on' + (extra.length ? (', ' + extra.join(', ')) : '');
     }
 
     function refreshLibraries(view) {

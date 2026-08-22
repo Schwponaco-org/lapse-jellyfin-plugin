@@ -36,7 +36,7 @@ public class LibraryEntry
     /// Gets or sets a value indicating whether newly added items in this library are
     /// picked up on their own, without waiting for a scheduled run.
     /// </summary>
-    public bool AutoSyncEnabled { get; set; } = true;
+    public bool AutoSyncEnabled { get; set; }
 
     /// <summary>
     /// Gets or sets a value indicating whether this library gets synced on a schedule.

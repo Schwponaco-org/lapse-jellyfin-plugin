@@ -639,6 +639,74 @@
     opacity: .9;
 }
 
+/* --- reference boxes under the engine cards ---
+   Reading material rather than settings, so it sits at the bottom of the panel in its own
+   box instead of repeating a line inside every card. */
+
+.lapseInfoBox {
+    margin: 0 0 .9em;
+    padding: .75em .9em;
+    border: 1px solid rgba(127, 127, 127, .3);
+    border-radius: .35em;
+    background: rgba(127, 127, 127, .07);
+    font-size: .85em;
+    line-height: 1.5;
+}
+
+.lapseInfoBox p {
+    margin: .6em 0 0;
+    opacity: .85;
+}
+
+.lapseBoxTitle {
+    font-weight: 600;
+    font-size: 1.02em;
+    margin-bottom: .5em;
+}
+
+/* Engine name in one column, its formats in the other, so the three lists line up and
+   can actually be compared. Collapses to stacked rows when there isn't the width. */
+.lapseFormatTable {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: .35em .9em;
+    align-items: baseline;
+}
+
+@media (max-width: 40em) {
+    .lapseFormatTable {
+        grid-template-columns: 1fr;
+        gap: .15em;
+    }
+
+    .lapseFormatList {
+        margin-bottom: .5em;
+    }
+}
+
+.lapseFormatName {
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.lapseFormatInUse {
+    font-weight: normal;
+    font-size: .78em;
+    padding: .1em .45em;
+    border-radius: 1em;
+    background: rgba(0, 164, 220, .25);
+    vertical-align: middle;
+}
+
+.lapseFormatList code {
+    display: inline-block;
+    padding: .1em .4em;
+    margin: .1em .1em .1em 0;
+    border-radius: .25em;
+    background: rgba(127, 127, 127, .18);
+    font-size: .92em;
+}
+
 /* --- engine version next to the name --- */
 
 .lapseVersionBadge {
