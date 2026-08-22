@@ -198,6 +198,6 @@ GPL v3. See [LICENSE](LICENSE).
 
 ## Credits
 
-Built by Rasmus Stisen ([r-stisen](https://github.com/r-stisen)) and Carl Johan M. Bangsgaard ([cowmuncher](https://github.com/cowmuncher)).
+Built by Rasmus Stisen ([rs-jensen](https://github.com/rs-jensen)) and Carl Johan M. Bangsgaard ([cowmuncher](https://github.com/cowmuncher)).
 
 A product of [Schwponaco](https://github.com/Schwponaco-org), where the LAPSE engine this plugin is built around is made.
