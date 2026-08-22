@@ -71,6 +71,7 @@ public class LibraryService
                 // no entry means the user has never touched this library in the dashboard,
                 // and those default to on so an upgrade doesn't quietly stop syncing
                 Enabled = settings?.Enabled ?? true,
+                AutoSyncEnabled = settings?.AutoSyncEnabled ?? true,
                 ScheduleEnabled = settings?.ScheduleEnabled ?? false,
                 ScheduleFrequency = (settings?.ScheduleFrequency ?? Data.ScheduleFrequency.Daily).ToString(),
                 ScheduleDay = settings?.ScheduleDay?.ToString(),
@@ -182,6 +183,33 @@ public class LibraryService
         // an item we can't place in a library (a stray item, or a library the plugin
         // can't see) is left alone rather than synced on a guess
         return libraryId.HasValue && Plugin.Instance!.Configuration.IsLibraryEnabled(libraryId.Value);
+    }
+
+    /// <summary>
+    /// Says whether a newly added item should be picked up straight away. Eligibility on
+    /// its own isn't enough: a library can be turned on for scheduled and bulk runs while
+    /// still not wanting every new file grabbed the moment it lands.
+    /// </summary>
+    /// <param name="item">The item that was just added.</param>
+    /// <returns>True if auto-sync should queue it.</returns>
+    public bool IsAutoSyncEnabled(BaseItem item)
+    {
+        if (!IsEligible(item))
+        {
+            return false;
+        }
+
+        var libraryId = GetLibraryIdFor(item);
+        if (!libraryId.HasValue)
+        {
+            return false;
+        }
+
+        var settings = Plugin.Instance!.Configuration.Libraries
+            .FirstOrDefault(l => l.LibraryId == libraryId.Value);
+
+        // A library nobody has configured counts as on, same as everywhere else here
+        return settings?.AutoSyncEnabled ?? true;
     }
 
     /// <summary>

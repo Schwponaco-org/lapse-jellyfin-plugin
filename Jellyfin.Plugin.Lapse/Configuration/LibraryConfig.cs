@@ -32,6 +32,14 @@ public class LibraryConfig
     public bool Enabled { get; set; } = true;
 
     /// <summary>
+    /// Gets or sets a value indicating whether an item added to this library gets picked
+    /// up on its own, without waiting for the next scheduled run. On by default, which is
+    /// how the plugin has always behaved - a config written before this setting existed
+    /// has no element for it, so the initializer here is what such a library gets.
+    /// </summary>
+    public bool AutoSyncEnabled { get; set; } = true;
+
+    /// <summary>
     /// Gets or sets a value indicating whether this library gets synced on a schedule.
     /// </summary>
     public bool ScheduleEnabled { get; set; }

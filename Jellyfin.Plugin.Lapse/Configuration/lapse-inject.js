@@ -506,16 +506,18 @@
                 return;
             }
 
-            // Picture based tracks hold no text, so nothing here can line them up.
+            // Supported means the engine in use can do something with the file. LAPSE
+            // reads PGS and VobSub and rewrites their timing, so those are only turned
+            // away when the engine cannot read them.
             var usable = subtitles.filter(function (s) { return s.Supported !== false; });
 
             if (usable.length === 0) {
-                showLapseToast('The only subtitles on this item are picture based (PGS or VobSub). Those are images of text, so they need OCR before anything can sync them.');
+                showLapseToast('The only subtitles on this item are picture based (PGS or VobSub), and the engine you are using cannot read those. LAPSE can sync them, or run OCR over them with something like Subtitle Edit first.');
                 return;
             }
 
-            // Everything left is in a format no engine reads, but the plugin can convert
-            // it into one that they do. Worth offering rather than refusing.
+            // Everything left is in a format the engine does not read, but the plugin can
+            // convert it into one that it does. Worth offering rather than refusing.
             var syncable = usable.filter(function (s) { return !s.NeedsConversion; });
 
             if (syncable.length === 0) {
@@ -714,7 +716,9 @@
         showLapseToast('Checking subtitles...');
 
         lapseGet('Lapse/Items/' + context.id + '/Subtitles').then(function (subtitles) {
-            var convertible = subtitles.filter(function (s) { return s.Supported !== false; });
+            // Converting needs text, which a picture based subtitle has none of, whatever
+            // the engine can do with its timings.
+            var convertible = subtitles.filter(function (s) { return s.TextBased !== false; });
 
             if (convertible.length === 0) {
                 showLapseToast(subtitles.length === 0

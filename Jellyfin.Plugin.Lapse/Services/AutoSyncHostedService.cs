@@ -18,6 +18,10 @@ namespace Jellyfin.Plugin.Lapse.Services;
 /// same as the classic intro-skipper auto-detect hook. Debounced with a timer so a big
 /// library scan that adds a bunch of items at once doesn't kick off a sync per item
 /// the instant each one shows up, before its subtitles have even settled.
+///
+/// This is what means adding a film doesn't have to wait for the next scheduled run. It
+/// is per library, so a library can be on for scheduled and bulk runs and still not have
+/// every new file picked up the moment it lands.
 /// </summary>
 public sealed class AutoSyncHostedService : IHostedService, IDisposable
 {
@@ -108,9 +112,11 @@ public sealed class AutoSyncHostedService : IHostedService, IDisposable
                 continue;
             }
 
-            if (!_libraryService.IsEligible(item))
+            if (!_libraryService.IsAutoSyncEnabled(item))
             {
-                _logger.LogDebug("Auto-sync skipping {Item}, its library is turned off or it's on the skip list", item.Name);
+                _logger.LogDebug(
+                    "Auto-sync skipping {Item}: its library is turned off, has auto-sync turned off, or it's on the skip list",
+                    item.Name);
                 continue;
             }
 

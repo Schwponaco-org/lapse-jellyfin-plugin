@@ -2,6 +2,8 @@
 // Copyright (C) 2026 Rasmus Stisen Jensen (rs-jensen)
 // Licensed under GPL v3 - see LICENSE for details
 
+using System.Collections.Generic;
+
 namespace Jellyfin.Plugin.Lapse.Engines;
 
 /// <summary>
@@ -58,4 +60,12 @@ public class EngineCapabilities
     /// Gets or sets the highest penalty the engine accepts.
     /// </summary>
     public int MaxPenalty { get; set; }
+
+    /// <summary>
+    /// Gets or sets the subtitle formats this engine reads and writes, as extensions with
+    /// a leading dot. Anything not on here has to be converted before the engine sees it.
+    /// This is what the plugin knows about the project; the installed binary gets asked
+    /// directly as well, and its answer wins. See <see cref="EngineFormats"/>.
+    /// </summary>
+    public IReadOnlyList<string> SubtitleExtensions { get; set; } = EngineFormats.Ffsubsync;
 }

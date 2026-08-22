@@ -23,6 +23,12 @@ public class LibrarySettingsEntry
     public bool Enabled { get; set; }
 
     /// <summary>
+    /// Gets or sets a value indicating whether newly added items in this library are
+    /// picked up on their own.
+    /// </summary>
+    public bool AutoSyncEnabled { get; set; }
+
+    /// <summary>
     /// Gets or sets a value indicating whether this library gets synced on a schedule.
     /// </summary>
     public bool ScheduleEnabled { get; set; }

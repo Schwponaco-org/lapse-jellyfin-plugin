@@ -217,6 +217,42 @@ public class PluginConfiguration : BasePluginConfiguration
     public bool ConversionSyncAfter { get; set; } = true;
 
     /// <summary>
+    /// Gets or sets a value indicating whether every subtitle is converted to
+    /// <see cref="ConversionFormat"/> before it gets synced, whether or not the engine
+    /// needed it. Off by default, because with LAPSE it buys nothing: LAPSE reads eleven
+    /// formats and writes each one back as itself. Worth turning on for an engine that
+    /// reads fewer, or when the goal is simply to end up with srt files everywhere.
+    /// </summary>
+    public bool ConvertBeforeSync { get; set; }
+
+    /// <summary>
+    /// Gets or sets what an unattended run does to each subtitle it finds: sync it,
+    /// convert it, or both. Applies to the scheduled task, the per-library schedules,
+    /// auto-sync on a new item, bulk runs and the webhook.
+    /// </summary>
+    public AutomationAction AutomationAction { get; set; } = AutomationAction.Sync;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether unattended runs also translate every
+    /// subtitle they touch into <see cref="AutoTranslateLanguage"/>. Experimental, and off
+    /// by default: a library's worth of subtitles is a great deal of text to put through a
+    /// translation API, and machine translation gets things wrong without saying so.
+    /// </summary>
+    public bool AutoTranslateEnabled { get; set; }
+
+    /// <summary>
+    /// Gets or sets the language automatic translation targets, as a code like "da".
+    /// </summary>
+    public string? AutoTranslateLanguage { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether a subtitle that already has a translation
+    /// in the target language is left alone. On by default, and worth leaving on: without
+    /// it every scheduled run retranslates the whole library and pays for it again.
+    /// </summary>
+    public bool AutoTranslateSkipExisting { get; set; } = true;
+
+    /// <summary>
     /// Gets or sets who besides administrators may sync, shift, convert and translate the
     /// subtitles of an item they can see. Admin only until an admin opens it up.
     /// </summary>

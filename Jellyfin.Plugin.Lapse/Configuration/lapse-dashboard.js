@@ -87,6 +87,41 @@
         }
     ];
 
+    var CONVERT_BEFORE_SYNC_MODES = [
+        {
+            value: 'off',
+            label: 'Only when the engine cannot read the format',
+            recommended: true,
+            note: 'LAPSE reads and writes eleven formats, so with it there is usually nothing to convert. ' +
+                'The file keeps the format it came in and you end up with one file instead of two.'
+        },
+        {
+            value: 'on',
+            label: 'Always convert first',
+            note: 'Every subtitle is written out in the format above before it is synced. Useful with an engine ' +
+                'that reads fewer formats, or when you simply want srt files everywhere. The original is left where it is.'
+        }
+    ];
+
+    var AUTOMATION_ACTIONS = [
+        {
+            value: 'Sync',
+            label: 'Sync them',
+            recommended: true,
+            note: 'Lines the subtitles up and leaves their format alone.'
+        },
+        {
+            value: 'ConvertThenSync',
+            label: 'Convert them, then sync them',
+            note: 'Writes each subtitle out in the conversion format first, then syncs that file.'
+        },
+        {
+            value: 'Convert',
+            label: 'Only convert them',
+            note: 'Changes the format and stops there. Nothing gets synced, so items stay marked as not synced.'
+        }
+    ];
+
     var ACCESS_MODES = [
         {
             value: 'AdminsOnly',
@@ -816,6 +851,29 @@
             '</div>';
     }
 
+    // Which subtitle formats this engine takes as they are. Read off the installed binary
+    // where it can say, so it is the truth about the build on disk rather than a claim.
+    function engineFormatsLine(engine) {
+        var formats = engine.SubtitleExtensions || [];
+
+        if (formats.length === 0) {
+            return '';
+        }
+
+        return '<div class="fieldDescription lapseParamNote">Reads and writes ' +
+            escapeHtml(formats.join(', ')) + '. Anything else is converted first.</div>';
+    }
+
+    function engineDeploymentHtml(engine) {
+        if (!engine.DeploymentNote) {
+            return '';
+        }
+
+        return '<div class="fieldDescription lapseParamNote">' + escapeHtml(engine.DeploymentNote) +
+            ' <a is="emby-linkbutton" class="button-link" href="' + escapeHtml(engine.ProjectUrl) +
+            '" target="_blank" rel="noopener">Read more on GitHub</a></div>';
+    }
+
     function renderEngineCards(view) {
         var container = view.querySelector('#lapseEngineCards');
 
@@ -891,9 +949,11 @@
                 '    <span>' + escapeHtml(updateNote || engineStateText(engine)) + '</span>' +
                 '  </div>' +
                 whyLink +
+                engineFormatsLine(engine) +
                 problem +
                 '  <div class="lapseEngineActions">' + actions + '</div>' +
                 engineAdvancedHtml(engine) +
+                engineDeploymentHtml(engine) +
                 '</div>';
         }).join('');
 
@@ -1023,6 +1083,7 @@
             allEngines = engines;
             renderEngineCards(view);
             updateSubToSubEngineNote(view);
+            renderConversionEngineNote(view);
             view.querySelector('#lapseAutoUpdateEngines').checked =
                 allEngines.length > 0 ? !!allEngines[0].AutoUpdate : true;
         });
@@ -1073,6 +1134,10 @@
                 '    <span class="lapseMuted lapseLibraryType">' + escapeHtml(library.CollectionType || 'mixed') + '</span>' +
                 '  </div>' +
                 '  <div class="lapseLibrarySchedule">' +
+                '    <label class="emby-checkbox-label lapseInlineCheck" title="Sync anything added to this library as it turns up, without waiting for the schedule.">' +
+                '      <input type="checkbox" is="emby-checkbox" class="lapseChkAutoSync"' + (library.AutoSyncEnabled !== false ? ' checked' : '') + ' />' +
+                '      <span>New items</span>' +
+                '    </label>' +
                 '    <label class="emby-checkbox-label lapseInlineCheck">' +
                 '      <input type="checkbox" is="emby-checkbox" class="lapseChkSchedule"' + (library.ScheduleEnabled ? ' checked' : '') + ' />' +
                 '      <span>Schedule</span>' +
@@ -1088,6 +1153,7 @@
 
         container.querySelectorAll('.lapseLibraryRow').forEach(function (row) {
             var scheduleCheck = row.querySelector('.lapseChkSchedule');
+            var autoSyncCheck = row.querySelector('.lapseChkAutoSync');
             var enabledCheck = row.querySelector('.lapseChkLibraryEnabled');
             var frequencySelect = row.querySelector('.lapseScheduleFrequency');
             var daySelect = row.querySelector('.lapseScheduleDay');
@@ -1101,6 +1167,7 @@
                 var needsDay = scheduled && frequencySelect.value !== 'Daily';
 
                 scheduleCheck.disabled = !enabledCheck.checked;
+                autoSyncCheck.disabled = !enabledCheck.checked;
 
                 frequencySelect.classList.toggle('hide', !scheduled);
                 timeInput.classList.toggle('hide', !scheduled);
@@ -1141,6 +1208,7 @@
             payload.Libraries.push({
                 ItemId: row.getAttribute('data-id'),
                 Enabled: row.querySelector('.lapseChkLibraryEnabled').checked,
+                AutoSyncEnabled: row.querySelector('.lapseChkAutoSync').checked,
                 ScheduleEnabled: row.querySelector('.lapseChkSchedule').checked,
                 ScheduleFrequency: frequency,
                 ScheduleDay: frequency === 'Daily' ? null : row.querySelector('.lapseScheduleDay').value,
@@ -2454,6 +2522,14 @@
             plain);
 
         renderRadioGroup(
+            view.querySelector('#lapseConvertBeforeSync'),
+            'lapseConvertBeforeSync',
+            CONVERT_BEFORE_SYNC_MODES,
+            settings.ConvertBeforeSync ? 'on' : 'off',
+            null,
+            plain);
+
+        renderRadioGroup(
             view.querySelector('#lapseConversionSync'),
             'lapseConversionSync',
             CONVERSION_SYNC_MODES,
@@ -2461,12 +2537,65 @@
             null,
             plain);
 
+        renderConversionEngineNote(view);
         updateConversionHint(view);
+    }
+
+    // Says which formats the engine in use actually reads, so "do I need to convert this"
+    // is answered on the page rather than guessed at.
+    function renderConversionEngineNote(view) {
+        var note = view.querySelector('#lapseConversionEngineNote');
+        if (!note) {
+            return;
+        }
+
+        var engine = allEngines.filter(function (e) { return e.IsDefault; })[0];
+        var formats = (engine && engine.SubtitleExtensions) || [];
+
+        if (!engine || formats.length === 0) {
+            note.classList.add('hide');
+            return;
+        }
+
+        note.classList.remove('hide');
+        note.innerHTML = '<strong>' + escapeHtml(engine.DisplayName) + '</strong> reads and writes ' +
+            escapeHtml(formats.join(', ')) + ', and writes each one back in the format it read. ' +
+            'Converting is therefore optional: the plugin only does it on its own when the engine ' +
+            'cannot read the file. It is still worth having if you use an engine that reads fewer ' +
+            'formats, or if you would rather have plain srt files across the library.';
     }
 
     function updateConversionHint(view) {
         view.querySelector('#lapseConversionHint').textContent =
             '.' + selectedRadio(view, 'lapseConversionFormat', 'srt');
+    }
+
+    function renderAutomation(view) {
+        var settings = currentSettings || {};
+
+        renderRadioGroup(
+            view.querySelector('#lapseAutomationActions'),
+            'lapseAutomationAction',
+            AUTOMATION_ACTIONS,
+            settings.AutomationAction || 'Sync',
+            function () { updateAutomationHint(view); },
+            { hideRecommended: true });
+
+        view.querySelector('#lapseAutoTranslateEnabled').checked = settings.AutoTranslateEnabled === true;
+        view.querySelector('#lapseAutoTranslateLanguage').value = settings.AutoTranslateLanguage || '';
+        view.querySelector('#lapseAutoTranslateSkipExisting').checked = settings.AutoTranslateSkipExisting !== false;
+
+        updateAutomationHint(view);
+    }
+
+    function updateAutomationHint(view) {
+        var action = selectedRadio(view, 'lapseAutomationAction', 'Sync');
+        var label = AUTOMATION_ACTIONS.filter(function (a) { return a.value === action; })[0];
+        var translating = view.querySelector('#lapseAutoTranslateEnabled').checked
+            && view.querySelector('#lapseAutoTranslateLanguage').value.trim();
+
+        view.querySelector('#lapseAutomationHint').textContent =
+            (label ? label.label : 'Sync them') + (translating ? ' + translate' : '');
     }
 
     function renderAccess(view) {
@@ -2581,6 +2710,7 @@
         renderAppearance(view);
         renderAccess(view);
         renderConversion(view);
+        renderAutomation(view);
         updateSidecarPreview(view);
 
         // the suggested name for a subtitle-to-subtitle output uses the sidecar suffix, so
@@ -2807,6 +2937,11 @@
             ConversionFormat: selectedRadio(view, 'lapseConversionFormat', 'srt'),
             ConversionReplaceOriginal: selectedRadio(view, 'lapseConversionOriginal', 'keep') === 'replace',
             ConversionSyncAfter: selectedRadio(view, 'lapseConversionSync', 'sync') === 'sync',
+            ConvertBeforeSync: selectedRadio(view, 'lapseConvertBeforeSync', 'off') === 'on',
+            AutomationAction: selectedRadio(view, 'lapseAutomationAction', 'Sync'),
+            AutoTranslateEnabled: view.querySelector('#lapseAutoTranslateEnabled').checked,
+            AutoTranslateLanguage: view.querySelector('#lapseAutoTranslateLanguage').value.trim() || null,
+            AutoTranslateSkipExisting: view.querySelector('#lapseAutoTranslateSkipExisting').checked,
             SubtitleAccessUserIds: selectedAccessUserIds(view),
             SidecarSuffix: view.querySelector('#lapseSidecarSuffix').value,
             LowConfidenceAction: selectedRadio(view, 'lapseLowConfidence', 'Sidecar'),
@@ -3052,6 +3187,15 @@
         });
         view.querySelector('#btnSaveConversion').addEventListener('click', function () {
             saveSettings(view, 'Conversion settings saved.');
+        });
+        view.querySelector('#btnSaveAutomation').addEventListener('click', function () {
+            saveSettings(view, 'Automation settings saved.');
+        });
+        view.querySelector('#lapseAutoTranslateEnabled').addEventListener('change', function () {
+            updateAutomationHint(view);
+        });
+        view.querySelector('#lapseAutoTranslateLanguage').addEventListener('input', function () {
+            updateAutomationHint(view);
         });
         view.querySelector('#btnSaveAccess').addEventListener('click', function () {
             saveSettings(view, 'Access settings saved.');

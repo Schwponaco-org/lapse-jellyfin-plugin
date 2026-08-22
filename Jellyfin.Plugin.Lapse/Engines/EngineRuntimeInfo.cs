@@ -34,6 +34,13 @@ public class EngineRuntimeInfo
     public List<string> Flags { get; } = new();
 
     /// <summary>
+    /// Gets the subtitle extensions the binary said it reads, from its <c>--formats</c>
+    /// call. Empty when the binary has no such call, in which case the caller falls back
+    /// to <see cref="EngineFormats.ForEngine"/>.
+    /// </summary>
+    public List<string> ReportedExtensions { get; } = new();
+
+    /// <summary>
     /// Gets or sets a value indicating whether the probe actually got an answer. False
     /// means everything else here is the conservative default rather than measured.
     /// </summary>
@@ -71,6 +78,29 @@ public class EngineRuntimeInfo
     /// </summary>
     public bool SupportsAutoMode =>
         UsageText is not null && UsageText.Contains("auto|", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Gets the subtitle formats this engine reads: what the binary reported if it
+    /// reported anything, otherwise the list the plugin knows the project by.
+    /// </summary>
+    /// <param name="engineId">The engine id, for the fallback list.</param>
+    /// <returns>The extensions, each with a leading dot.</returns>
+    public IReadOnlyList<string> GetSubtitleExtensions(string engineId)
+    {
+        return ReportedExtensions.Count > 0 ? ReportedExtensions : EngineFormats.ForEngine(engineId);
+    }
+
+    /// <summary>
+    /// Says whether this binary reads a subtitle file as it stands, so it can be handed
+    /// over without being converted first.
+    /// </summary>
+    /// <param name="engineId">The engine id, for the fallback list.</param>
+    /// <param name="path">The subtitle path.</param>
+    /// <returns>True if the engine takes the file directly.</returns>
+    public bool CanRead(string engineId, string? path)
+    {
+        return EngineFormats.Contains(GetSubtitleExtensions(engineId), path);
+    }
 
     /// <summary>
     /// Checks whether the binary said it understands a flag.

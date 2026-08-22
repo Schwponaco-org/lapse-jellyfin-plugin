@@ -11,6 +11,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using Jellyfin.Plugin.Lapse.Data;
+using Jellyfin.Plugin.Lapse.Engines;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Model.Entities;
 
@@ -246,14 +247,26 @@ public class SubtitleLocator
     {
         var kind = SubtitleFormats.GetKind(path);
 
+        // Whether a file needs converting is the default engine's business, not the
+        // plugin's: LAPSE reads MicroDVD, SAMI, TTML, PGS and VobSub as they are, so
+        // saying "this has to be converted first" about one of those would be wrong and
+        // would cost the user a pointless extra file. The static list is used rather than
+        // the binary's own --formats answer because this runs once per subtitle while a
+        // page loads, and starting a process for each of them isn't worth the precision.
+        var engineReads = EngineFormats.DefaultEngineCanRead(path);
+
         return new SubtitleOption
         {
             Path = path,
             DisplayName = displayName,
             Language = language,
             Format = SubtitleFormats.GetName(path),
-            NeedsConversion = kind == SubtitleFormatKind.Convertible,
-            Supported = kind != SubtitleFormatKind.ImageBased
+            NeedsConversion = kind == SubtitleFormatKind.Convertible && !engineReads,
+            TextBased = kind != SubtitleFormatKind.ImageBased,
+
+            // A picture based subtitle is only worth offering when the engine can line it
+            // up, since there's nothing else here that can be done to one.
+            Supported = kind != SubtitleFormatKind.ImageBased || engineReads
         };
     }
 

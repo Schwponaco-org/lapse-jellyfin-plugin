@@ -177,6 +177,22 @@ public class EngineInfo
     public string? AdvancedNote { get; set; }
 
     /// <summary>
+    /// Gets or sets a line about running this engine outside Jellyfin.
+    /// </summary>
+    public string? DeploymentNote { get; set; }
+
+    /// <summary>
+    /// Gets or sets the subtitle formats this engine reads, as extensions with a leading
+    /// dot. Comes from the installed binary when it can say, otherwise from what the
+    /// plugin knows about the project.
+    /// </summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Usage",
+        "CA2227:Collection properties should be read only",
+        Justification = "Built in one go from the engine descriptor or the runtime probe, and only ever serialized out to the dashboard.")]
+    public IReadOnlyList<string> SubtitleExtensions { get; set; } = System.Array.Empty<string>();
+
+    /// <summary>
     /// Gets or sets a value indicating whether there's a build for this machine.
     /// </summary>
     public bool DownloadSupported { get; set; }

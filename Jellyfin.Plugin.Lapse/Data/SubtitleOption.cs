@@ -31,17 +31,25 @@ public class SubtitleOption
     public string Format { get; set; } = string.Empty;
 
     /// <summary>
-    /// Gets or sets a value indicating whether this file has to be converted to srt
-    /// before an engine can touch it. True for the text formats the engines don't read,
-    /// like MicroDVD .sub.
+    /// Gets or sets a value indicating whether this file has to be converted before an
+    /// engine can touch it. Depends on which engine: LAPSE reads MicroDVD .sub and eight
+    /// other formats directly, where alass and ffsubsync read none of them.
     /// </summary>
     public bool NeedsConversion { get; set; }
 
     /// <summary>
     /// Gets or sets a value indicating whether the plugin can do anything with this file
-    /// at all. False for the picture based formats (PGS, VobSub), which hold no text.
+    /// at all - which now means "can it be synced", since a picture based subtitle has no
+    /// text but can still have its timing rewritten by an engine that reads the format.
     /// </summary>
     public bool Supported { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether there is text in this file the plugin can
+    /// get at. False for PGS and VobSub, which are pictures. Converting, translating and
+    /// shifting by hand all need this; syncing does not.
+    /// </summary>
+    public bool TextBased { get; set; } = true;
 
     /// <summary>
     /// Gets or sets a value indicating whether this track is still inside the video file

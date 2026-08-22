@@ -133,7 +133,8 @@ public partial class AlassEngine : IEngine
                 SupportsPenalty = true,
                 DefaultPenalty = 7,
                 MinPenalty = 0,
-                MaxPenalty = 1000
+                MaxPenalty = 1000,
+                SubtitleExtensions = EngineFormats.Alass
             }
         };
 
