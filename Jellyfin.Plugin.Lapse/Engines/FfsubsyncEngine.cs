@@ -153,7 +153,8 @@ public partial class FfsubsyncEngine : IEngine
                 SupportsPenalty = true,
                 DefaultPenalty = 7,
                 MinPenalty = 0,
-                MaxPenalty = 100
+                MaxPenalty = 100,
+                SubtitleExtensions = EngineFormats.Ffsubsync
             }
         };
 

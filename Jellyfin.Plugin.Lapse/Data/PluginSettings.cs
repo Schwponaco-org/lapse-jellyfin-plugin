@@ -111,6 +111,32 @@ public class PluginSettings
     public bool ConversionSyncAfter { get; set; } = true;
 
     /// <summary>
+    /// Gets or sets a value indicating whether every subtitle is converted before syncing,
+    /// whether or not the engine needed it.
+    /// </summary>
+    public bool ConvertBeforeSync { get; set; }
+
+    /// <summary>
+    /// Gets or sets what unattended runs do to each subtitle.
+    /// </summary>
+    public AutomationAction AutomationAction { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether unattended runs also translate.
+    /// </summary>
+    public bool AutoTranslateEnabled { get; set; }
+
+    /// <summary>
+    /// Gets or sets the language automatic translation targets.
+    /// </summary>
+    public string? AutoTranslateLanguage { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether an existing translation is left alone.
+    /// </summary>
+    public bool AutoTranslateSkipExisting { get; set; } = true;
+
+    /// <summary>
     /// Gets or sets who besides admins may sync, shift, convert and translate.
     /// </summary>
     public SubtitleAccessMode SubtitleAccess { get; set; }

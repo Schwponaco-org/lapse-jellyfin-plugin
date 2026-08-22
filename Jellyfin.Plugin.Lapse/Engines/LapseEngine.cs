@@ -198,6 +198,11 @@ public partial class LapseEngine : IEngine
                 + "The other two engines take encoding arguments because they do not do this.",
             WhyUrl = BenchmarksUrl,
             WhyLabel = "Why is this recommended? Read more on GitHub",
+            DeploymentNote = "LAPSE also ships as a Docker image with a file watcher in it. Point it at "
+                + "the folders you want it to look after and it syncs new files on its own, with no Jellyfin "
+                + "involved. There is a web UI too, for anyone who would rather manage it from a browser than "
+                + "the command line. Useful if you want subtitles fixed before Jellyfin ever sees them, or if "
+                + "you keep media that isn't in a Jellyfin library. Setup and settings are in the repo.",
             LinuxAmd64 = Archive("lapse-linux-amd64.tar.gz", EnginePackaging.TarGz),
             LinuxArm64 = Archive("lapse-linux-arm64.tar.gz", EnginePackaging.TarGz),
             MacAmd64 = Archive("lapse-macos-x86_64.tar.gz", EnginePackaging.TarGz),
@@ -212,7 +217,8 @@ public partial class LapseEngine : IEngine
                 SupportsPenalty = true,
                 DefaultPenalty = 6,
                 MinPenalty = 0,
-                MaxPenalty = 100
+                MaxPenalty = 100,
+                SubtitleExtensions = EngineFormats.Lapse
             }
         };
 

@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -19,9 +20,13 @@ namespace Jellyfin.Plugin.Lapse.Services;
 /// <summary>
 /// Runs bulk (and auto-sync) subtitle sync jobs one item at a time in the background,
 /// so the dashboard doesn't have to wait around for a whole library to finish.
-/// Bulk and auto-sync jobs always run standard mode with the default engine against every
+/// Bulk and auto-sync jobs always run the default engine's default mode against every
 /// external subtitle an item has - there's no UI in the background path to pick
 /// engine/mode/penalty/subtitle.
+///
+/// What it does to each of those subtitles is the Automation setting's business: sync
+/// them, convert them, or both, and optionally translate the result. See
+/// <see cref="AutomationAction"/>.
 /// </summary>
 public class SyncQueueManager : IDisposable
 {
@@ -30,6 +35,8 @@ public class SyncQueueManager : IDisposable
     private readonly SubtitleLocator _subtitleLocator;
     private readonly EngineRegistry _registry;
     private readonly EngineRunner _runner;
+    private readonly SubtitleConverter _converter;
+    private readonly Translation.TranslationService _translationService;
     private readonly ILogger<SyncQueueManager> _logger;
     private readonly object _lock = new();
     private readonly List<QueueItem> _items = new();
@@ -56,6 +63,10 @@ public class SyncQueueManager : IDisposable
     /// <param name="subtitleLocator">Finds every subtitle for an item.</param>
     /// <param name="registry">Used to pick the configured default engine.</param>
     /// <param name="runner">Runs the engine.</param>
+    /// <param name="converter">Changes a subtitle's format, for the automation actions
+    /// that ask for it.</param>
+    /// <param name="translationService">Translates subtitles, when automatic translation
+    /// is turned on.</param>
     /// <param name="logger">Logger.</param>
     public SyncQueueManager(
         ILibraryManager libraryManager,
@@ -63,6 +74,8 @@ public class SyncQueueManager : IDisposable
         SubtitleLocator subtitleLocator,
         EngineRegistry registry,
         EngineRunner runner,
+        SubtitleConverter converter,
+        Translation.TranslationService translationService,
         ILogger<SyncQueueManager> logger)
     {
         _libraryManager = libraryManager;
@@ -70,6 +83,8 @@ public class SyncQueueManager : IDisposable
         _subtitleLocator = subtitleLocator;
         _registry = registry;
         _runner = runner;
+        _converter = converter;
+        _translationService = translationService;
         _logger = logger;
     }
 
@@ -476,6 +491,9 @@ public class SyncQueueManager : IDisposable
             }
         }
 
+        var action = Plugin.Instance?.Configuration.AutomationAction ?? AutomationAction.Sync;
+        var converted = 0;
+
         foreach (var subtitle in subtitles)
         {
             if (reference is not null && string.Equals(subtitle.Path, reference.Path, StringComparison.Ordinal))
@@ -484,17 +502,49 @@ public class SyncQueueManager : IDisposable
                 continue;
             }
 
+            var workPath = subtitle.Path;
+
+            // Converting first is a deliberate choice now rather than a necessity. The
+            // engine reads what it reads either way, and the runner converts on its own
+            // when it has to; this is the admin saying they want one format on disk.
+            if (action is AutomationAction.Convert or AutomationAction.ConvertThenSync)
+            {
+                var (convertedPath, convertError, didWrite) = await ConvertForAutomationAsync(subtitle, cancellationToken)
+                    .ConfigureAwait(false);
+
+                if (convertError is not null)
+                {
+                    lastError = convertError;
+                    _logger.LogWarning("Converting {Subtitle} for {Item} failed: {Error}", subtitle.Path, item.Name, convertError);
+                    continue;
+                }
+
+                workPath = convertedPath;
+                if (didWrite)
+                {
+                    converted++;
+                }
+            }
+
+            if (action == AutomationAction.Convert)
+            {
+                // The whole job for this file was the conversion. Syncing is somebody
+                // else's press, or another run with a different action set.
+                await TranslateForAutomationAsync(item, workPath, cancellationToken).ConfigureAwait(false);
+                continue;
+            }
+
             var referencePath = reference?.Path ?? item.Path;
 
             var result = await _runner
-                .RunAsync(engine, referencePath, subtitle.Path, mode, penalty, outputMode: null, destinationOverride: null, outputFormat: null, cancellationToken)
+                .RunAsync(engine, referencePath, workPath, mode, penalty, outputMode: null, destinationOverride: null, outputFormat: null, cancellationToken)
                 .ConfigureAwait(false);
             lastResult = result;
 
             if (!result.Success)
             {
                 lastError = result.Error;
-                _logger.LogWarning("Sync failed for {Item} ({Subtitle}): {Error}", item.Name, subtitle.Path, result.Error);
+                _logger.LogWarning("Sync failed for {Item} ({Subtitle}): {Error}", item.Name, workPath, result.Error);
             }
             else if (result.Skipped)
             {
@@ -505,7 +555,11 @@ public class SyncQueueManager : IDisposable
                 // Only a subtitle we actually rewrote counts. A failure and a deliberate
                 // low-confidence skip both leave the file as it was, so neither of them
                 // should make the item look any more synced than it was before.
-                syncedPaths.Add(subtitle.Path);
+                syncedPaths.Add(workPath);
+
+                // Translate what the sync produced rather than what it read, so the
+                // translation carries the corrected timings.
+                await TranslateForAutomationAsync(item, result.OutputPath ?? workPath, cancellationToken).ConfigureAwait(false);
             }
         }
 
@@ -514,6 +568,19 @@ public class SyncQueueManager : IDisposable
             SaveRecord(itemId, MovieSyncStatus.Failed, lastError, lastResult, syncedPaths);
             SetItemStatus(itemId, QueueItemStatus.Failed);
             return false;
+        }
+
+        if (action == AutomationAction.Convert)
+        {
+            // Nothing here was synced, and saying otherwise would misreport what's on
+            // disk. The item stays where it was with a line explaining why.
+            var detail = converted == 0
+                ? "Everything here was already in the conversion format, and the automation action is set to convert only, so nothing was synced."
+                : $"Converted {converted} subtitle{(converted == 1 ? string.Empty : "s")}. The automation action is set to convert only, so nothing was synced.";
+
+            SaveRecord(itemId, MovieSyncStatus.Pending, detail);
+            SetItemStatus(itemId, QueueItemStatus.Done);
+            return true;
         }
 
         if (lastSkip is not null)
@@ -529,6 +596,112 @@ public class SyncQueueManager : IDisposable
         SaveRecord(itemId, MovieSyncStatus.Synced, null, lastResult, syncedPaths);
         SetItemStatus(itemId, QueueItemStatus.Done);
         return true;
+    }
+
+    // Writes the subtitle out in the configured conversion format. Returns the path to
+    // carry on with, an error, and whether a new file was actually written.
+    private async Task<(string Path, string? Error, bool Written)> ConvertForAutomationAsync(
+        SubtitleOption subtitle,
+        CancellationToken cancellationToken)
+    {
+        var format = EngineRunner.ResolveConversionFormat();
+
+        if (string.Equals(subtitle.Format, format, StringComparison.OrdinalIgnoreCase))
+        {
+            return (subtitle.Path, null, false);
+        }
+
+        // A picture based subtitle has no text to convert. That isn't a failure of the
+        // run, it just can't take part in this half of it.
+        if (_converter.GetConversionProblem(subtitle.Path) is not null)
+        {
+            return (subtitle.Path, null, false);
+        }
+
+        var destination = System.IO.Path.ChangeExtension(subtitle.Path, "." + format);
+
+        // Already converted on an earlier run, so don't pay for it again
+        if (File.Exists(destination))
+        {
+            return (destination, null, false);
+        }
+
+        try
+        {
+            await _converter.ConvertAsync(subtitle.Path, destination, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is NotSupportedException or InvalidDataException or IOException or TimeoutException)
+        {
+            return (subtitle.Path, "Could not convert " + System.IO.Path.GetFileName(subtitle.Path) + ": " + ex.Message, false);
+        }
+
+        if (Plugin.Instance?.Configuration.ConversionReplaceOriginal == true)
+        {
+            TryDelete(subtitle.Path);
+        }
+
+        return (destination, null, true);
+    }
+
+    private static void TryDelete(string path)
+    {
+        try
+        {
+            File.Delete(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // the converted file is written either way
+        }
+    }
+
+    // Experimental. Off unless someone turned it on and named a language.
+    private async Task TranslateForAutomationAsync(BaseItem item, string subtitlePath, CancellationToken cancellationToken)
+    {
+        var config = Plugin.Instance?.Configuration;
+        var language = config?.AutoTranslateLanguage?.Trim();
+
+        if (config?.AutoTranslateEnabled != true || string.IsNullOrEmpty(language))
+        {
+            return;
+        }
+
+        if (!SubtitleFormats.IsTextBased(subtitlePath) || !File.Exists(subtitlePath))
+        {
+            return;
+        }
+
+        var destination = SubtitleTextFile.BuildOutputPath(subtitlePath, language);
+
+        if (config.AutoTranslateSkipExisting && File.Exists(destination))
+        {
+            return;
+        }
+
+        var request = new TranslationRequest
+        {
+            ItemId = item.Id,
+            SubtitlePath = subtitlePath,
+            TargetLanguage = language
+        };
+
+        var result = await _translationService.TranslateAsync(subtitlePath, request, cancellationToken).ConfigureAwait(false);
+
+        if (result.Success)
+        {
+            _logger.LogInformation(
+                "Auto-translated {Subtitle} into {Language} ({Low} of {Total} lines below the threshold)",
+                subtitlePath,
+                language,
+                result.LowConfidenceCount,
+                result.LineCount);
+        }
+        else
+        {
+            // A translation that failed leaves the synced subtitle untouched, so this is
+            // logged rather than being allowed to fail the item.
+            _logger.LogWarning("Auto-translating {Subtitle} into {Language} failed: {Error}", subtitlePath, language, result.Error);
+        }
     }
 
     private void SetItemStatus(Guid itemId, QueueItemStatus status)

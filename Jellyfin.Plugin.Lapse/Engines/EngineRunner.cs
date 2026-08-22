@@ -213,6 +213,17 @@ public class EngineRunner
     }
 
     /// <summary>
+    /// Gets the format conversions produce, falling back to srt when what's configured
+    /// isn't a format the converter writes.
+    /// </summary>
+    /// <returns>The format name, without a dot.</returns>
+    public static string ResolveConversionFormat()
+    {
+        var configured = Plugin.Instance?.Configuration.ConversionFormat;
+        return SubtitleFormats.TryNormalizeOutputFormat(configured, out var format) ? format : "srt";
+    }
+
+    /// <summary>
     /// Gets the output mode a run should use, preferring what the caller asked for over
     /// what's configured.
     /// </summary>
@@ -327,15 +338,25 @@ public class EngineRunner
 
         var runtime = await _probe.ProbeAsync(enginePath, cancellationToken).ConfigureAwait(false);
 
-        // The engines only read srt, vtt, ass and ssa. Anything else text based - MicroDVD
-        // and the like - gets turned into srt first and the sync runs on that, since the
-        // alternative is turning the item away for a format the plugin can perfectly well
-        // read. The result then has to come out as srt too: there's no writing a MicroDVD
-        // file back, and quietly leaving the old one in place would be worse.
+        // Engines differ in what they read, so the question is asked of this engine rather
+        // than assumed: LAPSE 2.0.3 takes eleven formats, including PGS and VobSub, and
+        // writes each one back as itself, where alass and ffsubsync take four. Anything an
+        // engine can't read gets converted first, because turning the item away for a
+        // format the plugin can perfectly well read would be worse. On top of that, an
+        // admin can ask for everything to be converted before syncing, which is the only
+        // way to end up with one format across a library that has several.
         string? convertedInput = null;
         var enginePathIn = subtitlePath;
 
-        if (!SubtitleFormats.IsNative(subtitlePath))
+        var engineReads = runtime.CanRead(engine.Descriptor.Id, subtitlePath);
+        var conversionFormat = ResolveConversionFormat();
+
+        // Nothing to do when the file is already in the format that would be asked for.
+        var convertAnyway = Plugin.Instance?.Configuration.ConvertBeforeSync == true
+            && SubtitleFormats.IsTextBased(subtitlePath)
+            && !string.Equals(SubtitleFormats.GetName(subtitlePath), conversionFormat, StringComparison.OrdinalIgnoreCase);
+
+        if (!engineReads || convertAnyway)
         {
             if (_converter.GetConversionProblem(subtitlePath) is { } conversionProblem)
             {
@@ -348,7 +369,11 @@ public class EngineRunner
                 };
             }
 
-            convertedInput = subtitlePath + ".lapse-converted.srt";
+            // A conversion the engine didn't ask for is the admin's choice of format; one
+            // it did ask for goes to srt, which every engine reads.
+            var convertTo = engineReads ? conversionFormat : "srt";
+
+            convertedInput = subtitlePath + ".lapse-converted." + convertTo;
 
             try
             {
@@ -367,7 +392,11 @@ public class EngineRunner
             }
 
             enginePathIn = convertedInput;
-            outputFormat ??= "srt";
+
+            // The result has to come out in the converted format: there's no writing a
+            // MicroDVD file back from srt cues, and quietly leaving the old file in place
+            // would be worse than adding a new one beside it.
+            outputFormat ??= convertTo;
         }
 
         var resolvedOutputMode = ResolveOutputMode(outputMode);
@@ -481,6 +510,8 @@ public class EngineRunner
                 File.Move(workPath, destination, overwrite: true);
             }
 
+            CopyVobSubCompanion(subtitlePath, destination);
+
             result.OutputPath = destination;
             result.InputPath = subtitlePath;
             result.ConvertedFrom = convertedInput is null ? null : SubtitleFormats.GetName(subtitlePath);
@@ -509,6 +540,43 @@ public class EngineRunner
             {
                 CleanUp(convertedInput);
             }
+        }
+    }
+
+    // A VobSub subtitle is two files: the .idx holds the timings, the .sub beside it holds
+    // the pictures, and a player only finds the pictures by looking for a .sub named after
+    // the .idx. Syncing one to a sidecar therefore writes a .idx that points at nothing,
+    // so the pictures get copied over under the new name too. Overwriting in place needs
+    // none of this, since the .sub it already had is still the right one.
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Security",
+        "CA3003:Review code for file path injection vulnerabilities",
+        Justification = "Both paths are derived from a subtitle path the caller already validated.")]
+    private void CopyVobSubCompanion(string subtitlePath, string destination)
+    {
+        if (!string.Equals(Path.GetExtension(subtitlePath), ".idx", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(subtitlePath, destination, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        var source = Path.ChangeExtension(subtitlePath, ".sub");
+        var target = Path.ChangeExtension(destination, ".sub");
+
+        if (!File.Exists(source) || string.Equals(source, target, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        try
+        {
+            File.Copy(source, target, overwrite: true);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // The synced .idx is written either way; without its pictures it just won't
+            // show anything, which is worth a line in the log rather than failing the run.
+            _logger.LogWarning(ex, "Synced {Idx} but could not copy its .sub pictures to {Target}", subtitlePath, target);
         }
     }
 

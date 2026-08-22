@@ -922,6 +922,7 @@ public class LapseController : ControllerBase
             var oldTime = library.ScheduleTime;
 
             library.Enabled = entry.Enabled;
+            library.AutoSyncEnabled = entry.AutoSyncEnabled;
             library.ScheduleEnabled = entry.ScheduleEnabled;
             library.ScheduleFrequency = Enum.TryParse<ScheduleFrequency>(entry.ScheduleFrequency, out var frequency)
                 ? frequency
@@ -1023,6 +1024,10 @@ public class LapseController : ControllerBase
                 WhyUrl = descriptor.WhyUrl,
                 WhyLabel = descriptor.WhyLabel,
                 AdvancedNote = descriptor.AdvancedNote,
+                DeploymentNote = descriptor.DeploymentNote,
+                SubtitleExtensions = installed
+                    ? runtime.GetSubtitleExtensions(descriptor.Id)
+                    : descriptor.Capabilities.SubtitleExtensions,
                 DownloadSupported = downloadable,
                 NoDownloadReason = downloadable ? null : EngineInstaller.DescribeMissingBuild(engine),
                 RunCheckError = installed ? await _runner.CheckRunnableAsync(engine, cancellationToken).ConfigureAwait(false) : null,
@@ -1338,6 +1343,11 @@ public class LapseController : ControllerBase
                 : "srt",
             ConversionReplaceOriginal = config.ConversionReplaceOriginal,
             ConversionSyncAfter = config.ConversionSyncAfter,
+            ConvertBeforeSync = config.ConvertBeforeSync,
+            AutomationAction = config.AutomationAction,
+            AutoTranslateEnabled = config.AutoTranslateEnabled,
+            AutoTranslateLanguage = config.AutoTranslateLanguage,
+            AutoTranslateSkipExisting = config.AutoTranslateSkipExisting,
             SubtitleAccess = config.SubtitleAccess,
             SubtitleAccessUserIds = new List<string>(config.SubtitleAccessUserIds),
             OpenSubtitlesEnabled = config.OpenSubtitlesEnabled,
@@ -1636,6 +1646,19 @@ public class LapseController : ControllerBase
             : "srt";
         config.ConversionReplaceOriginal = settings.ConversionReplaceOriginal;
         config.ConversionSyncAfter = settings.ConversionSyncAfter;
+        config.ConvertBeforeSync = settings.ConvertBeforeSync;
+        config.AutomationAction = settings.AutomationAction;
+        config.AutoTranslateEnabled = settings.AutoTranslateEnabled;
+        config.AutoTranslateLanguage = Blank(settings.AutoTranslateLanguage);
+        config.AutoTranslateSkipExisting = settings.AutoTranslateSkipExisting;
+
+        // Translating into nothing would run the whole library through a provider and
+        // write files named after an empty language tag, so it stays off until asked for.
+        if (string.IsNullOrEmpty(config.AutoTranslateLanguage))
+        {
+            config.AutoTranslateEnabled = false;
+        }
+
         config.SubtitleAccess = settings.SubtitleAccess;
 
         // Keep only ids that are still real users, so deleting a user doesn't leave a

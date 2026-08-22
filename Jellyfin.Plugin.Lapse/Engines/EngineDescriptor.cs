@@ -239,6 +239,12 @@ public class EngineDescriptor
     public string? AdvancedNote { get; set; }
 
     /// <summary>
+    /// Gets or sets a line about running this engine outside Jellyfin, shown on the
+    /// engine card under the links.
+    /// </summary>
+    public string? DeploymentNote { get; set; }
+
+    /// <summary>
     /// Gets the alignment modes this engine can run in, in the order they should be
     /// offered. The first one is what a fresh install uses for the context menu's Sync
     /// button until someone picks something else.

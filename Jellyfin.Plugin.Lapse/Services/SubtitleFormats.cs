@@ -26,15 +26,18 @@ public enum SubtitleFormatKind
     Native = 1,
 
     /// <summary>
-    /// A text based format the engines don't take, but ffmpeg can turn into srt first -
-    /// MicroDVD, SAMI, SubViewer, TTML and friends.
+    /// A text based format the plugin doesn't parse itself, but ffmpeg can turn into srt
+    /// first - MicroDVD, SAMI, SubViewer, TTML and friends. Whether an engine needs that
+    /// done is a separate question, and one only the engine can answer: LAPSE reads most
+    /// of these directly. See <see cref="Engines.EngineFormats"/>.
     /// </summary>
     Convertible = 2,
 
     /// <summary>
     /// A picture based format - PGS, VobSub, DVD subs. There's no text in these at all,
-    /// only bitmaps, so nothing short of OCR gets them into a shape anything here can
-    /// use.
+    /// only bitmaps, so nothing here can convert, translate or shift one. Syncing is a
+    /// different matter: LAPSE rewrites the timing without touching the pictures, so an
+    /// engine that says it reads them can line one up.
     /// </summary>
     ImageBased = 3
 }
@@ -43,6 +46,11 @@ public enum SubtitleFormatKind
 /// The subtitle formats the plugin knows about, and which of them each part of it can
 /// work on. Everything that asks "can I do this to that file" comes through here, so
 /// there's one answer rather than a list of extensions repeated in five places.
+///
+/// This is about what the <em>plugin</em> can do: read the text out, write it back,
+/// translate it, shift it by hand. What an <em>engine</em> can do is asked of the engine,
+/// in <see cref="Engines.EngineFormats"/>, because the answer differs per engine and per
+/// installed build.
 /// </summary>
 public static class SubtitleFormats
 {
@@ -134,6 +142,18 @@ public static class SubtitleFormats
     public static bool IsSubtitle(string? path)
     {
         return GetKind(path) != SubtitleFormatKind.Unknown;
+    }
+
+    /// <summary>
+    /// Gets whether a path holds text the plugin can get at, one way or another. This is
+    /// what converting, translating and shifting by hand all need, and it's the line the
+    /// picture based formats fall on the wrong side of.
+    /// </summary>
+    /// <param name="path">The file path.</param>
+    /// <returns>True for the native and convertible formats.</returns>
+    public static bool IsTextBased(string? path)
+    {
+        return GetKind(path) is SubtitleFormatKind.Native or SubtitleFormatKind.Convertible;
     }
 
     /// <summary>

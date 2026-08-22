@@ -7,6 +7,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -39,9 +40,14 @@ public partial class EngineCapabilityProbe
     [GeneratedRegex(@"\bv?(?<version>[0-9]+\.[0-9]+(\.[0-9]+)?)\b")]
     private static partial Regex VersionRegex();
 
+    // One subtitle extension on a line of its own, which is what --formats prints.
+    [GeneratedRegex(@"^\s*\*?\.?(?<extension>[a-z0-9]{2,5})\s*$", RegexOptions.IgnoreCase)]
+    private static partial Regex FormatLineRegex();
+
     private static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(15);
     private static readonly string[] CapabilitiesArguments = { "--capabilities" };
     private static readonly string[] VersionArguments = { "--version" };
+    private static readonly string[] FormatsArguments = { "--formats" };
 
     private readonly ILogger<EngineCapabilityProbe> _logger;
     private readonly ConcurrentDictionary<string, EngineRuntimeInfo> _cache = new(StringComparer.Ordinal);
@@ -94,9 +100,16 @@ public partial class EngineCapabilityProbe
 
     private async Task<EngineRuntimeInfo> RunProbeAsync(string binaryPath, CancellationToken cancellationToken)
     {
+        // Which subtitle formats a binary reads decides whether the plugin has to convert
+        // a file before handing it over, so it's asked of every build rather than assumed
+        // from a version number. Engines with no such call just don't answer.
+        var formats = await TryFormatsCallAsync(binaryPath, cancellationToken).ConfigureAwait(false);
+
         var capabilities = await TryCapabilitiesCallAsync(binaryPath, cancellationToken).ConfigureAwait(false);
         if (capabilities is not null)
         {
+            capabilities.ReportedExtensions.AddRange(formats);
+
             _logger.LogInformation(
                 "{Path} answered --capabilities: version {Version}, flags {Flags}",
                 binaryPath,
@@ -116,6 +129,7 @@ public partial class EngineCapabilityProbe
         if (fromUsage is not null)
         {
             fromUsage.Version = version;
+            fromUsage.ReportedExtensions.AddRange(formats);
 
             _logger.LogDebug(
                 "{Path} has no --capabilities, read {Flags} out of its usage text instead (version {Version})",
@@ -125,16 +139,19 @@ public partial class EngineCapabilityProbe
             return fromUsage;
         }
 
-        if (version is not null)
+        if (version is not null || formats.Count > 0)
         {
             _logger.LogDebug("{Path} only answered --version ({Version}), sticking to the safe flags", binaryPath, version);
 
-            return new EngineRuntimeInfo
+            var partial = new EngineRuntimeInfo
             {
                 Probed = true,
                 Source = "version",
                 Version = version
             };
+
+            partial.ReportedExtensions.AddRange(formats);
+            return partial;
         }
 
         _logger.LogDebug("Could not work out what {Path} supports, falling back to the safe defaults", binaryPath);
@@ -164,6 +181,51 @@ public partial class EngineCapabilityProbe
 
         var match = VersionRegex().Match(text);
         return match.Success ? match.Groups["version"].Value : null;
+    }
+
+    // "engine --formats" prints one subtitle extension per line and exits 0. An engine
+    // that has no such call either errors out or prints its usage text, and neither of
+    // those is a list of extensions, so the strict line-by-line parse below is what tells
+    // a real answer from a refusal. Anything that doesn't parse cleanly returns nothing,
+    // and the caller falls back to the list the plugin knows the project by.
+    private async Task<List<string>> TryFormatsCallAsync(string binaryPath, CancellationToken cancellationToken)
+    {
+        var found = new List<string>();
+
+        var (stdout, _, exitCode, started) = await RunAsync(binaryPath, FormatsArguments, cancellationToken).ConfigureAwait(false);
+        if (!started || exitCode != 0 || string.IsNullOrWhiteSpace(stdout))
+        {
+            return found;
+        }
+
+        foreach (var line in stdout.Split('\n'))
+        {
+            if (string.IsNullOrWhiteSpace(line))
+            {
+                continue;
+            }
+
+            var match = FormatLineRegex().Match(line);
+            if (!match.Success)
+            {
+                // one line that isn't an extension means this wasn't a format list at all
+                _logger.LogDebug("{Path} answered --formats with something that isn't a format list, ignoring it", binaryPath);
+                return new List<string>();
+            }
+
+            var extension = "." + match.Groups["extension"].Value.ToLowerInvariant();
+            if (!found.Contains(extension, StringComparer.Ordinal))
+            {
+                found.Add(extension);
+            }
+        }
+
+        if (found.Count > 0)
+        {
+            _logger.LogInformation("{Path} reads {Formats}", binaryPath, string.Join(", ", found));
+        }
+
+        return found;
     }
 
     private static int CountLines(string text)

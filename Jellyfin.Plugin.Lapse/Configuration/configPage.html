@@ -72,6 +72,10 @@
                             <span class="lapseNavLabel">Conversion</span>
                             <span class="lapseNavHint" id="lapseConversionHint"></span>
                         </button>
+                        <button type="button" class="lapseNavItem" data-panel="lapsePanelAutomation">
+                            <span class="lapseNavLabel">Automation</span>
+                            <span class="lapseNavHint" id="lapseAutomationHint"></span>
+                        </button>
                         <button type="button" class="lapseNavItem" data-panel="lapsePanelAccess">
                             <span class="lapseNavLabel">Access</span>
                             <span class="lapseNavHint" id="lapseAccessHint"></span>
@@ -138,8 +142,11 @@
                             syncing and nothing you have now can be lost.
                         </div>
                         <div class="fieldDescription lapseTightNote">
-                            Turn a library on to make everything in it eligible for syncing. A schedule syncs
-                            that library on its own frequency and time.
+                            Turn a library on to make everything in it eligible for syncing. "New items"
+                            picks up anything added to that library on its own, so a film you just added
+                            does not have to wait for the schedule. A schedule runs over the whole library
+                            on its own frequency and time. What either of them actually does to a subtitle
+                            is set on the <strong>Automation</strong> page.
                         </div>
                         <div id="lapseLibraryList" class="lapseLibraryList"></div>
                         <button is="emby-button" type="button" id="btnSaveLibraries" class="raised button-submit lapseSmallButton">
@@ -316,21 +323,77 @@
                             for converted ones.
                         </div>
 
+                        <div class="lapseNoteStrip" id="lapseConversionEngineNote"></div>
+
                         <h3 class="lapseSubHeading">Convert to</h3>
                         <div id="lapseConversionFormats" class="lapseRadioGroup"></div>
 
                         <h3 class="lapseSubHeading">What happens to the file it read</h3>
                         <div id="lapseConversionOriginal" class="lapseRadioGroup"></div>
 
+                        <h3 class="lapseSubHeading">Before syncing</h3>
+                        <div class="fieldDescription lapseTightNote">
+                            The plugin converts a subtitle on its own when the engine cannot read the
+                            format, and only then. This is for when you want it done anyway.
+                        </div>
+                        <div id="lapseConvertBeforeSync" class="lapseRadioGroup"></div>
+
                         <h3 class="lapseSubHeading">When a subtitle has to be converted before it can be synced</h3>
                         <div class="fieldDescription lapseTightNote">
-                            Some formats no engine reads at all, MicroDVD and SAMI among them. Those get
-                            turned into a format that works before anything else can happen.
+                            Applies when you press Convert on a subtitle the engine cannot read.
                         </div>
                         <div id="lapseConversionSync" class="lapseRadioGroup"></div>
 
                         <button is="emby-button" type="button" id="btnSaveConversion" class="raised button-submit lapseSmallButton">
                             <span>Save conversion settings</span>
+                        </button>
+                    </section>
+
+                    <section class="lapsePanel" id="lapsePanelAutomation">
+                        <h2 class="lapsePanelTitle">Automation</h2>
+                        <div class="fieldDescription lapseTightNote">
+                            What runs nobody is watching do to the subtitles they find: the scheduled task,
+                            the per-library schedules, a newly added item, a bulk run, and the
+                            Radarr/Sonarr webhook. Pressing Sync or Convert on a single item is not
+                            affected by anything on this page.
+                        </div>
+
+                        <h3 class="lapseSubHeading">What an automatic run does</h3>
+                        <div id="lapseAutomationActions" class="lapseRadioGroup"></div>
+
+                        <h3 class="lapseSubHeading">Automatic translation</h3>
+                        <div class="lapseNoteStrip">
+                            <strong>Experimental.</strong> This puts every subtitle an automatic run
+                            touches through a translation provider. A library is a lot of text, so check
+                            what your API allows and what it costs before turning this on. Machine
+                            translation also gets things wrong without saying so, so keep File output on
+                            one of the backup modes and keep your originals. Translations are written to a
+                            new file and never replace the subtitle they were made from.
+                        </div>
+                        <label class="emby-checkbox-label lapseStackedCheck">
+                            <input id="lapseAutoTranslateEnabled" type="checkbox" is="emby-checkbox" />
+                            <span>Translate subtitles automatically</span>
+                        </label>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="lapseAutoTranslateLanguage">Translate into</label>
+                            <input is="emby-input" id="lapseAutoTranslateLanguage" type="text" placeholder="da" />
+                            <div class="fieldDescription">
+                                A language code, such as da, de or es. The provider is whichever one is
+                                picked on the Translation page. Leave this empty to keep automatic
+                                translation off.
+                            </div>
+                        </div>
+                        <label class="emby-checkbox-label lapseStackedCheck">
+                            <input id="lapseAutoTranslateSkipExisting" type="checkbox" is="emby-checkbox" />
+                            <span>Skip subtitles that already have a translation in that language</span>
+                        </label>
+                        <div class="fieldDescription lapseTightNote">
+                            Worth leaving on. Without it every scheduled run translates the whole library
+                            again and pays for it again.
+                        </div>
+
+                        <button is="emby-button" type="button" id="btnSaveAutomation" class="raised button-submit lapseSmallButton">
+                            <span>Save automation settings</span>
                         </button>
                     </section>
 
