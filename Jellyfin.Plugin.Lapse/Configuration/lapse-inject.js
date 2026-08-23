@@ -737,8 +737,8 @@
         var overlay = openOverlay(
             '<h3>Convert Subtitles</h3>' +
             '<div class="fieldDescription">Writes a new file in the format you pick. The original is left ' +
-            'alone unless you say otherwise. Formats no engine reads, like MicroDVD .sub, become plain ' +
-            'srt that everything else here works on.</div>' +
+            'alone unless you choose to delete it. Use this to turn formats no engine can sync, like ' +
+            'MicroDVD .sub, into plain srt first.</div>' +
             '<div class="selectContainer">' +
             '  <label class="selectLabel">Subtitle</label>' +
             '  <select is="emby-select" id="lapseConvertSubtitle" class="emby-select-withcolor emby-select">' +

@@ -4,13 +4,11 @@
 
 # LAPSE for Jellyfin
 
-Subtitles that show up two seconds late, or drift further out as the film goes on, or belong to a different cut of the same movie. This plugin fixes those. It listens to the audio, works out where the speech actually is, and moves the subtitle to match.
+Subtitles that show up late, drift out over the runtime, or belong to a different cut of the film. LAPSE listens to the audio, works out where the speech actually is, and moves the subtitle to match. Press Sync on an item and it sorts itself out.
 
-That is the whole idea. You press Sync on an item and it sorts itself out.
+This repo is the Jellyfin plugin. The actual syncing is done by a separate program called the engine, which the plugin downloads for you on first run. Three engines are supported and you only need one.
 
-This repo is just the Jellyfin plugin. The thing doing the actual alignment is a separate program called the engine, and the plugin downloads it for you on first run. Three engines are supported and you only need one.
-
-## Getting it
+## Installing
 
 Add the repository in Jellyfin under **Dashboard > Plugins > Repositories**:
 
@@ -18,179 +16,54 @@ Add the repository in Jellyfin under **Dashboard > Plugins > Repositories**:
 https://raw.githubusercontent.com/rs-jensen/lapse-jellyfin-plugin/main/manifest.json
 ```
 
-Then find LAPSE in the **Catalog** tab, install it, and restart Jellyfin.
+Find LAPSE in the **Catalog** tab, install it, and restart Jellyfin.
 
-Now open the plugin from **Dashboard > Plugins > LAPSE**. This part matters: a fresh install has no engine on disk and cannot sync anything yet. Download it from the **Engines** tab in the plugin dashboard, or press the Install button the dashboard shows you on a fresh install. Either way it is one download and then you are set up.
+Open the plugin from **Dashboard > Plugins > LAPSE** and install an engine from the **Engines** tab (or the Install button a fresh install shows you). A fresh install has no engine on disk and cannot sync anything until you do this.
 
-You need Jellyfin 10.11.11 or newer.
+Requires Jellyfin 10.11.11 or newer.
 
-## Using it
+## Features
 
-Every film, episode and loose video gets two new entries in its three dot menu.
+Every film, episode and loose video gets these entries in its three dot menu:
 
-**Sync Subtitles** is the one you will use. Press it, press Sync, wait. If the item has several subtitles it asks which one. There is an Advanced button in there too if you want to pick a different mode, a different output format, translate the subtitle, or nudge the timing by hand.
+- **Sync Subtitles** - the main one. Pick a subtitle if there's more than one, press Sync, done. Advanced options let you pick a different mode, output format, translate at the same time, or nudge the timing by hand.
+- **Sync All Subtitles to Reference** - for items with several subtitle tracks where one is already correct. Lines every other track up against it. Skips the audio entirely, so it's fast and usually more accurate than syncing each track on its own.
+- **Shift Subtitles** - manual millisecond nudging with a live preview, for when a sync is close but not quite right. Works even without an engine installed.
+- **Convert Subtitles** - writes a subtitle out as `.srt`, `.vtt`, `.ass` or `.ssa`, leaving the original alone unless you say otherwise. Useful for players that only take one format, or for formats no engine can sync directly (LAPSE converts those on its own when needed, so this is rarely something you have to do by hand).
+- **Translate** - a separate job from syncing that never touches the original file. Providers include MyMemory (no setup needed), self-hosted LibreTranslate and Lingarr, and DeepL or Google Cloud with a key.
 
-Subtitles that came inside the video file count. Most films only ever have those, and an engine cannot read a track that only exists inside an mkv, so the first time you sync one the plugin copies it out to a file next to the video and works on that. It is a one off: from then on it is an ordinary subtitle file, and Jellyfin picks it up as another track on its next scan.
+Elsewhere in the dashboard:
 
-### Which subtitle formats work
+- **Sync status, Bulk sync, Subtitle to subtitle** - a searchable list of every syncable item, a page to sync a whole library or folder at once, and a way to line up two subtitle files directly without a library item involved.
+- **Automation** - libraries can pick up new items automatically or sync on a schedule, and unattended runs can sync, convert, translate, or react to a Radarr/Sonarr import webhook. Everything here is off by default; pressing a button yourself always works regardless.
+- **Access control** - the menu entries above are admin only by default, but can be opened up to specific users or everyone signed in.
+- **Undo** - every recent sync can be reversed with one press, whether that means restoring a backup or deleting the file the run added.
+- **Fetching from OpenSubtitles** (experimental) - if an item has no subtitle at all, LAPSE can fetch one before syncing, using your own OpenSubtitles account.
 
-LAPSE 2.0.3 reads and writes `.srt`, `.ass`, `.ssa`, `.vtt`, `.sub` (MicroDVD), `.sup` (PGS), `.sbv`, `.idx` (VobSub, point it at the `.idx`), `.smi`, `.ttml` and `.dfxp`, and writes each one back in the format it read. So a MicroDVD file stays MicroDVD and a PGS file stays PGS. PGS and VobSub are bitmaps with no text in them, but their timing is still timing, so LAPSE moves that without touching the pictures. Syncing a `.idx` to a new file copies its `.sub` of pictures across too, since a VobSub subtitle is only complete with both.
+### Subtitle formats
 
-The plugin asks the installed binary which formats it takes (`lapse --formats`), so this stays right if you are on an older or newer build than the one above. alass and ffsubsync take `.srt`, `.ass`, `.ssa` and `.vtt`; anything else gets converted to `.srt` first when one of those is the engine in use.
-
-There is no text in a picture based subtitle, so converting, translating and hand shifting still cannot touch one. Those need OCR first, with something like Subtitle Edit.
-
-**Sync All Subtitles to Reference** is for items with several subtitle tracks where one of them is already correct. Pick that one and everything else on the item gets lined up against it. Matching a subtitle against another subtitle skips the audio entirely, so it takes a second or two instead of a minute, and it is usually more accurate than syncing each track separately.
-
-There is also a **Shift Subtitles** entry for when a sync gets close but is still a hair off. It shows you a real line from the file, a slider, and a millisecond box, and the preview updates as you drag. It does not touch the engine, so it works even before you have installed one. Works on `.srt`, `.vtt`, `.ass` and `.ssa`.
-
-**Convert Subtitles** writes one of the item's subtitles out as `.srt`, `.vtt`, `.ass` or `.ssa`. The original stays where it is unless you tell it to delete it. Useful on its own when a player only takes one format, and it is also how you get a hand-editable `.srt` or `.vtt` out of an `.ass`/`.ssa` file before shifting it. The Advanced sync dialog has the same choice built in as "Write the result as", along with a file output mode for that one run and a tick box for translating as well, so one press can convert, sync and translate in that order.
-
-Converting is optional with LAPSE. It reads eleven formats and writes each one back as itself, so there is nothing it needs converting into first, and leaving a file in the format it arrived in means one file on disk instead of two. The plugin converts on its own only when the engine in use cannot read the format, which with alass and ffsubsync means anything outside `.srt`, `.ass`, `.ssa` and `.vtt`. If you would rather have `.srt` everywhere regardless, Settings > Conversion has an "always convert first" option. Picture-based subtitles (PGS, VobSub) hold no text at all, so there is nothing here to convert, whatever the engine can do with their timing.
-
-Who besides you can use any of this on an item they can already see is controlled from Settings > Access, described below.
-
-## The dashboard
-
-Opening the plugin puts you on a dashboard, not a settings form. It shows which engine is active, how much of your library is synced, and what has been synced recently. Every row in that recent list has an **Undo** button, which puts the backup back or deletes the file the run added, so a sync that moved something it should not have is one press to reverse. Everything that is really configuration is folded away under Settings, because most people set it up once and never look again.
-
-What is behind that Settings group:
-
-**Engines** is where you install, update and switch engines, and where each engine's Advanced section lives. More on that below.
-
-**Libraries** has an on/off switch per library plus two boxes, **New items** and **Schedule**. The on/off switch only makes a library eligible for a sync you ask for, by hand or from Bulk sync; it does not start anything by itself. A library you have never touched counts as on, so an update never quietly makes something un-syncable.
-
-The two boxes are how a library syncs without being asked, and they are an either/or. **New items** picks things up as they are added, about half a minute after the files settle, and never touches what is already in the library, so adding a film does not mean waiting for a schedule. **Schedule** runs over the whole library on a frequency and time you set. Ticking one unticks the other, since a schedule would only redo work that was already done on arrival. Both start off on every library: nothing rewrites subtitles on its own until you say so.
-
-**Automation** decides what those unattended runs actually do: sync the subtitles, convert them, or convert and then sync. It covers the scheduled task, the per-library schedules, new items, bulk runs and the Radarr/Sonarr webhook. Pressing Sync or Convert on one item yourself is not affected by it. There is also an experimental automatic translation switch here, described further down.
-
-**Access** decides who besides you can sync, shift, convert and translate. Admin only by default.
-
-**File output** decides what happens to the file you synced. This is the setting worth reading before you run a bulk sync. It is about synced files only; converted ones have their own page.
-
-**Conversion** is where format changing lives: which format to convert to (srt by default, since everything reads it), whether the file it read is kept or deleted (kept by default, so there is always something to go back to), whether every subtitle gets converted before syncing or only the ones the engine cannot read (only those, by default), and whether a subtitle that had to be converted then gets synced automatically (it does by default). The page tells you which formats the engine you are actually using reads, so you can see for yourself whether converting buys you anything.
-
-**Ignore list** is for things you never want touched automatically. Ignoring a series or a folder covers everything inside it, and ignored items show up greyed out and struck through in the status list so you can see at a glance what is being left alone. You can still sync an ignored item by hand.
-
-**Translation** sets up the translation providers. It is not where you start a translation job, that is on the item's Advanced dialog.
-
-**Subtitle appearance** restyles subtitles during playback. Nothing on disk changes, so turning it off puts everything straight back.
-
-**Experimental** holds the two features that depend on things outside Jellyfin, described further down.
-
-Outside the Settings group there is a **Sync status** list of every syncable item with search and filters, a **Bulk sync** page for running the whole library or one folder, and **Subtitle to subtitle** for lining up two files without going through a library item at all.
-
-## Access
-
-The item menu entries (Sync, Shift, Convert, Translate) are admin only until you say otherwise in Settings > Access. Everything else, the dashboard itself, engines, libraries, bulk sync, the ignore list, stays admin only no matter what is picked here, since that is server configuration rather than something done to one item.
-
-| Mode | Who |
-|---|---|
-| Administrators only | Nobody else. The default, and how LAPSE has always behaved. |
-| Anyone allowed to manage subtitles | Users with Jellyfin's own "manage subtitles" permission, the same one that already lets them download a subtitle file into the library. |
-| Only the users I pick | Named people, whatever other permissions they have. Picked from a list on the Access page. |
-| Every signed in user | Anyone with an account. Worth being sure about, since it lets them rewrite subtitle files in your library. |
+LAPSE reads and writes `.srt`, `.ass`, `.ssa`, `.vtt`, `.sub` (MicroDVD), `.sup` (PGS), `.sbv`, `.idx`/`.sub` (VobSub), `.smi`, `.ttml` and `.dfxp`, and writes each one back in the format it read. Picture-based subtitles (PGS, VobSub) have no text to work with, but their timing still gets moved. alass and ffsubsync only take `.srt`, `.ass`, `.ssa` and `.vtt`; anything else is converted to `.srt` automatically when one of those is the active engine.
 
 ## Engines
 
-**LAPSE** is the one this plugin is built around and the one to use. It listens to the audio and works out on its own whether the subtitle is simply early, drifting because it was made for a different framerate, split across a re-cut, or some combination, then fixes whichever it is. It also says how sure it is about the answer, which none of the others do, and it reads far more subtitle formats than the other two. Builds are published for Linux, macOS and Windows, so it runs wherever Jellyfin does.
+- **LAPSE** - the engine this plugin is built around, and the one to use. Works out on its own whether a subtitle is early, drifting, or split across a re-cut, and reports how confident it is. Reads the most formats of the three. Builds for Linux, macOS and Windows.
+- **alass** - splits the file into sections and times each separately, handy for recordings cut around ad breaks. Linux and Windows, x86_64 only.
+- **ffsubsync** - shifts the whole subtitle and can correct framerate mismatches. Linux, Windows and macOS, including Apple silicon.
 
-LAPSE also ships as a Docker image with a file watcher in it. Point it at the folders you want looked after and it syncs new files on its own, no Jellyfin involved, which is useful if you want subtitles fixed before Jellyfin ever sees them or if you keep media outside a Jellyfin library. A file is left alone until it stops changing, so a download still being written is not touched. There is a web UI too, for anyone who would rather manage it from a browser than the command line. Setup and settings are in the [engine repo](https://github.com/Schwponaco-org/lapse).
+See the [engine repo](https://github.com/Schwponaco-org/lapse) for details, or the [benchmark writeup](https://github.com/Schwponaco-org/lapse/blob/main/docs/benchmarks.md) comparing all three across 39 films.
 
-**alass** splits the file into sections and times each one separately. Handy for recordings cut around ad breaks. Only x86_64 builds are published, for Linux and Windows.
+LAPSE also ships as a standalone Docker image with a file watcher, for syncing subtitles outside Jellyfin entirely. See the engine repo for setup.
 
-**ffsubsync** shifts the whole subtitle and can correct a framerate mismatch. It also has a split mode when you give it a split penalty. Builds for Linux x86_64 and arm64, Windows x64, and macOS on Intel and Apple silicon.
-
-If you want the actual numbers rather than my word for it, there is a [benchmark writeup](https://github.com/Schwponaco-org/lapse/blob/main/docs/benchmarks.md) comparing all three across 39 films picked to be hard, with timings and failure cases. The [engine repo](https://github.com/Schwponaco-org/lapse) has the rest of the detail.
-
-Engines install into your Jellyfin data folder under `lapse/engines/<engine>`.
-
-### Advanced settings per engine
-
-Each engine card has an Advanced section, and what is in it comes from reading that engine's actual source rather than from a list of generic options. So LAPSE's Advanced has its audio track and subtitle track pickers, full scan, cache control, embedded subtitle handling and force; alass has its interval, speed optimization, encodings and framerate guessing; ffsubsync has its voice detector, max offset, golden section search and the rest. Every control says which command line flag it sets.
-
-Each engine also gets a **Default sync mode**, which is what the Sync button in the three dot menu does with that engine. LAPSE ships on Auto, which is the mode where it decides the shape of the problem itself. The modes offered are that engine's own modes, so nothing is ever listed and greyed out.
-
-The binary path override is in there too. Point it at a build you made yourself and the plugin will use it and never replace it, since a binary you built is not the plugin's to overwrite.
-
-### Updates
-
-The dashboard checks GitHub for newer engine releases every time it loads. The answer is cached for half an hour, so a page refresh does not cost you a network call. When something newer is out, the card says so and the Update button installs it. Leave auto-update on and the daily task does the same thing without asking.
-
-If the plugin cannot tell which version is on disk, it treats that as out of date rather than up to date, so you can still update. Each card also has an Uninstall button that removes the copy the plugin downloaded and frees the disk. Your settings for that engine are kept, and a binary you pointed the path override at is never touched.
-
-### If an engine will not start
-
-The engine card shows the real error when a binary is installed but will not run. Usually a missing shared library. The About page lists the server architecture and the architecture this process is running as, which is worth a look if they disagree, because that means emulation and it explains a lot of otherwise baffling failures.
-
-Manual shifting keeps working regardless, since it only rewrites timestamps.
-
-## File output and confidence
-
-There are four ways a sync can end up on disk:
+## File output
 
 | Mode | What happens |
 |---|---|
-| Write a new file | Leaves the original alone. `Movie.en.srt` becomes `Movie.en.shifted.srt`. This is the default. |
+| Write a new file | Leaves the original alone. `Movie.en.srt` becomes `Movie.en.shifted.srt`. Default. |
 | Write a new file, keep a backup | Same, but an earlier result at that name is kept as `.bak`. |
 | Overwrite, keep a backup | Replaces the subtitle, keeps the old one as `.bak`. |
 | Overwrite, no backup | Replaces the subtitle and keeps nothing. |
 
-Jellyfin picks up a new file as an extra subtitle track on its next scan, so with the sidecar modes you end up with both timings and can switch between them in the player. The `.shifted` part is configurable.
-
-Subtitle files are not all UTF-8. Arabic ones are usually Windows-1256, Russian ones Windows-1251, and older Western European ones Windows-1252. The plugin works out which before reading, so nothing turns into question marks on the way through, and writes everything back as UTF-8, which every player reads correctly whatever the language or its writing direction.
-
-Whatever the mode, the engine writes to a temporary file first and it is only moved into place once the run finished and actually produced something. A crashed or cancelled run cannot destroy a working subtitle.
-
-Then there is confidence, which is LAPSE only. When LAPSE finds an offset it also measures how far that answer stood out from every other offset it tried, and calls the result solid, unsure, or nothing. The threshold it judges against is the `--confidence` value, and the plugin defaults to 8, which is the engine's own internal default rather than a number invented here.
-
-When a result comes back below that bar, the recommended thing to do with it is write it to a sidecar. A low score nearly always means the subtitle is not for this video, and sidecar is the only option where being wrong about that costs you nothing: whatever you had is still there, and the doubtful result is sitting next to it if you want to look. The other two options are throw it away, or write it anyway.
-
-alass and ffsubsync report nothing of the kind, so none of this applies to them and their results always get written.
-
-## Subtitle to subtitle
-
-Point it at two subtitle files and it lines the second one up against the first. No library item involved, and no audio decoding, so it is quick.
-
-By default the result goes in the same folder as the reference subtitle. That is the file already sitting correctly next to its video, so a result there is one Jellyfin will pick up as another track for that video. You can also put it beside the input subtitle, or in a folder you choose.
-
-## Translation
-
-Translation is a separate job from syncing. It never touches the engine, never modifies the file it reads, and writes its result as a new file. Run either, both, in any order.
-
-To start one, press Advanced on an item and use the Translate box in that dialog. The Translation settings page is only where providers get configured.
-
-Providers are MyMemory (works with no setup), self-hosted LibreTranslate and Lingarr, and DeepL and Google Cloud if you have a key. Only the dialogue is sent anywhere. Timings, cue numbers, WebVTT headers and ASS style blocks come back untouched.
-
-Neither provider reports a confidence number, so rather than pretending otherwise the plugin scores each line on what it can see: whether anything came back, whether the text changed, whether the length is plausible, and whether the detected language matches what was asked for. Lines below the threshold are counted and optionally left in their original language.
-
-### Translating automatically (experimental)
-
-Settings > Automation has a switch that puts every subtitle an unattended run touches through a translation provider, into a language you name. It is off by default and worth thinking about before turning on.
-
-A library is a great deal of text. Every subtitle is a few hundred to a few thousand lines, and this sends all of them, for every item in every enabled library, on every run. Check what your provider allows and what it charges before you point this at a real library, and start with one small library to see what it costs you. MyMemory in particular rate limits hard once you go past casual use.
-
-Machine translation also gets things wrong without telling you it has. That is why translations are written to a new file and never replace the one they were made from, and why it is worth keeping File output on one of the backup modes and keeping your originals. Read a couple of the results before trusting the rest.
-
-"Skip subtitles that already have a translation in that language" is on by default and should stay on. Without it, every scheduled run translates the whole library again from scratch and pays for it again.
-
-## Experimental
-
-Two more features live behind an Experimental page because they depend on things outside Jellyfin and can break when those things change.
-
-**Fetching from OpenSubtitles.** If you press Sync on an item that has no subtitle at all, the plugin can go and get one first, then sync it. Items that already have a subtitle are untouched. You need an API key from opensubtitles.com, and an account name and password on top of that, because their API hands out search results to a key alone but a download needs a login token. Downloads come out of that account's daily quota.
-
-**Radarr and Sonarr.** Both apps can call a URL when they import something. The Experimental page generates one for you: paste it into a Webhook connection in Radarr or Sonarr and tick On Import, and a new episode or film gets synced as soon as Jellyfin has scanned it in.
-
-That last part is the awkward bit and worth knowing about. Radarr fires the moment the import finishes, but Jellyfin does not know the file exists until its own scan picks it up, which can be minutes later. So the plugin does not sync the path directly. It waits for the item to appear in the library, checking with increasing gaps for up to about twenty minutes, and syncs it when it does. If it never appears, it gives up quietly and the scheduled sync catches it later. Nothing polls anything, and nothing sits running forever.
-
-The URL carries a secret, which is the only thing protecting it, because neither app can send a Jellyfin API key. Treat it like a password. The endpoint does nothing at all until you turn it on, and the only thing a valid call can do is queue a sync for a file that is already in your library.
-
-## Scheduled tasks
-
-Two show up under Dashboard > Scheduled Tasks. *Sync subtitles* runs over every enabled library. *Update sync engines* checks GitHub for newer engine releases once a day.
-
-What *Sync subtitles* does to each subtitle it finds comes from Settings > Automation, same as the per-library schedules and the new-item pickup. Per-library schedules are not in this list, because a Jellyfin trigger belongs to a task rather than to a library; they are set up on the Libraries page and run on a one minute tick of their own.
+Jellyfin picks up a new file as an extra subtitle track on its next scan.
 
 ## License
 
