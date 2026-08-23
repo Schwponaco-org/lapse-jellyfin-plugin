@@ -28,6 +28,13 @@ namespace Jellyfin.Plugin.Lapse.Services;
 ///
 /// Only the text based tracks can come out this way. PGS and VobSub are sequences of
 /// pictures with no characters in them at all.
+///
+/// The track is pulled out with Jellyfin's own subtitle encoder, the same one the server
+/// uses when a client asks for an embedded track and the same one the official subtitle
+/// extract plugin warms the cache with. It knows the quirks of every container Jellyfin
+/// supports and keeps a cached copy, so a track that's already been played usually comes
+/// back without touching the video at all. Calling ffmpeg by hand is only the fallback for
+/// when that path refuses.
 /// </summary>
 public class SubtitleExtractor
 {
@@ -54,16 +61,19 @@ public class SubtitleExtractor
     };
 
     private readonly IMediaEncoder _mediaEncoder;
+    private readonly ISubtitleEncoder _subtitleEncoder;
     private readonly ILogger<SubtitleExtractor> _logger;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="SubtitleExtractor"/> class.
     /// </summary>
     /// <param name="mediaEncoder">Used to find the ffmpeg Jellyfin ships.</param>
+    /// <param name="subtitleEncoder">Jellyfin's own extractor, used before ffmpeg by hand.</param>
     /// <param name="logger">Logger.</param>
-    public SubtitleExtractor(IMediaEncoder mediaEncoder, ILogger<SubtitleExtractor> logger)
+    public SubtitleExtractor(IMediaEncoder mediaEncoder, ISubtitleEncoder subtitleEncoder, ILogger<SubtitleExtractor> logger)
     {
         _mediaEncoder = mediaEncoder;
+        _subtitleEncoder = subtitleEncoder;
         _logger = logger;
     }
 
@@ -125,28 +135,23 @@ public class SubtitleExtractor
             return $"{(codec ?? "That").ToUpperInvariant()} subtitles are pictures of text rather than text, so there's nothing to extract or line up. They need OCR first, with something like Subtitle Edit.";
         }
 
-        return HasFfmpeg()
-            ? null
-            : "Getting a subtitle out of a video file needs ffmpeg, and the server hasn't told the plugin where its copy is.";
+        return null;
     }
 
     /// <summary>
-    /// Copies one subtitle track out of a video into a file beside it.
+    /// Copies one subtitle track out of a video into a file beside it, asking Jellyfin for
+    /// the track first and only falling back to ffmpeg if the server can't hand it over.
     /// </summary>
-    /// <param name="videoPath">The video holding the track.</param>
+    /// <param name="item">The item holding the track.</param>
     /// <param name="streamIndex">The track's stream index in the container.</param>
     /// <param name="codec">The track's codec, which decides the file extension.</param>
     /// <param name="language">The track's language, used in the file name.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The file that was written.</returns>
     /// <exception cref="NotSupportedException">The track isn't text, or ffmpeg is missing.</exception>
-    /// <exception cref="InvalidDataException">ffmpeg couldn't produce a subtitle.</exception>
-    [System.Diagnostics.CodeAnalysis.SuppressMessage(
-        "Security",
-        "CA3003:Review code for file path injection vulnerabilities",
-        Justification = "The video path is Jellyfin's own resolved path for an item the caller already looked up, and the destination is derived from it.")]
+    /// <exception cref="InvalidDataException">Neither route could produce a subtitle.</exception>
     public async Task<string> ExtractAsync(
-        string videoPath,
+        BaseItem item,
         int streamIndex,
         string? codec,
         string? language,
@@ -157,8 +162,48 @@ public class SubtitleExtractor
             throw new NotSupportedException(problem);
         }
 
+        var videoPath = item.Path;
         var extension = GetExtensionForCodec(codec)!;
         var destination = BuildDestination(videoPath, streamIndex, language, extension);
+
+        // Jellyfin's extractor first. It reuses the cached copy the server or the subtitle
+        // extract plugin already made, and where there's nothing cached it runs the same
+        // extraction the server does for playback, which handles containers our own ffmpeg
+        // call gets wrong.
+        var native = await TryReadNativeAsync(item, streamIndex, extension, cancellationToken).ConfigureAwait(false);
+        if (native is not null)
+        {
+            await WriteAsync(destination, native, cancellationToken).ConfigureAwait(false);
+
+            _logger.LogInformation(
+                "Extracted subtitle stream {Index} from {Video} to {Destination} using Jellyfin's extractor",
+                streamIndex,
+                videoPath,
+                destination);
+
+            return destination;
+        }
+
+        return await ExtractWithFfmpegAsync(videoPath, streamIndex, extension, destination, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Security",
+        "CA3003:Review code for file path injection vulnerabilities",
+        Justification = "The video path is Jellyfin's own resolved path for an item the caller already looked up, and the destination is derived from it.")]
+    private async Task<string> ExtractWithFfmpegAsync(
+        string videoPath,
+        int streamIndex,
+        string extension,
+        string destination,
+        CancellationToken cancellationToken)
+    {
+        if (!HasFfmpeg())
+        {
+            throw new NotSupportedException(
+                "Jellyfin couldn't hand over that subtitle track, and the server hasn't told the plugin where its ffmpeg is to try directly.");
+        }
 
         var startInfo = new ProcessStartInfo
         {
@@ -179,6 +224,12 @@ public class SubtitleExtractor
         startInfo.ArgumentList.Add("0:" + streamIndex.ToString(CultureInfo.InvariantCulture));
         startInfo.ArgumentList.Add("-c:s");
         startInfo.ArgumentList.Add(extension == ".vtt" ? "webvtt" : "copy");
+
+        // Name the muxer rather than leaving ffmpeg to guess it from the file name. A name
+        // it doesn't recognise otherwise fails while it's still reading the options, long
+        // before it gets as far as the subtitle.
+        startInfo.ArgumentList.Add("-f");
+        startInfo.ArgumentList.Add(GetMuxer(extension));
         startInfo.ArgumentList.Add(destination);
 
         using var process = new Process { StartInfo = startInfo };
@@ -223,13 +274,75 @@ public class SubtitleExtractor
         }
 
         _logger.LogInformation(
-            "Extracted subtitle stream {Index} from {Video} to {Destination}",
+            "Extracted subtitle stream {Index} from {Video} to {Destination} using ffmpeg",
             streamIndex,
             videoPath,
             destination);
 
         return destination;
     }
+
+    // Jellyfin hands the track back as a stream, converting it to the format we ask for if
+    // the cached copy is in another one. Null means it couldn't, and ffmpeg gets its turn -
+    // there's no reason to fail the whole thing while a second route is untried.
+    private async Task<Stream?> TryReadNativeAsync(
+        BaseItem item,
+        int streamIndex,
+        string extension,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await _subtitleEncoder.GetSubtitles(
+                item,
+                item.Id.ToString("N", CultureInfo.InvariantCulture),
+                streamIndex,
+                extension.TrimStart('.'),
+                0,
+                0,
+                false,
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(
+                ex,
+                "Jellyfin's extractor couldn't hand over subtitle stream {Index} of {Item}, falling back to ffmpeg",
+                streamIndex,
+                item.Path);
+
+            return null;
+        }
+    }
+
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Security",
+        "CA3003:Review code for file path injection vulnerabilities",
+        Justification = "The destination was built from Jellyfin's own resolved video path, nothing from the request.")]
+    private static async Task WriteAsync(string destination, Stream source, CancellationToken cancellationToken)
+    {
+        await using (source.ConfigureAwait(false))
+        {
+            var file = new FileStream(destination, FileMode.Create, FileAccess.Write, FileShare.None);
+
+            await using (file.ConfigureAwait(false))
+            {
+                await source.CopyToAsync(file, cancellationToken).ConfigureAwait(false);
+            }
+        }
+    }
+
+    private static string GetMuxer(string extension) => extension switch
+    {
+        ".vtt" => "webvtt",
+        ".ass" => "ass",
+        ".ssa" => "ass",
+        _ => "srt"
+    };
 
     /// <summary>
     /// Turns a picked subtitle option into a real file on disk. An external one already
@@ -262,7 +375,7 @@ public class SubtitleExtractor
 
         try
         {
-            var extracted = await ExtractAsync(item.Path, streamIndex, option.Codec, option.Language, cancellationToken)
+            var extracted = await ExtractAsync(item, streamIndex, option.Codec, option.Language, cancellationToken)
                 .ConfigureAwait(false);
 
             return (extracted, null);
