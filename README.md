@@ -58,7 +58,9 @@ What is behind that Settings group:
 
 **Engines** is where you install, update and switch engines, and where each engine's Advanced section lives. More on that below.
 
-**Libraries** has an on/off switch per library, a **New items** switch, and an optional schedule with a day and a time. New items is the one that means adding a film does not have to wait for the schedule: anything that turns up in that library gets picked up on its own about half a minute later, once its files have settled. Both switches are per library, so a library can be on a weekly schedule without every new file being grabbed the moment it lands, or the other way round. A library you have never touched counts as on with new items on, so an update never quietly stops syncing something.
+**Libraries** has an on/off switch per library plus two boxes, **New items** and **Schedule**. The on/off switch only makes a library eligible for a sync you ask for, by hand or from Bulk sync; it does not start anything by itself. A library you have never touched counts as on, so an update never quietly makes something un-syncable.
+
+The two boxes are how a library syncs without being asked, and they are an either/or. **New items** picks things up as they are added, about half a minute after the files settle, and never touches what is already in the library, so adding a film does not mean waiting for a schedule. **Schedule** runs over the whole library on a frequency and time you set. Ticking one unticks the other, since a schedule would only redo work that was already done on arrival. Both start off on every library: nothing rewrites subtitles on its own until you say so.
 
 **Automation** decides what those unattended runs actually do: sync the subtitles, convert them, or convert and then sync. It covers the scheduled task, the per-library schedules, new items, bulk runs and the Radarr/Sonarr webhook. Pressing Sync or Convert on one item yourself is not affected by it. There is also an experimental automatic translation switch here, described further down.
 
@@ -196,4 +198,6 @@ GPL v3. See [LICENSE](LICENSE).
 
 ## Credits
 
-Built by [rs-jensen](https://github.com/rs-jensen) and [cowmuncher](https://github.com/cowmuncher).
+Built by Rasmus Stisen ([rs-jensen](https://github.com/rs-jensen)) and Carl Johan M. Bangsgaard ([cowmuncher](https://github.com/cowmuncher)).
+
+A product of [Schwponaco](https://github.com/Schwponaco-org), where the LAPSE engine this plugin is built around is made.

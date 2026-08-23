@@ -923,7 +923,12 @@ public class LapseController : ControllerBase
 
             library.Enabled = entry.Enabled;
             library.AutoSyncEnabled = entry.AutoSyncEnabled;
-            library.ScheduleEnabled = entry.ScheduleEnabled;
+
+            // New items and a schedule are one choice, not two: a library either picks
+            // things up as they arrive or sweeps the whole thing on a timer. The form
+            // only ever lets one be ticked, and this is what makes that true of the
+            // stored config as well rather than only of the page.
+            library.ScheduleEnabled = entry.ScheduleEnabled && !entry.AutoSyncEnabled;
             library.ScheduleFrequency = Enum.TryParse<ScheduleFrequency>(entry.ScheduleFrequency, out var frequency)
                 ? frequency
                 : ScheduleFrequency.Daily;

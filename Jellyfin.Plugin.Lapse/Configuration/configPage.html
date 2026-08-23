@@ -132,6 +132,9 @@
                             never replaced.
                         </div>
                         <div class="fieldDescription lapseTightNote" id="lapsePlatformNote"></div>
+
+                        <div class="lapseInfoBox hide" id="lapseEngineFormats"></div>
+                        <div class="lapseInfoBox hide" id="lapseEngineDeployment"></div>
                     </section>
 
                     <section class="lapsePanel" id="lapsePanelLibraries">
@@ -142,11 +145,15 @@
                             syncing and nothing you have now can be lost.
                         </div>
                         <div class="fieldDescription lapseTightNote">
-                            Turn a library on to make everything in it eligible for syncing. "New items"
-                            picks up anything added to that library on its own, so a film you just added
-                            does not have to wait for the schedule. A schedule runs over the whole library
-                            on its own frequency and time. What either of them actually does to a subtitle
-                            is set on the <strong>Automation</strong> page.
+                            Turning a library on makes everything in it eligible for a sync you ask for,
+                            by hand or from Bulk sync. It does not start anything on its own.
+                        </div>
+                        <div class="fieldDescription lapseTightNote">
+                            The two boxes next to it are how a library syncs without being asked, and they
+                            are an either/or. <strong>New items</strong> picks up things as they are added
+                            and never touches what is already there. <strong>Schedule</strong> runs over
+                            the whole library on a frequency and time you set. Both start off. What either
+                            of them does to a subtitle is set on the <strong>Automation</strong> page.
                         </div>
                         <div id="lapseLibraryList" class="lapseLibraryList"></div>
                         <button is="emby-button" type="button" id="btnSaveLibraries" class="raised button-submit lapseSmallButton">
@@ -650,8 +657,13 @@
 
                         <h3 class="lapseSubHeading">Credits</h3>
                         <div class="lapseCredits">
-                            <a is="emby-linkbutton" class="button-link lapseCreditLink" href="https://github.com/rs-jensen" target="_blank" rel="noopener">rs-jensen</a>
-                            <a is="emby-linkbutton" class="button-link lapseCreditLink" href="https://github.com/cowmuncher" target="_blank" rel="noopener">cowmuncher</a>
+                            <a is="emby-linkbutton" class="button-link lapseCreditLink" href="https://github.com/rs-jensen" target="_blank" rel="noopener">Rasmus Stisen (rs-jensen)</a>
+                            <a is="emby-linkbutton" class="button-link lapseCreditLink" href="https://github.com/cowmuncher" target="_blank" rel="noopener">Carl Johan M. Bangsgaard (cowmuncher)</a>
+                        </div>
+                        <div class="fieldDescription lapseTightNote">
+                            A product of
+                            <a is="emby-linkbutton" class="button-link" href="https://github.com/Schwponaco-org" target="_blank" rel="noopener">Schwponaco</a>,
+                            where the engine this plugin is built around is made.
                         </div>
                         <div class="fieldDescription lapseTightNote">
                             LAPSE is free software under the GPL v3. The engines it can install are their

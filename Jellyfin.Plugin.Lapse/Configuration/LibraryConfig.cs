@@ -33,14 +33,19 @@ public class LibraryConfig
 
     /// <summary>
     /// Gets or sets a value indicating whether an item added to this library gets picked
-    /// up on its own, without waiting for the next scheduled run. On by default, which is
-    /// how the plugin has always behaved - a config written before this setting existed
-    /// has no element for it, so the initializer here is what such a library gets.
+    /// up on its own, without waiting for a scheduled run. Off until it's asked for:
+    /// rewriting subtitles across a library is not something that should start happening
+    /// because someone installed an update.
+    ///
+    /// Mutually exclusive with <see cref="ScheduleEnabled"/> - a library is either doing
+    /// new items as they arrive or sweeping the lot on a schedule, and having both on
+    /// would only mean the schedule redoing work that was already done on arrival.
     /// </summary>
-    public bool AutoSyncEnabled { get; set; } = true;
+    public bool AutoSyncEnabled { get; set; }
 
     /// <summary>
     /// Gets or sets a value indicating whether this library gets synced on a schedule.
+    /// Mutually exclusive with <see cref="AutoSyncEnabled"/>.
     /// </summary>
     public bool ScheduleEnabled { get; set; }
 
