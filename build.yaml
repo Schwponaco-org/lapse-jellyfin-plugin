@@ -1,7 +1,7 @@
 ---
 name: "LAPSE"
 guid: "486090e1-ca92-46e1-8549-9f6bb914a1d0"
-version: "1.5.2.0"
+version: "1.5.3.0"
 targetAbi: "10.11.0.0"
 framework: "net9.0"
 overview: "Sync subtitles to audio (or subtitle to subtitle) using the LAPSE engine. Open Settings after installing to set it up."
@@ -21,11 +21,14 @@ owner: "rs-jensen"
 artifacts:
 - "Jellyfin.Plugin.Lapse.dll"
 changelog: >
-  Supports LAPSE 2.0.3's wider subtitle format list (adds MicroDVD, PGS,
-  VobSub, SubViewer, SAMI, TTML and DFXP on top of srt/vtt/ass/ssa), read
-  straight from the installed binary so converting before syncing is only
-  needed when the engine can't read the format. Adds an Automation page for
-  what unattended runs (scheduled task, per-library schedules, new items,
-  bulk, webhook) do to a subtitle, including an experimental auto-translate
-  option, and a per-library toggle for picking up newly added items without
-  waiting for the schedule.
+  Embedded subtitles are now extracted with Jellyfin's own subtitle encoder
+  instead of a raw ffmpeg call, so a track already sitting in the server's
+  cache comes back instantly and containers our own ffmpeg command got wrong
+  now go through the same extraction Jellyfin uses for playback. ffmpeg is
+  still used as a fallback.
+
+  The engine cards now show one table comparing all three engines' subtitle
+  formats side by side instead of repeating the same line on each card, with
+  the LAPSE Docker note moved into its own box below it. New items pickup for
+  a library now starts off by default, and New items and Schedule are an
+  either/or rather than both running at once.
