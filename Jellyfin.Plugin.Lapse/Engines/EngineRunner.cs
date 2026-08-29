@@ -524,6 +524,28 @@ public class EngineRunner
                 }
             }
 
+            // A subtitle that was already right is the common case in a bulk run, and the
+            // engine reporting "move it 12ms" on one is not a reason to replace the file.
+            // Only for a run that would otherwise have rewritten the subtitle in place:
+            // an explicit destination or a format change means the caller asked for a new
+            // file to exist, and that has to happen whatever the offset came out as.
+            if (IsAlreadyInSync(result)
+                && string.IsNullOrWhiteSpace(destinationOverride)
+                && outputFormat is null)
+            {
+                result.Skipped = true;
+                result.AlreadyInSync = true;
+
+                _logger.LogInformation(
+                    "{Engine} found {Subtitle} is already in sync (offset {Offset}ms, tolerance {Tolerance}ms) - leaving it alone",
+                    engine.Descriptor.DisplayName,
+                    subtitlePath,
+                    result.OffsetMs,
+                    Plugin.Instance?.Configuration.AlreadyInSyncToleranceMs);
+
+                return result;
+            }
+
             result.BackupPath = TakeBackup(destination, resolvedOutputMode);
 
             if (NeedsFormatChange(workPath, destination))
@@ -662,6 +684,40 @@ public class EngineRunner
         var backupPath = destination + ".bak";
         File.Copy(destination, backupPath, overwrite: true);
         return backupPath;
+    }
+
+    /// <summary>
+    /// Says whether the engine's answer amounts to "this was already fine". Deliberately
+    /// strict about what it will call a no-op: the offset has to be one the engine
+    /// actually reported (a null means it didn't say, which is not the same as zero), and
+    /// anything that stretches the subtitle or cuts it into pieces gets written no matter
+    /// how small the shift, because those change the timing across the file rather than
+    /// nudging the whole thing.
+    /// </summary>
+    /// <param name="result">A successful engine result.</param>
+    /// <returns>True if nothing worth writing came out of the run.</returns>
+    private static bool IsAlreadyInSync(SyncResult result)
+    {
+        var config = Plugin.Instance?.Configuration;
+        if (config?.SkipAlreadyInSync != true)
+        {
+            return false;
+        }
+
+        if (result.OffsetMs is not { } offset)
+        {
+            return false;
+        }
+
+        // A ratio correction moves later cues further than earlier ones, so a small
+        // offset says nothing about what the run would do to the end of the file.
+        if (result.Slope is not null || result.Mode == SyncMode.Split)
+        {
+            return false;
+        }
+
+        var tolerance = Math.Clamp(config.AlreadyInSyncToleranceMs, 0, 5000);
+        return Math.Abs(offset) <= tolerance;
     }
 
     private async Task<(string Stdout, string Stderr, int ExitCode)> RunProcessAsync(

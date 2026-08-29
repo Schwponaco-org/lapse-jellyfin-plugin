@@ -77,6 +77,22 @@ public class PluginConfiguration : BasePluginConfiguration
     public LowConfidenceAction LowConfidenceAction { get; set; } = LowConfidenceAction.Sidecar;
 
     /// <summary>
+    /// Gets or sets a value indicating whether a subtitle the engine barely moved is left
+    /// exactly as it was. A bulk run over a whole library goes through subtitles that were
+    /// already fine, and rewriting those - new file, new backup, new timestamps - for a
+    /// shift nobody can see is churn at best. On by default.
+    /// </summary>
+    public bool SkipAlreadyInSync { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets how small the engine's answer has to be, in milliseconds, before
+    /// <see cref="SkipAlreadyInSync"/> treats the subtitle as already correct. 100ms is
+    /// under what anyone notices while reading along, and well under the drift that makes
+    /// someone go looking for a sync button in the first place.
+    /// </summary>
+    public int AlreadyInSyncToleranceMs { get; set; } = 100;
+
+    /// <summary>
     /// Gets or sets how far LAPSE's answer has to stand out from the alternatives before
     /// it counts as confident, in standard deviations. This is passed straight to the
     /// engine as --confidence, and the default is the engine's own internal default
