@@ -1,14 +1,14 @@
 ---
 name: "LAPSE"
 guid: "486090e1-ca92-46e1-8549-9f6bb914a1d0"
-version: "1.5.3.0"
+version: "1.5.4.0"
 targetAbi: "10.11.0.0"
 framework: "net9.0"
 overview: "Sync subtitles to audio (or subtitle to subtitle) using the LAPSE engine. Open Settings after installing to set it up."
 description: >
   LAPSE lines up subtitles that have drifted out of sync, either against the
   item's own audio or against another subtitle file. Adds "Sync Subtitles" and
-  "Sync All Subtitles to Reference" to the context menu on films, episodes and
+  "Sync Subtitles to Reference" to the context menu on films, episodes and
   loose videos, a dashboard for per-library settings, schedules, bulk syncing
   and engine management, and optional subtitle translation through Google
   Translate or a self-hosted Lingarr.
@@ -21,14 +21,24 @@ owner: "rs-jensen"
 artifacts:
 - "Jellyfin.Plugin.Lapse.dll"
 changelog: >
-  Embedded subtitles are now extracted with Jellyfin's own subtitle encoder
-  instead of a raw ffmpeg call, so a track already sitting in the server's
-  cache comes back instantly and containers our own ffmpeg command got wrong
-  now go through the same extraction Jellyfin uses for playback. ffmpeg is
-  still used as a fallback.
+  Any running sync job - bulk, a series, or a schedule - can now be stopped
+  from the dashboard or the progress toast, killing the engine process
+  rather than leaving it running in the background.
 
-  The engine cards now show one table comparing all three engines' subtitle
-  formats side by side instead of repeating the same line on each card, with
-  the LAPSE Docker note moved into its own box below it. New items pickup for
-  a library now starts off by default, and New items and Schedule are an
-  either/or rather than both running at once.
+  Sync Subtitles to Reference (renamed from Sync All Subtitles to Reference)
+  can now line up just one chosen track instead of always doing every other
+  subtitle. Embedded subtitle tracks no longer count towards an item's sync
+  status by default, since nothing automatic ever touches them; a setting
+  brings them back in for anyone who syncs embedded tracks by hand.
+
+  Translation, marked experimental, gets several fixes: DeepL retries on 429
+  and 5xx with backoff instead of failing outright, the metadata header no
+  longer breaks .srt (which has no comment syntax) and is placed correctly
+  in .vtt, and a configurable default source/target language fills the
+  Translate boxes in instead of starting empty. The Advanced sync dialog is
+  reworked so every action sits in one row at the bottom.
+
+  A subtitle the engine turns away for having too few cues to judge is now
+  retried once with --force. Disabling a library now turns off its "new
+  items" and "schedule" sync automatically, instead of leaving them
+  checked-and-inert until the library is turned back on.
