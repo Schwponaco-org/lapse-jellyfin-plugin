@@ -100,14 +100,27 @@ public class SubtitleTextFile
     public async Task SaveAsync(string path, IReadOnlyList<string>? headerLines, CancellationToken cancellationToken = default)
     {
         var output = new List<string>();
+        var body = _lines;
 
-        if (headerLines is { Count: > 0 })
+        if (headerLines is { Count: > 0 } && SupportsComments)
         {
+            // A WebVTT file has to start with the WEBVTT line and nothing else, so the
+            // NOTE block goes underneath it rather than above. Anything else takes the
+            // header at the very top.
+            var signature = _lines.FindIndex(line => line.Trim().StartsWith("WEBVTT", StringComparison.OrdinalIgnoreCase));
+
+            if (signature >= 0)
+            {
+                output.AddRange(_lines.Take(signature + 1));
+                output.Add(string.Empty);
+                body = _lines.Skip(signature + 1).SkipWhile(string.IsNullOrWhiteSpace).ToList();
+            }
+
             output.AddRange(headerLines.Select(CommentFor));
             output.Add(string.Empty);
         }
 
-        output.AddRange(_lines);
+        output.AddRange(body);
 
         await File.WriteAllLinesAsync(path, output, SubtitleEncoding.Utf8NoBom, cancellationToken).ConfigureAwait(false);
     }
@@ -145,11 +158,19 @@ public class SubtitleTextFile
         return Path.Combine(directory, $"{stem}.{targetLanguage}.translated{extension}");
     }
 
+    /// <summary>
+    /// Gets a value indicating whether this format has a comment syntax to put a header
+    /// in. SRT has none: the NOTE block that used to be written there is not a numbered
+    /// cue, and players that parse strictly - which is most of them once the file leaves
+    /// Jellyfin - either drop the first subtitle or reject the file outright. So the
+    /// header is a WebVTT and ASS/SSA thing, and asking for one on an SRT quietly gets a
+    /// clean file instead of a broken one.
+    /// </summary>
+    public bool SupportsComments => Extension is ".ass" or ".ssa" or ".vtt" or ".webvtt";
+
     private string CommentFor(string text)
     {
-        // ASS/SSA use ; for comments, WebVTT uses NOTE, and SRT has no comment syntax at
-        // all - a NOTE block at the top is ignored by every player worth worrying about
-        // because it isn't a numbered cue.
+        // ASS/SSA use ; for comments, WebVTT uses NOTE.
         return Extension is ".ass" or ".ssa" ? "; " + text : "NOTE " + text;
     }
 

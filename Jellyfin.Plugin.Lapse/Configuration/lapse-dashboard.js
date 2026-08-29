@@ -1239,9 +1239,23 @@
                 frequencySelect.disabled = !scheduled;
                 timeInput.disabled = !scheduled;
                 daySelect.disabled = !needsDay;
+
+                // A row nobody can act on reads as inert, not just as a row with two
+                // greyed out boxes in it.
+                row.classList.toggle('lapseLibraryRowDisabled', !enabledCheck.checked);
             }
 
-            enabledCheck.addEventListener('change', syncRowState);
+            // Turning the library off takes new-item and schedule sync with it, rather
+            // than leaving them ticked-but-inert. Otherwise turning the library back on
+            // later quietly brings a setting back that nobody re-chose.
+            enabledCheck.addEventListener('change', function () {
+                if (!enabledCheck.checked) {
+                    autoSyncCheck.checked = false;
+                    scheduleCheck.checked = false;
+                }
+
+                syncRowState();
+            });
             frequencySelect.addEventListener('change', syncRowState);
             syncRowState();
         });
@@ -1473,10 +1487,16 @@
                 var plural = snapshot.Total === 1 ? unit : unit + 's';
 
                 view.querySelector('#lapseQueueBar').value = pct;
-                view.querySelector('#lapseQueueText').textContent =
-                    (snapshot.JobName ? snapshot.JobName + ': ' : '') +
-                    snapshot.Completed + ' / ' + snapshot.Total + ' ' + plural + ' processed' +
-                    (snapshot.CurrentItemName ? (' - ' + snapshot.CurrentItemName) : '');
+                view.querySelector('#lapseQueueText').textContent = snapshot.Cancelling
+                    ? 'Stopping after the item that is running now...'
+                    : ((snapshot.JobName ? snapshot.JobName + ': ' : '') +
+                        snapshot.Completed + ' / ' + snapshot.Total + ' ' + plural + ' processed' +
+                        (snapshot.CurrentItemName ? (' - ' + snapshot.CurrentItemName) : ''));
+
+                var stopButton = view.querySelector('#lapseQueueStop');
+                if (stopButton) {
+                    stopButton.disabled = !!snapshot.Cancelling;
+                }
             } else if (queueWasRunning) {
                 // Only on the tick where a job finished. Doing it whenever the queue is
                 // idle meant Lapse/Status - which walks every item in every enabled
@@ -1874,18 +1894,31 @@
         var multiTrackHtml = subtitles.length > 1
             ? '<hr class="lapseDialogRule" />' +
               '<div class="selectContainer">' +
-              '  <label class="selectLabel">Sync all subtitles to this one</label>' +
+              '  <label class="selectLabel">Reference (the subtitle that is already correct)</label>' +
               '  <select is="emby-select" id="lapseAdvReference" class="emby-select-withcolor emby-select">' +
               subtitleOptionsHtml(subtitles) +
               '  </select>' +
               '</div>' +
-              '<div class="fieldDescription lapseTightNote">Lines the other ' + (subtitles.length - 1) +
-              ' subtitle' + (subtitles.length === 2 ? '' : 's') + ' up against this one instead of against the audio. Faster and usually more accurate, as long as this one is right.</div>' +
-              '<button is="emby-button" type="button" class="raised lapseSmallButton" id="lapseAdvSyncAll"><span>Sync all to reference</span></button>'
+              '<div class="selectContainer">' +
+              '  <label class="selectLabel">Sync to it</label>' +
+              '  <select is="emby-select" id="lapseAdvReferenceTarget" class="emby-select-withcolor emby-select">' +
+              '    <option value="">Every other subtitle</option>' +
+              subtitleOptionsHtml(subtitles) +
+              '  </select>' +
+              '</div>' +
+              '<div class="fieldDescription lapseTightNote">Lines the tracks up against the reference instead of against the audio. ' +
+              'Faster and usually more accurate, as long as the reference is right. Pick a single track when only one of them is off.</div>' +
+              '<button is="emby-button" type="button" class="raised lapseSmallButton" id="lapseAdvSyncAll"><span>Sync to reference</span></button>'
             : '';
 
         var providers = configuredProviders();
         var threshold = (currentSettings && currentSettings.TranslationConfidenceThreshold) || 70;
+
+        // The languages set under Translation fill the boxes in, so a manual run starts
+        // where the settings say rather than empty every time.
+        var defaultTarget = (currentSettings &&
+            (currentSettings.TranslationDefaultTargetLanguage || currentSettings.AutoTranslateLanguage)) || '';
+        var defaultSource = (currentSettings && currentSettings.TranslationDefaultSourceLanguage) || '';
 
         var translationHtml = (subtitles.length > 0 && providers.length > 0)
             ? '<hr class="lapseDialogRule" />' +
@@ -1893,11 +1926,13 @@
               '<div class="lapseFieldPair">' +
               '  <div class="inputContainer">' +
               '    <label class="inputLabel inputLabelUnfocused">From</label>' +
-              '    <input is="emby-input" id="lapseAdvSourceLang" type="text" placeholder="auto" />' +
+              '    <input is="emby-input" id="lapseAdvSourceLang" type="text" placeholder="auto" value="' +
+              escapeHtml(defaultSource) + '" />' +
               '  </div>' +
               '  <div class="inputContainer">' +
               '    <label class="inputLabel inputLabelUnfocused">To</label>' +
-              '    <input is="emby-input" id="lapseAdvTargetLang" type="text" placeholder="es" />' +
+              '    <input is="emby-input" id="lapseAdvTargetLang" type="text" placeholder="es" value="' +
+              escapeHtml(defaultTarget) + '" />' +
               '  </div>' +
               '</div>' +
               '<div class="selectContainer">' +
@@ -1919,7 +1954,8 @@
               ((currentSettings && currentSettings.TranslationIncludeMetadataHeader) ? ' checked' : '') + ' />' +
               '  <span>Add a metadata comment block at the top</span>' +
               '</label>' +
-              '<div class="fieldDescription lapseTightNote">Writes a new file next to the original, never over it.</div>' +
+              '<div class="fieldDescription lapseTightNote">Writes a new file next to the original, never over it. ' +
+              'The comment block is skipped for .srt, which has no comment syntax to put one in.</div>' +
               '<button is="emby-button" type="button" class="raised lapseSmallButton" id="lapseAdvTranslate"><span>Translate</span></button>'
             : '';
 
@@ -2059,10 +2095,19 @@
         var syncAllButton = overlay.querySelector('#lapseAdvSyncAll');
         if (syncAllButton) {
             syncAllButton.addEventListener('click', function () {
+                var referencePath = overlay.querySelector('#lapseAdvReference').value;
+                var targetPath = overlay.querySelector('#lapseAdvReferenceTarget').value;
+
+                if (targetPath && targetPath === referencePath) {
+                    Dashboard.alert('That is the reference itself. Pick another subtitle, or sync every other one.');
+                    return;
+                }
+
                 Dashboard.showLoadingMsg();
                 lapsePost('Lapse/SyncAllSubtitles', {
                     ItemId: itemId,
-                    ReferencePath: overlay.querySelector('#lapseAdvReference').value,
+                    ReferencePath: referencePath,
+                    SubtitlePaths: targetPath ? [targetPath] : null,
                     EngineId: currentEngine().Id,
                     Mode: modeSelect.value,
                     Penalty: currentPenalty()
@@ -2768,6 +2813,9 @@
         view.querySelector('#lapseConfidence').value = currentSettings.TranslationConfidenceThreshold;
         view.querySelector('#lapseKeepLowConfidence').checked = !!currentSettings.TranslationKeepLowConfidenceOriginal;
         view.querySelector('#lapseMetadataHeader').checked = !!currentSettings.TranslationIncludeMetadataHeader;
+        view.querySelector('#lapseCountEmbedded').checked = !!currentSettings.CountEmbeddedSubtitlesInStatus;
+        view.querySelector('#lapseDefaultTargetLanguage').value = currentSettings.TranslationDefaultTargetLanguage || '';
+        view.querySelector('#lapseDefaultSourceLanguage').value = currentSettings.TranslationDefaultSourceLanguage || '';
 
         view.querySelector('#lapseSubToSubPlacement').value = currentSettings.SubToSubPlacement || 'ReferenceFolder';
         view.querySelector('#lapseSubToSubCustomFolder').value = currentSettings.SubToSubCustomFolder || '';
@@ -3020,6 +3068,7 @@
             LowConfidenceAction: selectedRadio(view, 'lapseLowConfidence', 'Sidecar'),
             ConfidenceSigma: parseFloat(view.querySelector('#lapseConfidenceSigma').value) || 8,
             AutoUpdateEngines: view.querySelector('#lapseAutoUpdateEngines').checked,
+            CountEmbeddedSubtitlesInStatus: view.querySelector('#lapseCountEmbedded').checked,
             SubToSubPlacement: view.querySelector('#lapseSubToSubPlacement').value,
             SubToSubCustomFolder: view.querySelector('#lapseSubToSubCustomFolder').value || null,
             OpenSubtitlesEnabled: view.querySelector('#lapseOpenSubtitlesEnabled').checked,
@@ -3039,6 +3088,8 @@
             TranslationConfidenceThreshold: parseInt(view.querySelector('#lapseConfidence').value, 10) || 0,
             TranslationKeepLowConfidenceOriginal: view.querySelector('#lapseKeepLowConfidence').checked,
             TranslationIncludeMetadataHeader: view.querySelector('#lapseMetadataHeader').checked,
+            TranslationDefaultTargetLanguage: view.querySelector('#lapseDefaultTargetLanguage').value.trim() || null,
+            TranslationDefaultSourceLanguage: view.querySelector('#lapseDefaultSourceLanguage').value.trim() || null,
             SubtitleAppearance: currentAppearance(view),
             Engines: []
         };
@@ -3187,6 +3238,28 @@
 
         startQueuePolling(view);
 
+        view.querySelector('#lapseQueueStop').addEventListener('click', function () {
+            var button = view.querySelector('#lapseQueueStop');
+            button.disabled = true;
+
+            lapsePost('Lapse/Queue/Cancel').then(function () {
+                refreshQueue(view);
+            }).catch(function (err) {
+                button.disabled = false;
+                Dashboard.alert('Could not stop the job: ' + err.message);
+            });
+        });
+        // A filter-like toggle sitting above the list, so it saves itself rather than
+        // waiting for a Save button on a page that hasn't got one.
+        view.querySelector('#lapseCountEmbedded').addEventListener('change', function () {
+            lapsePost('Lapse/Settings', collectSettings(view)).then(function () {
+                return refreshSettings(view);
+            }).then(function () {
+                return Promise.all([refreshItemList(view), refreshOverview(view)]);
+            }).catch(function (err) {
+                Dashboard.alert('Could not save: ' + err.message);
+            });
+        });
         view.querySelector('#lapseItemSearch').addEventListener('input', function () {
             renderItemList(view, allItems);
         });

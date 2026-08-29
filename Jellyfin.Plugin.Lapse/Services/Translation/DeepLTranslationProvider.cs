@@ -26,6 +26,14 @@ public class DeepLTranslationProvider : ITranslationProvider
     // DeepL takes up to 50 text parameters per request.
     private const int BatchSize = 50;
 
+    // DeepL asks callers to back off and try again rather than treating a 429 as a
+    // failure: https://developers.deepl.com/docs/best-practices/error-handling.
+    // A whole film is a fair few batches, so hitting the limit on a busy key is normal
+    // and shouldn't throw away the work already done.
+    private const int MaxAttempts = 5;
+    private const int FirstRetryDelayMs = 1000;
+    private const int MaxRetryDelayMs = 30000;
+
     private const string FreeEndpoint = "https://api-free.deepl.com/v2/translate";
     private const string ProEndpoint = "https://api.deepl.com/v2/translate";
 
@@ -108,14 +116,8 @@ public class DeepLTranslationProvider : ITranslationProvider
                 payload["source_lang"] = sourceLanguage.ToUpperInvariant();
             }
 
-            using var request = new HttpRequestMessage(HttpMethod.Post, url)
-            {
-                Content = JsonContent.Create(payload)
-            };
-
-            request.Headers.TryAddWithoutValidation("Authorization", "DeepL-Auth-Key " + apiKey);
-
-            using var response = await client.SendAsync(request, cancellationToken).ConfigureAwait(false);
+            using var response = await SendWithRetriesAsync(client, url, apiKey, payload, cancellationToken)
+                .ConfigureAwait(false);
 
             if (!response.IsSuccessStatusCode)
             {
@@ -124,7 +126,7 @@ public class DeepLTranslationProvider : ITranslationProvider
                     CultureInfo.InvariantCulture,
                     "DeepL returned {0}: {1}",
                     (int)response.StatusCode,
-                    Shorten(body)));
+                    Describe(response.StatusCode, Shorten(body))));
             }
 
             using var document = await response.Content
@@ -135,6 +137,85 @@ public class DeepLTranslationProvider : ITranslationProvider
         }
 
         return results;
+    }
+
+    // Sends one batch, backing off and trying again when DeepL says it's too busy. 429 is
+    // the rate limit and 5xx is a wobble at their end; both are documented as retryable.
+    // Anything else comes straight back for the caller to report.
+    private async Task<HttpResponseMessage> SendWithRetriesAsync(
+        HttpClient client,
+        string url,
+        string apiKey,
+        Dictionary<string, object> payload,
+        CancellationToken cancellationToken)
+    {
+        var delayMs = FirstRetryDelayMs;
+
+        for (var attempt = 1; ; attempt++)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, url)
+            {
+                Content = JsonContent.Create(payload)
+            };
+
+            request.Headers.TryAddWithoutValidation("Authorization", "DeepL-Auth-Key " + apiKey);
+
+            var response = await client.SendAsync(request, cancellationToken).ConfigureAwait(false);
+
+            if (!IsRetryable(response.StatusCode) || attempt >= MaxAttempts)
+            {
+                return response;
+            }
+
+            // DeepL can say how long to wait. When it does, that beats guessing.
+            var wait = response.Headers.RetryAfter?.Delta
+                ?? (response.Headers.RetryAfter?.Date is { } date ? date - DateTimeOffset.UtcNow : (TimeSpan?)null)
+                ?? TimeSpan.FromMilliseconds(delayMs);
+
+            if (wait < TimeSpan.Zero)
+            {
+                wait = TimeSpan.FromMilliseconds(delayMs);
+            }
+
+            if (wait > TimeSpan.FromMilliseconds(MaxRetryDelayMs))
+            {
+                wait = TimeSpan.FromMilliseconds(MaxRetryDelayMs);
+            }
+
+            _logger.LogInformation(
+                "DeepL returned {Status}, waiting {Seconds:0.#}s and trying again (attempt {Attempt} of {Max})",
+                (int)response.StatusCode,
+                wait.TotalSeconds,
+                attempt,
+                MaxAttempts);
+
+            response.Dispose();
+
+            await Task.Delay(wait, cancellationToken).ConfigureAwait(false);
+
+            // Doubling, so a key that is properly busy isn't hammered on the way out.
+            delayMs = Math.Min(delayMs * 2, MaxRetryDelayMs);
+        }
+    }
+
+    private static bool IsRetryable(System.Net.HttpStatusCode status)
+    {
+        return status == System.Net.HttpStatusCode.TooManyRequests || (int)status >= 500;
+    }
+
+    // The status codes worth explaining rather than leaving as a bare number.
+    private static string Describe(System.Net.HttpStatusCode status, string body)
+    {
+        return status switch
+        {
+            System.Net.HttpStatusCode.TooManyRequests =>
+                "too many requests, and it was still busy after several retries. Try again later, or use a different provider for now. " + body,
+            System.Net.HttpStatusCode.Forbidden =>
+                "the API key was rejected. Check it under Translation in the LAPSE dashboard. " + body,
+            (System.Net.HttpStatusCode)456 =>
+                "the character quota on that DeepL key is used up for this billing period. " + body,
+            _ => body
+        };
     }
 
     private IEnumerable<TranslatedLine> ReadTranslations(JsonDocument? document, int expected)

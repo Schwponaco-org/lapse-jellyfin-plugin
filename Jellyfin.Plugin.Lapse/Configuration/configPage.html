@@ -21,6 +21,9 @@
             <div class="lapseQueueStrip hide" id="lapseQueueSection">
                 <div class="lapseQueueRow">
                     <span id="lapseQueueText" class="fieldDescription"></span>
+                    <button is="emby-button" type="button" class="raised lapseSmallButton" id="lapseQueueStop">
+                        <span>Stop</span>
+                    </button>
                 </div>
                 <progress id="lapseQueueBar" max="100" value="0"></progress>
             </div>
@@ -182,7 +185,17 @@
                         </div>
                         <div class="fieldDescription lapseTightNote">
                             Items with no external subtitle are hidden by default. An item counts as synced
-                            once every external subtitle it currently has been synced at least once.
+                            once every subtitle it currently has been synced at least once.
+                        </div>
+                        <label class="emby-checkbox-label lapseStackedCheck">
+                            <input id="lapseCountEmbedded" type="checkbox" is="emby-checkbox" />
+                            <span>Count tracks inside the video file as well</span>
+                        </label>
+                        <div class="fieldDescription lapseTightNote">
+                            Off by default. Nothing automatic syncs a track that is still inside the video
+                            file, so counting them keeps a release with an external .srt and a few embedded
+                            tracks on "partly synced" whatever you do. Turn this on if you sync embedded
+                            tracks by hand and want them to count. Saved straight away.
                         </div>
                         <div id="lapseItemList" class="paperList lapseItemList"></div>
                     </section>
@@ -466,7 +479,16 @@
                     </section>
 
                     <section class="lapsePanel" id="lapsePanelTranslation">
-                        <h2 class="lapsePanelTitle">Translation</h2>
+                        <h2 class="lapsePanelTitle">
+                            Translation
+                            <span class="lapseChip lapseChip-experimental">Experimental</span>
+                        </h2>
+                        <div class="lapseNoteStrip">
+                            Translation is experimental. It sends your subtitle text to a translation service
+                            outside Jellyfin, quality varies a lot by provider and language, and a provider
+                            changing its API or rate limits can break it. None of it is needed for normal
+                            syncing.
+                        </div>
                         <div class="fieldDescription lapseTightNote">
                             <strong>To use this:</strong> press Advanced on an item, either from its three-dot
                             menu or from the <strong>Sync status</strong> list, then use the Translate box in
@@ -485,6 +507,22 @@
                             <select is="emby-select" id="lapseDefaultProvider" class="emby-select-withcolor emby-select"></select>
                         </div>
                         <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="lapseDefaultTargetLanguage">Translate into</label>
+                            <input is="emby-input" id="lapseDefaultTargetLanguage" type="text" placeholder="da" />
+                            <div class="fieldDescription">
+                                Fills the "To" box in on every Translate dialog, so the language does not have
+                                to be typed in each time - which matters on a TV remote. Two letter code, e.g.
+                                da, es, de. Leave empty to type it yourself.
+                            </div>
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="lapseDefaultSourceLanguage">Translate from</label>
+                            <input is="emby-input" id="lapseDefaultSourceLanguage" type="text" placeholder="auto" />
+                            <div class="fieldDescription">
+                                Leave empty to let the provider work out what language the subtitle is in.
+                            </div>
+                        </div>
+                        <div class="inputContainer">
                             <label class="inputLabel inputLabelUnfocused" for="lapseConfidence">Confidence threshold</label>
                             <input is="emby-input" id="lapseConfidence" type="number" min="0" max="100" />
                             <div class="fieldDescription">
@@ -501,6 +539,11 @@
                             <input id="lapseMetadataHeader" type="checkbox" is="emby-checkbox" />
                             <span>Include a translation metadata header in the output file</span>
                         </label>
+                        <div class="fieldDescription lapseTightNote">
+                            Applies to every translation, by hand or unattended, and the Translate dialog
+                            starts on whatever is set here. Skipped for .srt files, which have no comment
+                            syntax, so the header cannot be added without breaking them.
+                        </div>
                         <button is="emby-button" type="button" id="btnSaveTranslation" class="raised button-submit lapseSmallButton">
                             <span>Save translation settings</span>
                         </button>

@@ -105,11 +105,16 @@ public class TranslationService
             return result;
         }
 
+        // "auto" is what the From box says when it's empty, and people type it. Half the
+        // providers take it as a language code and the other half reject it, so it means
+        // "nobody said" here and each provider does whatever it does with that.
+        var sourceLanguage = NormalizeSource(request.SourceLanguage);
+
         IReadOnlyList<TranslatedLine> translations;
         try
         {
             translations = await provider
-                .TranslateAsync(lines, request.SourceLanguage, request.TargetLanguage, cancellationToken)
+                .TranslateAsync(lines, sourceLanguage, request.TargetLanguage, cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException or TaskCanceledException)
@@ -129,7 +134,7 @@ public class TranslationService
         for (var i = 0; i < lines.Count; i++)
         {
             var translated = i < translations.Count ? translations[i] : new TranslatedLine();
-            var score = Score(lines[i], translated, request.SourceLanguage);
+            var score = Score(lines[i], translated, sourceLanguage);
             scores.Add(score);
 
             if (translated.Text is null)
@@ -158,7 +163,7 @@ public class TranslationService
         file.ApplyTranslations(replacements);
 
         var outputPath = SubtitleTextFile.BuildOutputPath(subtitlePath, request.TargetLanguage);
-        var header = includeHeader ? BuildHeader(provider, request, result, threshold) : null;
+        var header = includeHeader ? BuildHeader(provider, sourceLanguage, request, result, threshold) : null;
 
         try
         {
@@ -186,8 +191,26 @@ public class TranslationService
         return result;
     }
 
+    // Empty, "auto", "automatic" and "detect" all mean the same thing: let the provider
+    // work it out.
+    private static string? NormalizeSource(string? sourceLanguage)
+    {
+        var trimmed = sourceLanguage?.Trim();
+
+        if (string.IsNullOrEmpty(trimmed)
+            || trimmed.Equals("auto", StringComparison.OrdinalIgnoreCase)
+            || trimmed.Equals("automatic", StringComparison.OrdinalIgnoreCase)
+            || trimmed.Equals("detect", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        return trimmed;
+    }
+
     private static IReadOnlyList<string> BuildHeader(
         ITranslationProvider provider,
+        string? sourceLanguage,
         TranslationRequest request,
         TranslationResult result,
         int threshold)
@@ -197,7 +220,7 @@ public class TranslationService
             "Translated by the LAPSE Jellyfin plugin",
             "Provider: " + provider.DisplayName,
             "Date: " + DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm 'UTC'", CultureInfo.InvariantCulture),
-            "Source language: " + (string.IsNullOrWhiteSpace(request.SourceLanguage) ? "auto-detected" : request.SourceLanguage),
+            "Source language: " + (sourceLanguage ?? "auto-detected"),
             "Target language: " + request.TargetLanguage,
             string.Format(
                 CultureInfo.InvariantCulture,

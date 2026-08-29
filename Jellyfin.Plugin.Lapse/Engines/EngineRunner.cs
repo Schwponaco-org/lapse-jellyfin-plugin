@@ -417,7 +417,8 @@ public class EngineRunner
             }
 
             var ffmpegDirectory = GetFfmpegDirectory();
-            var args = engine.BuildArguments(new EngineRunOptions
+
+            EngineRunOptions BuildOptions(bool forceAnyway) => new()
             {
                 ReferencePath = referencePath,
                 InputPath = enginePathIn,
@@ -427,13 +428,40 @@ public class EngineRunner
                 FfmpegDirectory = ffmpegDirectory,
                 Runtime = runtime,
                 Parameters = ResolveParameters(engine),
-                ConfidenceSigma = Plugin.Instance?.Configuration.ConfidenceSigma ?? LapseEngine.DefaultConfidenceSigma
-            });
+                ConfidenceSigma = Plugin.Instance?.Configuration.ConfidenceSigma ?? LapseEngine.DefaultConfidenceSigma,
+                ForceAnyway = forceAnyway
+            };
+
+            var args = engine.BuildArguments(BuildOptions(false));
 
             var (stdout, stderr, exitCode) = await RunProcessAsync(enginePath, args, ffmpegDirectory, cancellationToken).ConfigureAwait(false);
 
             var result = engine.ParseResult(stdout, stderr, exitCode, mode, penalty);
             result.EngineId = engine.Descriptor.Id;
+
+            // A short subtitle - forced signs, a few lines of foreign dialogue - has too
+            // few cues for the engine to be sure of its answer, and it stops rather than
+            // guessing. The file isn't wrong, there just isn't much of it, and the engine
+            // says as much and points at its own --force. Someone pressed Sync on this,
+            // so take it up rather than handing back a refusal they can do nothing about.
+            if (!result.Success && IsTooFewCues(result.Error))
+            {
+                _logger.LogInformation(
+                    "{Engine} says {Subtitle} is too short to judge, trying again with force",
+                    engine.Descriptor.DisplayName,
+                    subtitlePath);
+
+                var forcedArgs = engine.BuildArguments(BuildOptions(true));
+
+                if (!forcedArgs.SequenceEqual(args))
+                {
+                    (stdout, stderr, exitCode) = await RunProcessAsync(enginePath, forcedArgs, ffmpegDirectory, cancellationToken).ConfigureAwait(false);
+
+                    result = engine.ParseResult(stdout, stderr, exitCode, mode, penalty);
+                    result.EngineId = engine.Descriptor.Id;
+                    result.Forced = result.Success;
+                }
+            }
 
             if (!result.Success)
             {
@@ -683,9 +711,51 @@ public class EngineRunner
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
 
-        await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // Waiting stops on cancellation, the engine doesn't. Without this a stopped
+            // job leaves a decoder running over a whole film in the background.
+            KillQuietly(process);
+            throw;
+        }
 
         return (stdoutBuilder.ToString(), stderrBuilder.ToString(), process.ExitCode);
+    }
+
+    // The engine's own words for "there isn't enough of this file to work with", which it
+    // ends with a pointer at --force. Matched on the text because that is all a failed
+    // run gives us: there's no separate exit code for it.
+    private static bool IsTooFewCues(string? error)
+    {
+        if (string.IsNullOrEmpty(error))
+        {
+            return false;
+        }
+
+        return error.Contains("--force", StringComparison.OrdinalIgnoreCase)
+            && (error.Contains("not enough", StringComparison.OrdinalIgnoreCase)
+                || error.Contains("too few", StringComparison.OrdinalIgnoreCase)
+                || error.Contains("cues", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private void KillQuietly(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                // The engines start ffmpeg of their own, so the whole tree goes.
+                process.Kill(entireProcessTree: true);
+            }
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or NotSupportedException or System.ComponentModel.Win32Exception)
+        {
+            _logger.LogDebug(ex, "Could not stop the engine process after the job was cancelled");
+        }
     }
 
     /// <summary>

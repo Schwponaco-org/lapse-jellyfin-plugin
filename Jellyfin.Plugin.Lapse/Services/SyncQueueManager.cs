@@ -55,6 +55,12 @@ public class SyncQueueManager : IDisposable
     private string? _unitName;
     private string? _referenceKey;
 
+    // Cancelled with Cancel(), replaced when the next job starts. Everything the queue
+    // runs takes this token, so stopping a job stops the engine that is running right
+    // now as well as everything still waiting in line.
+    private CancellationTokenSource _jobCancellation = new();
+    private bool _cancelRequested;
+
     /// <summary>
     /// Initializes a new instance of the <see cref="SyncQueueManager"/> class.
     /// </summary>
@@ -140,7 +146,8 @@ public class SyncQueueManager : IDisposable
             {
                 Running = current is not null || _pending.Count > 0,
                 Total = _items.Count,
-                Completed = _items.Count(i => i.Status is QueueItemStatus.Done or QueueItemStatus.Failed),
+                Completed = _items.Count(i => i.Status is QueueItemStatus.Done or QueueItemStatus.Failed or QueueItemStatus.Cancelled),
+                Cancelling = _cancelRequested && current is not null,
                 CurrentItemName = current?.Name,
                 JobName = _jobName,
                 UnitName = _unitName,
@@ -212,6 +219,7 @@ public class SyncQueueManager : IDisposable
                 _referenceKey = null;
                 _jobName = null;
                 _unitName = "item";
+                ResetCancellation();
             }
 
             if (!_queuedIds.Add(item.Id))
@@ -224,6 +232,46 @@ public class SyncQueueManager : IDisposable
         }
 
         EnsureWorkerRunning();
+    }
+
+    /// <summary>
+    /// Stops the job that's running: drops everything still waiting and cancels the item
+    /// being synced right now, which kills the engine process with it. Files already
+    /// written stay written - this stops the run, it doesn't undo it.
+    /// </summary>
+    /// <returns>How many queued items were dropped, or null if nothing was running.</returns>
+    public int? Cancel()
+    {
+        CancellationTokenSource? cancellation = null;
+        int dropped;
+
+        lock (_lock)
+        {
+            var running = _items.Any(i => i.Status == QueueItemStatus.Running);
+            if (_pending.Count == 0 && !running)
+            {
+                return null;
+            }
+
+            dropped = _pending.Count;
+            _pending.Clear();
+            _queuedIds.Clear();
+            _cancelRequested = true;
+
+            foreach (var item in _items.Where(i => i.Status == QueueItemStatus.Queued))
+            {
+                item.Status = QueueItemStatus.Cancelled;
+            }
+
+            cancellation = _jobCancellation;
+        }
+
+        _logger.LogInformation("Sync job stopped by hand, {Dropped} queued items dropped", dropped);
+
+        // Outside the lock: cancelling runs the continuations of whatever is waiting on
+        // this token, and those want the lock themselves.
+        cancellation.Cancel();
+        return dropped;
     }
 
     /// <summary>
@@ -254,8 +302,14 @@ public class SyncQueueManager : IDisposable
                 _referenceKey = null;
                 _jobName = "Scheduled sync";
                 _unitName = "item";
+                ResetCancellation();
             }
         }
+
+        // A scheduled run gets the same Stop button as a bulk one, so it listens to both
+        // Jellyfin's own token and the queue's.
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, JobToken);
+        cancellationToken = linked.Token;
 
         for (var i = 0; i < items.Count; i++)
         {
@@ -351,6 +405,7 @@ public class SyncQueueManager : IDisposable
             _jobName = jobName;
             _unitName = unitName ?? "item";
             _referenceKey = referenceKey;
+            ResetCancellation();
 
             foreach (var item in items)
             {
@@ -418,21 +473,67 @@ public class SyncQueueManager : IDisposable
         if (disposing)
         {
             _runGate.Dispose();
+            _jobCancellation.Dispose();
         }
     }
 
     private async Task<bool> ProcessOneAsync(Guid itemId, CancellationToken cancellationToken)
     {
-        await _runGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        // Whatever the caller handed us, plus the Stop button.
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, JobToken);
+        var token = linked.Token;
 
         try
         {
-            return await SyncOneAsync(itemId, cancellationToken).ConfigureAwait(false);
+            await _runGate.WaitAsync(token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            SetItemStatus(itemId, QueueItemStatus.Cancelled);
+            return false;
+        }
+
+        try
+        {
+            return await SyncOneAsync(itemId, token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // Stopped part way through. The engine writes to a temporary file and only
+            // moves it into place at the end, so the subtitle on disk is untouched.
+            SetItemStatus(itemId, QueueItemStatus.Cancelled);
+            SaveRecord(itemId, MovieSyncStatus.Pending, "Stopped before this item finished");
+            return false;
         }
         finally
         {
             _runGate.Release();
         }
+    }
+
+    // The token every item in the current job runs under.
+    private CancellationToken JobToken
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _jobCancellation.Token;
+            }
+        }
+    }
+
+    // Called under _lock whenever a fresh job starts, so a Stop from the last one doesn't
+    // kill the new one on its way out of the gate.
+    private void ResetCancellation()
+    {
+        if (_jobCancellation.IsCancellationRequested)
+        {
+            _jobCancellation.Dispose();
+            _jobCancellation = new CancellationTokenSource();
+        }
+
+        _cancelRequested = false;
     }
 
     private async Task<bool> SyncOneAsync(Guid itemId, CancellationToken cancellationToken)

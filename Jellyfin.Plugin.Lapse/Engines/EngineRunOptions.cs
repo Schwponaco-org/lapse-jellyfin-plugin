@@ -52,6 +52,14 @@ public class EngineRunOptions
     public EngineRuntimeInfo Runtime { get; set; } = EngineRuntimeInfo.Unknown;
 
     /// <summary>
+    /// Gets or sets a value indicating whether the engine should sync the file even when
+    /// it doesn't think there's enough of it to judge. The runner sets this for a second
+    /// attempt after a first one refused a very short subtitle, and it's off for the
+    /// normal first run.
+    /// </summary>
+    public bool ForceAnyway { get; set; }
+
+    /// <summary>
     /// Gets or sets this engine's advanced parameters, already merged with the engine's
     /// own defaults.
     /// </summary>

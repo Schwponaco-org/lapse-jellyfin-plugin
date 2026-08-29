@@ -25,6 +25,17 @@ public class MultiSubtitleSyncRequest
     public string ReferencePath { get; set; } = string.Empty;
 
     /// <summary>
+    /// Gets or sets the subtitles to line up against the reference, or null/empty for
+    /// every other subtitle on the item. Naming one is how "sync just this track to the
+    /// reference" works, for items where only one of the tracks is off.
+    /// </summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Usage",
+        "CA2227:Collection properties should be read only",
+        Justification = "Bound from a request body, and System.Text.Json skips collection properties it can't assign to.")]
+    public List<string>? SubtitlePaths { get; set; }
+
+    /// <summary>
     /// Gets or sets which engine to use, or null for the configured default.
     /// </summary>
     public string? EngineId { get; set; }

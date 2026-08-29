@@ -99,6 +99,19 @@ public class PluginConfiguration : BasePluginConfiguration
     public bool AutoUpdateEngines { get; set; } = true;
 
     /// <summary>
+    /// Gets or sets a value indicating whether tracks still inside the video file count
+    /// towards an item being synced.
+    ///
+    /// Off by default, because nothing automatic ever touches an embedded track: bulk
+    /// runs, schedules and the webhook all skip them on purpose. Counting them anyway
+    /// left every release with an external .srt and a handful of embedded tracks stuck on
+    /// "partly synced" forever, with no way to finish it short of syncing tracks nobody
+    /// asked for. Turn it on if you do sync embedded tracks by hand and want them
+    /// counted.
+    /// </summary>
+    public bool CountEmbeddedSubtitlesInStatus { get; set; }
+
+    /// <summary>
     /// Gets or sets the Google Cloud Translation API key.
     /// </summary>
     public string? GoogleTranslateApiKey { get; set; }
@@ -145,6 +158,19 @@ public class PluginConfiguration : BasePluginConfiguration
     /// Gets or sets the default confidence threshold (0-100) for translation jobs.
     /// </summary>
     public int TranslationConfidenceThreshold { get; set; } = 70;
+
+    /// <summary>
+    /// Gets or sets the language a translation job starts on when nobody names one, e.g.
+    /// "da". Only fills the box in: every job still says what it's translating into. This
+    /// is what stops the language having to be typed on a TV remote every time.
+    /// </summary>
+    public string? TranslationDefaultTargetLanguage { get; set; }
+
+    /// <summary>
+    /// Gets or sets the language translation jobs assume the subtitle is in, or null to
+    /// let the provider detect it.
+    /// </summary>
+    public string? TranslationDefaultSourceLanguage { get; set; }
 
     /// <summary>
     /// Gets or sets a value indicating whether translated files get a comment block at the

@@ -43,6 +43,12 @@ public class QueueSnapshot
     public string? UnitName { get; set; }
 
     /// <summary>
+    /// Gets or sets a value indicating whether someone asked for this job to stop and the
+    /// item still running hasn't finished winding down yet.
+    /// </summary>
+    public bool Cancelling { get; set; }
+
+    /// <summary>
     /// Gets or sets the full list of items in the current job, in queue order.
     /// </summary>
     public List<QueueItem> Items { get; init; } = new();

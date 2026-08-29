@@ -27,5 +27,10 @@ public enum QueueItemStatus
     /// <summary>
     /// The sync itself threw an error the queue couldn't recover from.
     /// </summary>
-    Failed
+    Failed,
+
+    /// <summary>
+    /// Never ran, because someone stopped the job before its turn came up.
+    /// </summary>
+    Cancelled
 }
