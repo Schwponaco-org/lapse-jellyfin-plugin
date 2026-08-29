@@ -27,14 +27,15 @@ Requires Jellyfin 10.11.11 or newer.
 Every film, episode and loose video gets these entries in its three dot menu:
 
 - **Sync Subtitles** - the main one. Pick a subtitle if there's more than one, press Sync, done. Advanced options let you pick a different mode, output format, translate at the same time, or nudge the timing by hand.
-- **Sync All Subtitles to Reference** - for items with several subtitle tracks where one is already correct. Lines every other track up against it. Skips the audio entirely, so it's fast and usually more accurate than syncing each track on its own.
+- **Sync Subtitles to Reference** - for items with several subtitle tracks where one is already correct. Lines every other track up against it, or just the one track you pick. Skips the audio entirely, so it's fast and usually more accurate than syncing each track on its own.
 - **Shift Subtitles** - manual millisecond nudging with a live preview, for when a sync is close but not quite right. Works even without an engine installed.
 - **Convert Subtitles** - writes a subtitle out as `.srt`, `.vtt`, `.ass` or `.ssa`, leaving the original alone unless you say otherwise. Useful for players that only take one format, or for formats no engine can sync directly (LAPSE converts those on its own when needed, so this is rarely something you have to do by hand).
-- **Translate** - a separate job from syncing that never touches the original file. Providers include MyMemory (no setup needed), self-hosted LibreTranslate and Lingarr, and DeepL or Google Cloud with a key.
+- **Translate** (experimental) - a separate job from syncing that never touches the original file. Providers include MyMemory (no setup needed), self-hosted LibreTranslate and Lingarr, and DeepL or Google Cloud with a key. Set a default language under Translation and the dialogs start on it, so nothing has to be typed on a TV remote.
 
 Elsewhere in the dashboard:
 
-- **Sync status, Bulk sync, Subtitle to subtitle** - a searchable list of every syncable item, a page to sync a whole library or folder at once, and a way to line up two subtitle files directly without a library item involved.
+- **Sync status, Bulk sync, Subtitle to subtitle** - a searchable list of every syncable item, a page to sync a whole library or folder at once, and a way to line up two subtitle files directly without a library item involved. An item counts as synced once its subtitle files have been synced; tracks still inside the video file are left out of that unless you ask for them, since nothing automatic touches those.
+- **Stop** - any running job, whether it is a whole library, a series or a scheduled run, can be stopped from the progress strip on the dashboard or from the progress toast wherever it was started.
 - **Automation** - libraries can pick up new items automatically or sync on a schedule, and unattended runs can sync, convert, translate, or react to a Radarr/Sonarr import webhook. Everything here is off by default; pressing a button yourself always works regardless.
 - **Access control** - the menu entries above are admin only by default, but can be opened up to specific users or everyone signed in.
 - **Undo** - every recent sync can be reversed with one press, whether that means restoring a backup or deleting the file the run added.

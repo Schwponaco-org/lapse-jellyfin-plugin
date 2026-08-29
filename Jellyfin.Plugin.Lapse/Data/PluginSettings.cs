@@ -195,6 +195,12 @@ public class PluginSettings
     public bool AutoUpdateEngines { get; set; } = true;
 
     /// <summary>
+    /// Gets or sets a value indicating whether embedded tracks count towards an item
+    /// being synced.
+    /// </summary>
+    public bool CountEmbeddedSubtitlesInStatus { get; set; }
+
+    /// <summary>
     /// Gets or sets the Google Cloud Translation API key.
     /// </summary>
     public string? GoogleTranslateApiKey { get; set; }
@@ -243,6 +249,17 @@ public class PluginSettings
     /// Gets or sets a value indicating whether translated files get a metadata header.
     /// </summary>
     public bool TranslationIncludeMetadataHeader { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets the language the translation boxes start on, e.g. "da".
+    /// </summary>
+    public string? TranslationDefaultTargetLanguage { get; set; }
+
+    /// <summary>
+    /// Gets or sets the language translations assume the subtitle is in, or null for
+    /// automatic detection.
+    /// </summary>
+    public string? TranslationDefaultSourceLanguage { get; set; }
 
     /// <summary>
     /// Gets or sets a value indicating whether low confidence lines keep their original text.

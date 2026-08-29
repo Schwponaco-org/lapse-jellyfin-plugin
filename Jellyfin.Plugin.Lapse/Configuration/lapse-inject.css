@@ -182,7 +182,21 @@
     margin: .6em 0;
 }
 
+.lapseToast .lapseToastText {
+    flex: 1;
+}
+
+.lapseToast .lapseToastButton {
+    margin: 0;
+    flex: none;
+    padding: .2em .8em;
+    font-size: .9em;
+}
+
 .lapseToast {
+    display: flex;
+    align-items: center;
+    gap: .8em;
     position: fixed;
     left: 50%;
     bottom: 4em;

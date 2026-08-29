@@ -75,6 +75,14 @@ public class SyncResult
     public bool LowConfidence { get; set; }
 
     /// <summary>
+    /// Gets or sets a value indicating whether this run only went through because the
+    /// runner tried again with the engine's force flag, which it does when the first go
+    /// came back saying the subtitle has too few cues to judge. Worth saying out loud:
+    /// nothing checked the answer.
+    /// </summary>
+    public bool Forced { get; set; }
+
+    /// <summary>
     /// Gets or sets a value indicating whether the result was thrown away and the file on
     /// disk left exactly as it was. Only happens for a low-confidence result under the
     /// "keep original" setting - the run itself still counts as a success, it just

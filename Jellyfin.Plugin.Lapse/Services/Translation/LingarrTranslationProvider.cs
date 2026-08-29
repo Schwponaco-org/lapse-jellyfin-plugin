@@ -152,6 +152,35 @@ public class LingarrTranslationProvider : ITranslationProvider
             }
         }
 
+        // Some builds wrap the line in an object instead. Take the text out of it rather
+        // than dropping the whole JSON document into the subtitle, which is what
+        // returning the body as-is would do.
+        if (raw.StartsWith('{'))
+        {
+            try
+            {
+                using var document = System.Text.Json.JsonDocument.Parse(raw);
+
+                foreach (var name in new[] { "translatedText", "translation", "text", "line", "result" })
+                {
+                    if (document.RootElement.TryGetProperty(name, out var value)
+                        && value.ValueKind == System.Text.Json.JsonValueKind.String)
+                    {
+                        return value.GetString();
+                    }
+                }
+            }
+            catch (System.Text.Json.JsonException ex)
+            {
+                _logger.LogDebug(ex, "Lingarr returned something that didn't parse as JSON: {Raw}", Shorten(raw));
+            }
+
+            // An object we can't read is not a translation, and a subtitle line is a
+            // worse place for it than the log.
+            _logger.LogWarning("Lingarr answered with JSON that has no line in it: {Raw}", Shorten(raw));
+            return null;
+        }
+
         return raw;
     }
 

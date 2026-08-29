@@ -42,6 +42,18 @@
 
 .lapseQueueRow {
     margin-bottom: .4em;
+    display: flex;
+    align-items: center;
+    gap: .8em;
+}
+
+.lapseQueueRow #lapseQueueText {
+    flex: 1;
+}
+
+.lapseQueueRow button {
+    margin: 0;
+    flex: none;
 }
 
 .lapseQueueStrip progress {
@@ -304,6 +316,13 @@
 
 .lapseLibraryRow:last-child {
     border-bottom: 0;
+}
+
+/* Just enough dimming to read as "nothing here can be turned on right now" without
+   making the row hard to read - the library name and type stay full strength since
+   those are what you'd click to turn it back on. */
+.lapseLibraryRowDisabled .lapseLibrarySchedule {
+    opacity: .5;
 }
 
 .lapseLibraryMain {

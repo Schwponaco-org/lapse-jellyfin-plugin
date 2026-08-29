@@ -208,6 +208,16 @@ public class LapseController : ControllerBase
             var record = config.MovieRecords.FirstOrDefault(r => r.ItemId == item.Id);
             var subtitles = _subtitleLocator.GetExternalSubtitles(item);
 
+            // Tracks still inside the video file are left out of the count unless the
+            // admin asked for them. Nothing automatic syncs one, so counting them would
+            // hold an item on "partly synced" no matter what was done to its files. A
+            // track that does get synced by hand is written out as a file, and that file
+            // is counted here like any other.
+            if (!config.CountEmbeddedSubtitlesInStatus)
+            {
+                subtitles = subtitles.FindAll(s => !s.IsEmbedded);
+            }
+
             // How many of the subtitles this item has right now have actually been
             // synced. Anything the record claims about a file that is no longer there
             // doesn't count, so a replaced subtitle correctly drops back to unsynced.
@@ -592,17 +602,33 @@ public class LapseController : ControllerBase
             return BadRequest("That reference subtitle doesn't belong to this item");
         }
 
-        // Only ever line something up against a reference that's actually correct.
-        // Picture based tracks have no text to compare, so they can't be a reference.
+        // A picture based track can still be a reference: there's no text in it, but the
+        // timing is right there, and an engine that reads the format lines the others up
+        // against that. So this turns away what the engine actually can't read rather
+        // than a whole class of subtitle.
         if (!reference.Supported)
         {
-            return BadRequest("That's a picture based subtitle (PGS or VobSub), so it can't be used as a reference - there's no text in it.");
+            return BadRequest("The engine can't read that subtitle, so it can't line anything up against it. Picture based tracks (PGS, VobSub) need an engine that reads them.");
         }
 
         var others = subtitles.Where(s => !string.Equals(s.Path, reference.Path, StringComparison.Ordinal) && s.Supported).ToList();
         if (others.Count == 0)
         {
             return BadRequest("This item only has the one usable subtitle, so there's nothing to line up against it");
+        }
+
+        // A request that names subtitles is syncing only those against the reference,
+        // which is what the picker sends when someone wants one track fixed rather than
+        // all of them.
+        if (request.SubtitlePaths is { Count: > 0 })
+        {
+            var wanted = new HashSet<string>(request.SubtitlePaths, StringComparer.Ordinal);
+            others = others.Where(s => wanted.Contains(s.Path)).ToList();
+
+            if (others.Count == 0)
+            {
+                return BadRequest("None of the subtitles you picked belong to this item, or the only one you picked is the reference itself");
+            }
         }
 
         var engine = _registry.Resolve(request.EngineId);
@@ -716,6 +742,29 @@ public class LapseController : ControllerBase
     public ActionResult<QueueSnapshot> GetQueue()
     {
         return _queueManager.GetSnapshot();
+    }
+
+    /// <summary>
+    /// Stops the running job: drops everything still queued and cancels the item being
+    /// synced right now. Subtitles already written stay as they are.
+    /// </summary>
+    /// <returns>How many queued items were dropped, or 409 if nothing was running.</returns>
+    [HttpPost("Lapse/Queue/Cancel")]
+    public ActionResult CancelQueue()
+    {
+        // Anyone who is allowed to start a job from the context menu can stop one. That
+        // is the whole point of the button: a series sync started by mistake shouldn't
+        // need an admin to come and turn it off.
+        if (CheckSubtitleAccess() is { } denied)
+        {
+            return denied;
+        }
+
+        var dropped = _queueManager.Cancel();
+
+        return dropped is null
+            ? Conflict("There is no sync job running")
+            : Ok(new { Dropped = dropped.Value });
     }
 
     /// <summary>
@@ -922,13 +971,19 @@ public class LapseController : ControllerBase
             var oldTime = library.ScheduleTime;
 
             library.Enabled = entry.Enabled;
-            library.AutoSyncEnabled = entry.AutoSyncEnabled;
+
+            // A disabled library can't be doing new-item or scheduled sync - those boxes
+            // are greyed out on the form for exactly that reason - so a disabled library
+            // is stored with both off rather than trusting whatever the form last had
+            // ticked before it was turned off. Otherwise turning the library back on
+            // later would silently bring back a setting nobody re-chose.
+            library.AutoSyncEnabled = entry.Enabled && entry.AutoSyncEnabled;
 
             // New items and a schedule are one choice, not two: a library either picks
             // things up as they arrive or sweeps the whole thing on a timer. The form
             // only ever lets one be ticked, and this is what makes that true of the
             // stored config as well rather than only of the page.
-            library.ScheduleEnabled = entry.ScheduleEnabled && !entry.AutoSyncEnabled;
+            library.ScheduleEnabled = entry.Enabled && entry.ScheduleEnabled && !entry.AutoSyncEnabled;
             library.ScheduleFrequency = Enum.TryParse<ScheduleFrequency>(entry.ScheduleFrequency, out var frequency)
                 ? frequency
                 : ScheduleFrequency.Daily;
@@ -1363,6 +1418,7 @@ public class LapseController : ControllerBase
             ArrWebhookEnabled = config.ArrWebhookEnabled,
             ArrWebhookToken = config.ArrWebhookToken,
             AutoUpdateEngines = config.AutoUpdateEngines,
+            CountEmbeddedSubtitlesInStatus = config.CountEmbeddedSubtitlesInStatus,
             GoogleTranslateApiKey = config.GoogleTranslateApiKey,
             DeepLApiKey = config.DeepLApiKey,
             LingarrBaseUrl = config.LingarrBaseUrl,
@@ -1373,6 +1429,8 @@ public class LapseController : ControllerBase
             TranslationConfidenceThreshold = config.TranslationConfidenceThreshold,
             TranslationIncludeMetadataHeader = config.TranslationIncludeMetadataHeader,
             TranslationKeepLowConfidenceOriginal = config.TranslationKeepLowConfidenceOriginal,
+            TranslationDefaultTargetLanguage = config.TranslationDefaultTargetLanguage,
+            TranslationDefaultSourceLanguage = config.TranslationDefaultSourceLanguage,
             SubtitleAppearance = config.SubtitleAppearance
         };
 
@@ -1680,6 +1738,7 @@ public class LapseController : ControllerBase
         config.OpenSubtitlesLanguage = Blank(settings.OpenSubtitlesLanguage) ?? "en";
         config.ArrWebhookEnabled = settings.ArrWebhookEnabled;
         config.AutoUpdateEngines = settings.AutoUpdateEngines;
+        config.CountEmbeddedSubtitlesInStatus = settings.CountEmbeddedSubtitlesInStatus;
         config.GoogleTranslateApiKey = Blank(settings.GoogleTranslateApiKey);
         config.DeepLApiKey = Blank(settings.DeepLApiKey);
         config.LingarrBaseUrl = Blank(settings.LingarrBaseUrl);
@@ -1690,6 +1749,8 @@ public class LapseController : ControllerBase
         config.TranslationConfidenceThreshold = Math.Clamp(settings.TranslationConfidenceThreshold, 0, 100);
         config.TranslationIncludeMetadataHeader = settings.TranslationIncludeMetadataHeader;
         config.TranslationKeepLowConfidenceOriginal = settings.TranslationKeepLowConfidenceOriginal;
+        config.TranslationDefaultTargetLanguage = Blank(settings.TranslationDefaultTargetLanguage);
+        config.TranslationDefaultSourceLanguage = Blank(settings.TranslationDefaultSourceLanguage);
 
         if (settings.SubtitleAppearance is not null)
         {
@@ -1814,6 +1875,33 @@ public class LapseController : ControllerBase
                 };
             })
             .ToList();
+    }
+
+    /// <summary>
+    /// Gets what a translation job should start on: the language set in the settings, the
+    /// confidence threshold, and whether the metadata header is wanted. The dialogs used
+    /// to hardcode these, which meant the settings only applied to unattended runs and
+    /// the target language had to be typed in by hand every time, TV remote included.
+    /// </summary>
+    /// <returns>The defaults.</returns>
+    [HttpGet("Lapse/Translate/Defaults")]
+    public ActionResult<TranslationDefaults> GetTranslationDefaults()
+    {
+        var config = Plugin.Instance!.Configuration;
+
+        return new TranslationDefaults
+        {
+            // The automation language is a sensible fallback: someone who set up
+            // automatic translation into Danish is not likely to want something else by
+            // hand.
+            TargetLanguage = string.IsNullOrWhiteSpace(config.TranslationDefaultTargetLanguage)
+                ? config.AutoTranslateLanguage
+                : config.TranslationDefaultTargetLanguage,
+            SourceLanguage = config.TranslationDefaultSourceLanguage,
+            Provider = config.DefaultTranslationProvider.ToString(),
+            ConfidenceThreshold = config.TranslationConfidenceThreshold,
+            IncludeMetadataHeader = config.TranslationIncludeMetadataHeader
+        };
     }
 
     // --------------------------------------------------------------- manual tinkering

@@ -129,11 +129,19 @@ public partial class LapseEngine : IEngine
 
         AddNumber(args, runtime, values, "audioTrack", "--audio-track");
         AddNumber(args, runtime, values, "subTrack", "--sub-track");
+        AddNumber(args, runtime, values, "fps", "--fps");
 
         AddSwitch(args, runtime, values, "noEmbedded", "--no-embedded");
         AddSwitch(args, runtime, values, "fullScan", "--full-scan");
         AddSwitch(args, runtime, values, "noCache", "--no-cache");
         AddSwitch(args, runtime, values, "force", "--force");
+
+        // The runner asks for this on a second attempt, after the engine turned a very
+        // short subtitle away for having too few cues to be sure about.
+        if (options.ForceAnyway && !values.GetBool("force") && runtime.HasFlag("--force"))
+        {
+            args.Add("--force");
+        }
 
         return args;
     }
@@ -258,6 +266,18 @@ public partial class LapseEngine : IEngine
             Flag = "--sub-track",
             Kind = EngineParameterKind.Number,
             Minimum = 0,
+            BlankMeansUnset = true
+        });
+
+        descriptor.Parameters.Add(new EngineParameter
+        {
+            Key = "fps",
+            Label = "Frame rate for MicroDVD subtitles",
+            Description = "MicroDVD .sub files count frames rather than time, so they need a frame rate. The engine reads it from the video, or from the file's own header when there is one, and only needs telling when neither is there. Blank leaves it to work that out.",
+            Flag = "--fps",
+            Kind = EngineParameterKind.Number,
+            Minimum = 10,
+            Maximum = 120,
             BlankMeansUnset = true
         });
 
