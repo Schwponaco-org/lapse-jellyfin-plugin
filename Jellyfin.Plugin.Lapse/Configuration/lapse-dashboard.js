@@ -1822,6 +1822,13 @@
             return;
         }
 
+        if (result.AlreadyInSync) {
+            Dashboard.alert(name + ': already in sync, so the file was left exactly as it was.\n\n' +
+                'The engine would have moved it ' + (result.OffsetMs || 0) + 'ms, which is inside the ' +
+                'tolerance set under File output.');
+            return;
+        }
+
         if (result.Skipped) {
             Dashboard.alert(name + ': left the original alone (' + describeResult(result) + ').\n\n' +
                 'The engine was not confident enough, and File output is set to keep the original ' +
@@ -2496,6 +2503,10 @@
             Dashboard.hideLoadingMsg();
             if (!result.Success) {
                 Dashboard.alert('Sync failed: ' + result.Error);
+            } else if (result.AlreadyInSync) {
+                Dashboard.alert('Already in sync, so the input was left exactly as it was. The engine ' +
+                    'would have moved it ' + (result.OffsetMs || 0) + 'ms, which is inside the tolerance ' +
+                    'set under File output.');
             } else if (result.Skipped) {
                 Dashboard.alert('Left the input alone (' + describeResult(result) +
                     '), which is under the confidence threshold.\n\n' + FORCE_HINT);
@@ -2604,6 +2615,18 @@
         }
 
         view.querySelector('#lapseConfidenceSigmaNote').textContent = note;
+    }
+
+    function updateAlreadyInSyncNote(view) {
+        var on = view.querySelector('#lapseSkipAlreadyInSync').checked;
+        var row = view.querySelector('#lapseAlreadyInSyncToleranceRow');
+        var value = parseInt(view.querySelector('#lapseAlreadyInSyncTolerance').value, 10) || 0;
+
+        // Zero still works - it means only an exact zero offset is left alone - so the
+        // slider stays readable rather than being hidden when the box is unticked.
+        row.classList.toggle('lapseDimmed', !on);
+        view.querySelector('#lapseAlreadyInSyncTolerance').disabled = !on;
+        view.querySelector('#lapseAlreadyInSyncToleranceValue').textContent = value + 'ms';
     }
 
     // No "Recommended" badges in here. Which format you want depends on what is going to
@@ -2809,6 +2832,11 @@
         view.querySelector('#lapseSidecarSuffix').value = currentSettings.SidecarSuffix || '.shifted';
         view.querySelector('#lapseConfidenceSigma').value = currentSettings.ConfidenceSigma || 8;
         updateConfidenceNote(view);
+
+        view.querySelector('#lapseSkipAlreadyInSync').checked = currentSettings.SkipAlreadyInSync !== false;
+        view.querySelector('#lapseAlreadyInSyncTolerance').value =
+            currentSettings.AlreadyInSyncToleranceMs == null ? 100 : currentSettings.AlreadyInSyncToleranceMs;
+        updateAlreadyInSyncNote(view);
 
         view.querySelector('#lapseConfidence').value = currentSettings.TranslationConfidenceThreshold;
         view.querySelector('#lapseKeepLowConfidence').checked = !!currentSettings.TranslationKeepLowConfidenceOriginal;
@@ -3067,6 +3095,8 @@
             SidecarSuffix: view.querySelector('#lapseSidecarSuffix').value,
             LowConfidenceAction: selectedRadio(view, 'lapseLowConfidence', 'Sidecar'),
             ConfidenceSigma: parseFloat(view.querySelector('#lapseConfidenceSigma').value) || 8,
+            SkipAlreadyInSync: view.querySelector('#lapseSkipAlreadyInSync').checked,
+            AlreadyInSyncToleranceMs: parseInt(view.querySelector('#lapseAlreadyInSyncTolerance').value, 10) || 0,
             AutoUpdateEngines: view.querySelector('#lapseAutoUpdateEngines').checked,
             CountEmbeddedSubtitlesInStatus: view.querySelector('#lapseCountEmbedded').checked,
             SubToSubPlacement: view.querySelector('#lapseSubToSubPlacement').value,
@@ -3330,6 +3360,12 @@
         });
         view.querySelector('#lapseConfidenceSigma').addEventListener('input', function () {
             updateConfidenceNote(view);
+        });
+        view.querySelector('#lapseAlreadyInSyncTolerance').addEventListener('input', function () {
+            updateAlreadyInSyncNote(view);
+        });
+        view.querySelector('#lapseSkipAlreadyInSync').addEventListener('change', function () {
+            updateAlreadyInSyncNote(view);
         });
         view.querySelector('#btnSaveConversion').addEventListener('click', function () {
             saveSettings(view, 'Conversion settings saved.');

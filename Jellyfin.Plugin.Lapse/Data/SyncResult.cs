@@ -84,11 +84,19 @@ public class SyncResult
 
     /// <summary>
     /// Gets or sets a value indicating whether the result was thrown away and the file on
-    /// disk left exactly as it was. Only happens for a low-confidence result under the
-    /// "keep original" setting - the run itself still counts as a success, it just
-    /// deliberately didn't write anything.
+    /// disk left exactly as it was. Happens for a low-confidence result under the "keep
+    /// original" setting, and for a subtitle that turned out to already be in sync - the
+    /// run itself still counts as a success, it just deliberately didn't write anything.
     /// </summary>
     public bool Skipped { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether the engine's answer was small enough to
+    /// count as no change at all, so the file was left alone. Unlike the low-confidence
+    /// kind of <see cref="Skipped"/>, this one means the subtitle is right: it counts as
+    /// synced everywhere the plugin keeps track of what's been done.
+    /// </summary>
+    public bool AlreadyInSync { get; set; }
 
     /// <summary>
     /// Gets or sets the subtitle that was read. Recorded so the history can tell a run

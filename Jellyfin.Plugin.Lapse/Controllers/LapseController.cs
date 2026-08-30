@@ -548,7 +548,10 @@ public class LapseController : ControllerBase
             ResolveRecordStatus(result),
             result.Success && result.Skipped ? SyncQueueManager.DescribeSkip(result) : result.Error,
             result,
-            result.Success && !result.Skipped ? new[] { subtitlePath } : null);
+
+            // Nothing was written for an already-in-sync subtitle, but the file on disk is
+            // correct, so it counts towards the item being synced just the same.
+            result.Success && (!result.Skipped || result.AlreadyInSync) ? new[] { subtitlePath } : null);
 
         return result;
     }
@@ -562,7 +565,10 @@ public class LapseController : ControllerBase
             return MovieSyncStatus.Failed;
         }
 
-        return result.Skipped ? MovieSyncStatus.Pending : MovieSyncStatus.Synced;
+        // A subtitle that was left alone because it was already right is synced. Only the
+        // low-confidence kind of skip goes back to pending, since that one leaves a file
+        // nobody has checked.
+        return result.Skipped && !result.AlreadyInSync ? MovieSyncStatus.Pending : MovieSyncStatus.Synced;
     }
 
     /// <summary>
@@ -691,7 +697,7 @@ public class LapseController : ControllerBase
         // The reference itself is correct by definition - that's why it was picked - so it
         // counts as synced alongside everything that was lined up against it.
         var writtenPaths = result.Results
-            .Where(o => o.Result is { Success: true, Skipped: false })
+            .Where(o => o.Result is { Success: true, Skipped: false } or { Success: true, AlreadyInSync: true })
             .Select(o => o.Path)
             .Append(referencePath)
             .ToList();
@@ -1392,6 +1398,8 @@ public class LapseController : ControllerBase
             OutputMode = config.OutputMode,
             SidecarSuffix = config.SidecarSuffix,
             LowConfidenceAction = config.LowConfidenceAction,
+            SkipAlreadyInSync = config.SkipAlreadyInSync,
+            AlreadyInSyncToleranceMs = config.AlreadyInSyncToleranceMs,
             ConfidenceSigma = config.ConfidenceSigma,
             SubToSubPlacement = config.SubToSubPlacement,
             SubToSubCustomFolder = config.SubToSubCustomFolder,
@@ -1697,6 +1705,11 @@ public class LapseController : ControllerBase
         config.OutputMode = settings.OutputMode;
         config.SidecarSuffix = string.IsNullOrWhiteSpace(settings.SidecarSuffix) ? ".shifted" : settings.SidecarSuffix.Trim();
         config.LowConfidenceAction = settings.LowConfidenceAction;
+        config.SkipAlreadyInSync = settings.SkipAlreadyInSync;
+
+        // A negative tolerance would mean nothing is ever close enough, and anything past
+        // a few seconds stops being "already fine" and starts being a sync nobody did.
+        config.AlreadyInSyncToleranceMs = Math.Clamp(settings.AlreadyInSyncToleranceMs, 0, 5000);
 
         // The engine rejects anything at or below zero, and a runaway value would just mean
         // nothing is ever confident enough to write.

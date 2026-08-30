@@ -342,6 +342,13 @@ public class SyncQueueManager : IDisposable
     /// <returns>A line saying what happened and why.</returns>
     public static string DescribeSkip(SyncResult result)
     {
+        if (result.AlreadyInSync)
+        {
+            var tolerance = Plugin.Instance?.Configuration.AlreadyInSyncToleranceMs ?? 100;
+            return $"Already in sync (the engine would have moved it {result.OffsetMs}ms, which is inside the "
+                + $"{tolerance}ms tolerance), so the file was left exactly as it was.";
+        }
+
         var threshold = Plugin.Instance?.Configuration.ConfidenceSigma ?? LapseEngine.DefaultConfidenceSigma;
 
         // The engine's own words for what it thought of the answer. "nothing" means the
@@ -565,6 +572,10 @@ public class SyncQueueManager : IDisposable
 
         string? lastError = null;
         string? lastSkip = null;
+
+        // Set by a skip the engine wasn't sure about, as opposed to one that was skipped
+        // for being right already. Only the first kind leaves the item unfinished.
+        var doubted = false;
         SyncResult? lastResult = null;
         var syncedPaths = new List<string>();
 
@@ -650,6 +661,18 @@ public class SyncQueueManager : IDisposable
             else if (result.Skipped)
             {
                 lastSkip = DescribeSkip(result);
+
+                // Nothing was rewritten, but an already-in-sync subtitle is a correct
+                // subtitle, so it counts as done rather than leaving the item looking
+                // half finished on every run that goes past it.
+                if (result.AlreadyInSync)
+                {
+                    syncedPaths.Add(workPath);
+                }
+                else
+                {
+                    doubted = true;
+                }
             }
             else
             {
@@ -689,7 +712,10 @@ public class SyncQueueManager : IDisposable
             // The run worked, we just deliberately didn't write anything. Calling that
             // "Synced" would be a lie about what's on disk, and calling it "Failed" would
             // be a lie about the engine, so it stays pending with the reason attached.
-            SaveRecord(itemId, MovieSyncStatus.Pending, lastSkip, lastResult, syncedPaths);
+            // Unless nothing was written because every subtitle here was already right,
+            // which is the one skip that really is a finished item.
+            var status = doubted ? MovieSyncStatus.Pending : MovieSyncStatus.Synced;
+            SaveRecord(itemId, status, lastSkip, lastResult, syncedPaths);
             SetItemStatus(itemId, QueueItemStatus.Done);
             return true;
         }

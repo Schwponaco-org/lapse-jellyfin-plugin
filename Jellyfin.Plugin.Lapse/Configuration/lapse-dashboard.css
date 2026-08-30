@@ -325,6 +325,12 @@
     opacity: .5;
 }
 
+/* A control that is still worth reading but cannot be changed until the box above it
+   is ticked. */
+.lapseDimmed {
+    opacity: .5;
+}
+
 .lapseLibraryMain {
     display: flex;
     align-items: center;

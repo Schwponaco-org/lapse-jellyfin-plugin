@@ -80,6 +80,17 @@ public class PluginSettings
     public LowConfidenceAction LowConfidenceAction { get; set; }
 
     /// <summary>
+    /// Gets or sets a value indicating whether a subtitle the engine barely moved is left
+    /// alone instead of being rewritten.
+    /// </summary>
+    public bool SkipAlreadyInSync { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets how small a shift counts as already in sync, in milliseconds.
+    /// </summary>
+    public int AlreadyInSyncToleranceMs { get; set; } = 100;
+
+    /// <summary>
     /// Gets or sets how far LAPSE's answer has to stand out before it counts as confident,
     /// in standard deviations. Passed straight to the engine as --confidence.
     /// </summary>

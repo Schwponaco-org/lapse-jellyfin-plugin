@@ -311,6 +311,30 @@
                             page instead.
                         </div>
 
+                        <h3 class="lapseSubHeading">Subtitles that are already right</h3>
+                        <label class="emby-checkbox-label lapseStackedCheck">
+                            <input id="lapseSkipAlreadyInSync" type="checkbox" is="emby-checkbox" />
+                            <span>Leave a subtitle alone when it is already in sync</span>
+                        </label>
+                        <div class="fieldDescription lapseTightNote">
+                            A run over a whole library goes through plenty of subtitles that were
+                            fine to begin with. With this on, an answer smaller than the tolerance
+                            below counts as no change: nothing is rewritten, no backup is taken,
+                            and the subtitle still counts as synced. Stretched and split results
+                            are always written, however small the shift, because those change the
+                            timing across the whole file rather than moving it as one piece.
+                        </div>
+                        <div class="inputContainer" id="lapseAlreadyInSyncToleranceRow">
+                            <label class="inputLabel inputLabelUnfocused" for="lapseAlreadyInSyncTolerance">
+                                Tolerance: <span id="lapseAlreadyInSyncToleranceValue"></span>
+                            </label>
+                            <input type="range" id="lapseAlreadyInSyncTolerance" min="0" max="1000" step="10" class="lapseRange" />
+                            <div class="fieldDescription">
+                                Anything at or under this counts as already in sync. 100ms is under
+                                what anyone notices while reading along.
+                            </div>
+                        </div>
+
                         <h3 class="lapseSubHeading">Confidence</h3>
                         <div class="fieldDescription lapseTightNote">
                             <strong>LAPSE only.</strong> LAPSE measures how far its answer stands out from

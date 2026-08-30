@@ -652,6 +652,11 @@
             return 'Sync failed: ' + result.Error;
         }
 
+        if (result.AlreadyInSync) {
+            return 'Already in sync, so nothing was changed. The engine would have moved it ' +
+                (result.OffsetMs || 0) + 'ms, which is inside the tolerance set under File output.';
+        }
+
         if (result.Skipped) {
             return 'Left the original alone - ' + describeResult(result) +
                 ', which is under the confidence threshold. Change what happens then under ' +
