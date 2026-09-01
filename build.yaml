@@ -21,24 +21,27 @@ owner: "rs-jensen"
 artifacts:
 - "Jellyfin.Plugin.Lapse.dll"
 changelog: >
-  Any running sync job - bulk, a series, or a schedule - can now be stopped
-  from the dashboard or the progress toast, killing the engine process
-  rather than leaving it running in the background.
+  Subtitle tracks living inside a video file can now be pulled out as ordinary
+  subtitle files from a new "Extract Embedded Subtitles" entry in the item
+  menu. Removing the tracks from the video afterwards, and replacing the
+  original video with the rebuilt one, are two further opt-ins on the same
+  dialog, so the safe answer stays the default. Nothing is re-encoded, so the
+  picture and sound come out identical, and a track that could not be saved as
+  a file first (PGS, VobSub) is never dropped.
 
-  Sync Subtitles to Reference (renamed from Sync All Subtitles to Reference)
-  can now line up just one chosen track instead of always doing every other
-  subtitle. Embedded subtitle tracks no longer count towards an item's sync
-  status by default, since nothing automatic ever touches them; a setting
-  brings them back in for anyone who syncs embedded tracks by hand.
+  A new "Readable Subtitles" entry writes a copy of a subtitle with a
+  dyslexia-friendly font, larger text and wider letter spacing set inside the
+  file rather than in a client setting. The dashboard can install OpenDyslexic
+  into Jellyfin's fallback font folder and turn the server's fallback font
+  setting on.
 
-  Translation, marked experimental, gets several fixes: DeepL retries on 429
-  and 5xx with backoff instead of failing outright, the metadata header no
-  longer breaks .srt (which has no comment syntax) and is placed correctly
-  in .vtt, and a configurable default source/target language fills the
-  Translate boxes in instead of starting empty. The Advanced sync dialog is
-  reworked so every action sits in one row at the bottom.
+  Syncing the same embedded track more than once no longer leaves a pile of
+  duplicate subtitle files behind. The extracted file now has one name per
+  track and is reused, which also means an overwrite output mode has something
+  of its own to overwrite. The sync dialog now says so when the chosen track is
+  still inside the video, since no output mode can write back into it.
 
-  A subtitle the engine turns away for having too few cues to judge is now
-  retried once with --force. Disabling a library now turns off its "new
-  items" and "schedule" sync automatically, instead of leaving them
-  checked-and-inert until the library is turned back on.
+  Automatic translation through Lingarr no longer fails with HTTP 500. The
+  unattended path never set a source language, so it sent "auto", which Lingarr
+  validates as a culture and rejects. It now uses the configured default and
+  falls back to the subtitle's own filename language tag.
