@@ -273,6 +273,36 @@ public class PluginSettings
     public string? TranslationDefaultSourceLanguage { get; set; }
 
     /// <summary>
+    /// Gets or sets the font a restyled subtitle asks for.
+    /// </summary>
+    public string? SubtitleFontName { get; set; }
+
+    /// <summary>
+    /// Gets or sets the font size a restyled subtitle uses, against a 1080-tall script.
+    /// </summary>
+    public int SubtitleFontSize { get; set; } = 78;
+
+    /// <summary>
+    /// Gets or sets the extra space between letters in a restyled subtitle.
+    /// </summary>
+    public double SubtitleLetterSpacing { get; set; } = 2;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether restyled subtitles are bold.
+    /// </summary>
+    public bool SubtitleBold { get; set; }
+
+    /// <summary>
+    /// Gets or sets the outline thickness drawn around a restyled subtitle's glyphs.
+    /// </summary>
+    public double SubtitleOutline { get; set; } = 3.5;
+
+    /// <summary>
+    /// Gets or sets how far up from the bottom of the frame restyled subtitles sit.
+    /// </summary>
+    public int SubtitleMarginV { get; set; } = 70;
+
+    /// <summary>
     /// Gets or sets a value indicating whether low confidence lines keep their original text.
     /// </summary>
     public bool TranslationKeepLowConfidenceOriginal { get; set; }

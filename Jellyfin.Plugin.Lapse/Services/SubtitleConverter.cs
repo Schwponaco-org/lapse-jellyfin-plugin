@@ -11,6 +11,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using Jellyfin.Plugin.Lapse.Data;
 using MediaBrowser.Controller.MediaEncoding;
 using Microsoft.Extensions.Logging;
 
@@ -107,6 +108,9 @@ public partial class SubtitleConverter
     /// </summary>
     /// <param name="sourcePath">The file to read.</param>
     /// <param name="destinationPath">The file to write. Its extension decides the format.</param>
+    /// <param name="style">How the result should look, when it's being written as ass or
+    /// ssa. Null writes the plain default style, which is what an ordinary conversion
+    /// wants; the other formats carry no styling and ignore this either way.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>How many cues came across.</returns>
     /// <exception cref="NotSupportedException">The source isn't a format that can be converted.</exception>
@@ -115,7 +119,11 @@ public partial class SubtitleConverter
         "Security",
         "CA3003:Review code for file path injection vulnerabilities",
         Justification = "Callers hand in a subtitle the library lists for an item, and a destination derived from it with a known extension.")]
-    public async Task<int> ConvertAsync(string sourcePath, string destinationPath, CancellationToken cancellationToken = default)
+    public async Task<int> ConvertAsync(
+        string sourcePath,
+        string destinationPath,
+        SubtitleStyle? style = null,
+        CancellationToken cancellationToken = default)
     {
         if (GetConversionProblem(sourcePath) is { } problem)
         {
@@ -153,7 +161,7 @@ public partial class SubtitleConverter
                 throw new InvalidDataException($"No subtitle cues could be read out of {Path.GetFileName(sourcePath)}.");
             }
 
-            await File.WriteAllTextAsync(destinationPath, Write(cues, target), SubtitleEncoding.Utf8NoBom, cancellationToken)
+            await File.WriteAllTextAsync(destinationPath, Write(cues, target, style), SubtitleEncoding.Utf8NoBom, cancellationToken)
                 .ConfigureAwait(false);
 
             _logger.LogInformation(
@@ -411,13 +419,13 @@ public partial class SubtitleConverter
 
     // ------------------------------------------------------------------------ writing
 
-    private static string Write(List<SubtitleCue> cues, string format)
+    private static string Write(List<SubtitleCue> cues, string format, SubtitleStyle? style)
     {
         return format switch
         {
             "vtt" => WriteVtt(cues),
-            "ass" => WriteAss(cues, advanced: true),
-            "ssa" => WriteAss(cues, advanced: false),
+            "ass" => WriteAss(cues, advanced: true, style),
+            "ssa" => WriteAss(cues, advanced: false, style),
             _ => WriteSrt(cues)
         };
     }
@@ -461,13 +469,14 @@ public partial class SubtitleConverter
         return builder.ToString();
     }
 
-    private static string WriteAss(List<SubtitleCue> cues, bool advanced)
+    private static string WriteAss(List<SubtitleCue> cues, bool advanced, SubtitleStyle? style)
     {
         // A minimum viable script: enough header for a player to accept the file, one
         // default style, and the events. Styling from a source that had it doesn't
         // survive the trip, which is the deal with converting to a simpler format and
         // back again.
         var builder = new StringBuilder();
+        var fields = (style ?? new SubtitleStyle()).ToStyleFields(advanced);
 
         builder.Append("[Script Info]\n")
             .Append("; Written by the LAPSE Jellyfin plugin\n")
@@ -481,7 +490,7 @@ public partial class SubtitleConverter
         {
             builder.Append("[V4+ Styles]\n")
                 .Append("Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n")
-                .Append("Style: Default,Arial,72,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,3,1,2,60,60,60,1\n\n")
+                .Append("Style: Default,").Append(fields).Append("\n\n")
                 .Append("[Events]\n")
                 .Append("Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n");
         }
@@ -489,7 +498,7 @@ public partial class SubtitleConverter
         {
             builder.Append("[V4 Styles]\n")
                 .Append("Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, TertiaryColour, BackColour, Bold, Italic, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, AlphaLevel, Encoding\n")
-                .Append("Style: Default,Arial,72,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,1,3,1,2,60,60,60,0,1\n\n")
+                .Append("Style: Default,").Append(fields).Append("\n\n")
                 .Append("[Events]\n")
                 .Append("Format: Marked, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n");
         }

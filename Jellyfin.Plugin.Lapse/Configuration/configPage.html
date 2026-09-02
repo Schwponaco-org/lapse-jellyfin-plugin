@@ -630,6 +630,66 @@
                                 <span>Reset to defaults</span>
                             </button>
                         </div>
+
+                        <h3 class="lapsePanelSubtitle">Readable subtitles</h3>
+                        <div class="fieldDescription lapseTightNote">
+                            Everything above is drawn by the web client, so it stops at the browser. This
+                            writes the styling into a copy of the subtitle file instead, which means every
+                            client that plays it honours it - phone, TV and browser alike, with nothing to
+                            set up on each one. Use <strong>Readable Subtitles</strong> in an item's menu to
+                            write one.
+                        </div>
+
+                        <div class="lapseNoteStrip" id="lapseFontStatus">Checking which fonts are installed...</div>
+
+                        <button is="emby-button" type="button" id="btnInstallDyslexicFont" class="raised lapseSmallButton">
+                            <span>Install OpenDyslexic</span>
+                        </button>
+                        <div class="fieldDescription lapseTightNote">
+                            Downloads OpenDyslexic (free, SIL Open Font License) into Jellyfin's font folder
+                            and turns the server's fallback font setting on. Any font already in that folder
+                            can be named below instead.
+                        </div>
+
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="lapseStyleFontName">Font</label>
+                            <input is="emby-input" id="lapseStyleFontName" type="text" />
+                            <div class="fieldDescription">The name the player looks the font up by, e.g. OpenDyslexic.</div>
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="lapseStyleFontSize">
+                                Font size: <span id="lapseStyleFontSizeValue"></span>
+                            </label>
+                            <input type="range" id="lapseStyleFontSize" min="40" max="140" class="lapseRange" />
+                            <div class="fieldDescription">Against a 1920x1080 frame, so it scales with the video rather than the screen.</div>
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="lapseStyleLetterSpacing">
+                                Letter spacing: <span id="lapseStyleLetterSpacingValue"></span>
+                            </label>
+                            <input type="range" id="lapseStyleLetterSpacing" min="0" max="10" step="0.5" class="lapseRange" />
+                            <div class="fieldDescription">Wider tracking is the change with the most evidence behind it, more than the typeface itself.</div>
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="lapseStyleOutline">
+                                Outline thickness: <span id="lapseStyleOutlineValue"></span>
+                            </label>
+                            <input type="range" id="lapseStyleOutline" min="0" max="8" step="0.5" class="lapseRange" />
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="lapseStyleMarginV">
+                                Distance from the bottom: <span id="lapseStyleMarginVValue"></span>
+                            </label>
+                            <input type="range" id="lapseStyleMarginV" min="0" max="200" class="lapseRange" />
+                        </div>
+                        <label class="emby-checkbox-label lapseStackedCheck">
+                            <input id="lapseStyleBold" type="checkbox" is="emby-checkbox" />
+                            <span>Bold</span>
+                        </label>
+
+                        <button is="emby-button" type="button" id="btnSaveReadable" class="raised button-submit lapseSmallButton">
+                            <span>Save readable subtitle style</span>
+                        </button>
                     </section>
 
                     <section class="lapsePanel" id="lapsePanelLabs">

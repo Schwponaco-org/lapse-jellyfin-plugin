@@ -145,17 +145,55 @@ public class SubtitleTextFile
             stem = stem[..^".translated".Length];
         }
 
-        var lastDot = stem.LastIndexOf('.');
-        if (lastDot > 0)
+        if (TryGetLanguageTag(sourcePath, out _, out var lastDot))
         {
-            var tag = stem[(lastDot + 1)..];
-            if (tag.Length is >= 2 and <= 3 && tag.All(char.IsLetter))
-            {
-                stem = stem[..lastDot];
-            }
+            stem = stem[..lastDot];
         }
 
         return Path.Combine(directory, $"{stem}.{targetLanguage}.translated{extension}");
+    }
+
+    /// <summary>
+    /// Reads the language tag off the end of a subtitle's name, so Movie.en.srt gives
+    /// "en". Releases label their subtitle files this way almost without exception, which
+    /// makes the filename the one source language hint available without reading the
+    /// dialogue - and providers that reject "auto" need a real code to be given one.
+    /// </summary>
+    /// <param name="path">The subtitle path.</param>
+    /// <param name="language">The tag that was found, lowercased.</param>
+    /// <returns>True if the name ends in something that looks like a language code.</returns>
+    public static bool TryGetLanguageTag(string path, out string language)
+    {
+        return TryGetLanguageTag(path, out language, out _);
+    }
+
+    private static bool TryGetLanguageTag(string path, out string language, out int tagStart)
+    {
+        language = string.Empty;
+        tagStart = -1;
+
+        var stem = Path.GetFileNameWithoutExtension(path);
+
+        if (stem.EndsWith(".translated", StringComparison.OrdinalIgnoreCase))
+        {
+            stem = stem[..^".translated".Length];
+        }
+
+        var lastDot = stem.LastIndexOf('.');
+        if (lastDot <= 0)
+        {
+            return false;
+        }
+
+        var tag = stem[(lastDot + 1)..];
+        if (tag.Length is < 2 or > 3 || !tag.All(char.IsLetter))
+        {
+            return false;
+        }
+
+        language = tag.ToLowerInvariant();
+        tagStart = lastDot;
+        return true;
     }
 
     /// <summary>

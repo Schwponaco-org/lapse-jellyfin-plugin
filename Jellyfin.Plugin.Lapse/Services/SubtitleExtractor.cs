@@ -166,6 +166,20 @@ public class SubtitleExtractor
         var extension = GetExtensionForCodec(codec)!;
         var destination = BuildDestination(videoPath, streamIndex, language, extension);
 
+        // The same track pulled out twice is the same file, so a second sync of it reuses
+        // what the first one wrote rather than extracting again. An empty file is a
+        // half-finished extraction from a run that died, and gets redone.
+        if (AlreadyExtracted(destination))
+        {
+            _logger.LogDebug(
+                "Subtitle stream {Index} of {Video} is already extracted at {Destination}, reusing it",
+                streamIndex,
+                videoPath,
+                destination);
+
+            return destination;
+        }
+
         // Jellyfin's extractor first. It reuses the cached copy the server or the subtitle
         // extract plugin already made, and where there's nothing cached it runs the same
         // extraction the server does for playback, which handles containers our own ffmpeg
@@ -393,8 +407,16 @@ public class SubtitleExtractor
     }
 
     // Named the way a subtitle beside a video is normally named, so Jellyfin reads the
-    // language off it on the next scan and it sits with the rest of them. The stream
-    // index goes in as well, since one video can carry several tracks in one language.
+    // language off it on the next scan and it sits with the rest of them. The stream index
+    // goes in as well, and that is what makes the name worth having: one track always
+    // resolves to one file.
+    //
+    // It used to hunt for a free name instead, which meant every sync of the same embedded
+    // track extracted it again under a new number - Movie.en.srt, Movie.en.track3.srt,
+    // Movie.en.track3.2.srt - and a library got a pile of duplicate subtitles out of
+    // nothing but repeated syncing. Reusing the file is also what the caller wants: an
+    // overwrite output mode has something of its own to overwrite, rather than writing over
+    // a file it just created.
     [System.Diagnostics.CodeAnalysis.SuppressMessage(
         "Security",
         "CA3003:Review code for file path injection vulnerabilities",
@@ -404,20 +426,18 @@ public class SubtitleExtractor
         var folder = Path.GetDirectoryName(videoPath)!;
         var stem = Path.GetFileNameWithoutExtension(videoPath);
         var tag = string.IsNullOrWhiteSpace(language) ? "und" : language.Trim().ToLowerInvariant();
+        var index = streamIndex.ToString(CultureInfo.InvariantCulture);
 
-        var destination = Path.Combine(folder, $"{stem}.{tag}{extension}");
+        return Path.Combine(folder, $"{stem}.{tag}.track{index}{extension}");
+    }
 
-        // Never write over a subtitle that's already sitting there, whoever put it there.
-        var attempt = 1;
-        while (File.Exists(destination))
-        {
-            destination = Path.Combine(
-                folder,
-                $"{stem}.{tag}.track{streamIndex.ToString(CultureInfo.InvariantCulture)}{(attempt > 1 ? "." + attempt.ToString(CultureInfo.InvariantCulture) : string.Empty)}{extension}");
-            attempt++;
-        }
-
-        return destination;
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Security",
+        "CA3003:Review code for file path injection vulnerabilities",
+        Justification = "Only ever looks at the destination BuildDestination just named, which comes from Jellyfin's own resolved video path and a stream index. Nothing from the request reaches it.")]
+    private static bool AlreadyExtracted(string destination)
+    {
+        return File.Exists(destination) && new FileInfo(destination).Length > 0;
     }
 
     private static void TryKill(Process process)

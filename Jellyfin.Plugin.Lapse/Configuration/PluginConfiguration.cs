@@ -194,6 +194,46 @@ public class PluginConfiguration : BasePluginConfiguration
     /// </summary>
     public bool TranslationIncludeMetadataHeader { get; set; } = true;
 
+    // ------------------------------------------------------- readable subtitle styling
+    //
+    // These are the numbers the dyslexia preset writes into a restyled subtitle's ASS
+    // style line. They live here rather than in a client because a client setting has to
+    // be found and set again on every device, and most Jellyfin clients have no font
+    // picker at all - styling carried by the file itself travels with it.
+
+    /// <summary>
+    /// Gets or sets the font a restyled subtitle asks for. It has to be a font the player
+    /// can find, which for the web client means one in the fallback font folder.
+    /// </summary>
+    public string SubtitleFontName { get; set; } = Data.SubtitleStyle.DyslexicFontName;
+
+    /// <summary>
+    /// Gets or sets the font size a restyled subtitle uses, against a 1080-tall script.
+    /// </summary>
+    public int SubtitleFontSize { get; set; } = 78;
+
+    /// <summary>
+    /// Gets or sets the extra space between letters. Loosened tracking is the single
+    /// change with the most evidence behind it for readability, more so than the typeface.
+    /// </summary>
+    public double SubtitleLetterSpacing { get; set; } = 2;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether restyled subtitles are bold.
+    /// </summary>
+    public bool SubtitleBold { get; set; }
+
+    /// <summary>
+    /// Gets or sets the outline thickness drawn around the glyphs, which is what keeps
+    /// text readable over a bright scene without a background box behind it.
+    /// </summary>
+    public double SubtitleOutline { get; set; } = 3.5;
+
+    /// <summary>
+    /// Gets or sets how far up from the bottom of the frame restyled subtitles sit.
+    /// </summary>
+    public int SubtitleMarginV { get; set; } = 70;
+
     /// <summary>
     /// Gets or sets a value indicating whether lines that score below the threshold keep
     /// their original text (true) or get flagged in the output but still translated (false).
