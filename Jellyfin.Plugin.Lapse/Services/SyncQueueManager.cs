@@ -755,7 +755,7 @@ public class SyncQueueManager : IDisposable
 
         try
         {
-            await _converter.ConvertAsync(subtitle.Path, destination, cancellationToken).ConfigureAwait(false);
+            await _converter.ConvertAsync(subtitle.Path, destination, cancellationToken: cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is NotSupportedException or InvalidDataException or IOException or TimeoutException)
         {
@@ -805,10 +805,23 @@ public class SyncQueueManager : IDisposable
             return;
         }
 
+        // An unattended run has nobody to fill the From box in, and leaving it empty is
+        // not harmless: providers that validate the code (Lingarr, via CultureInfo)
+        // reject the "auto" that stands in for it and fail the whole job. The configured
+        // default comes first, then the subtitle's own language tag, which is right far
+        // more often than not for a file named Movie.en.srt.
+        var source = config.TranslationDefaultSourceLanguage?.Trim();
+
+        if (string.IsNullOrEmpty(source) && SubtitleTextFile.TryGetLanguageTag(subtitlePath, out var tag))
+        {
+            source = tag;
+        }
+
         var request = new TranslationRequest
         {
             ItemId = item.Id,
             SubtitlePath = subtitlePath,
+            SourceLanguage = source,
             TargetLanguage = language
         };
 

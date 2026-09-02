@@ -57,6 +57,8 @@ public class LapseController : ControllerBase
     private readonly SubtitleShifter _subtitleShifter;
     private readonly SubtitleConverter _converter;
     private readonly SubtitleExtractor _extractor;
+    private readonly SubtitleRemuxer _remuxer;
+    private readonly FontInstaller _fontInstaller;
     private readonly TranslationService _translationService;
     private readonly SeriesSyncService _seriesSyncService;
     private readonly OpenSubtitlesService _openSubtitles;
@@ -79,6 +81,8 @@ public class LapseController : ControllerBase
     /// <param name="subtitleShifter">Nudges subtitle timings by hand.</param>
     /// <param name="converter">Writes subtitles out in another format.</param>
     /// <param name="extractor">Pulls subtitle tracks out of video files.</param>
+    /// <param name="remuxer">Extracts every embedded track at once, and rebuilds the video without them when asked.</param>
+    /// <param name="fontInstaller">Puts a readable font where Jellyfin's subtitle renderer looks.</param>
     /// <param name="translationService">Translates subtitle files.</param>
     /// <param name="seriesSyncService">Expands a series or season into its episodes.</param>
     /// <param name="openSubtitles">Fetches a subtitle for an item that has none.</param>
@@ -98,6 +102,8 @@ public class LapseController : ControllerBase
         SubtitleShifter subtitleShifter,
         SubtitleConverter converter,
         SubtitleExtractor extractor,
+        SubtitleRemuxer remuxer,
+        FontInstaller fontInstaller,
         TranslationService translationService,
         SeriesSyncService seriesSyncService,
         OpenSubtitlesService openSubtitles,
@@ -117,6 +123,8 @@ public class LapseController : ControllerBase
         _subtitleShifter = subtitleShifter;
         _converter = converter;
         _extractor = extractor;
+        _remuxer = remuxer;
+        _fontInstaller = fontInstaller;
         _translationService = translationService;
         _seriesSyncService = seriesSyncService;
         _openSubtitles = openSubtitles;
@@ -1439,6 +1447,12 @@ public class LapseController : ControllerBase
             TranslationKeepLowConfidenceOriginal = config.TranslationKeepLowConfidenceOriginal,
             TranslationDefaultTargetLanguage = config.TranslationDefaultTargetLanguage,
             TranslationDefaultSourceLanguage = config.TranslationDefaultSourceLanguage,
+            SubtitleFontName = config.SubtitleFontName,
+            SubtitleFontSize = config.SubtitleFontSize,
+            SubtitleLetterSpacing = config.SubtitleLetterSpacing,
+            SubtitleBold = config.SubtitleBold,
+            SubtitleOutline = config.SubtitleOutline,
+            SubtitleMarginV = config.SubtitleMarginV,
             SubtitleAppearance = config.SubtitleAppearance
         };
 
@@ -1765,6 +1779,15 @@ public class LapseController : ControllerBase
         config.TranslationDefaultTargetLanguage = Blank(settings.TranslationDefaultTargetLanguage);
         config.TranslationDefaultSourceLanguage = Blank(settings.TranslationDefaultSourceLanguage);
 
+        config.SubtitleFontName = string.IsNullOrWhiteSpace(settings.SubtitleFontName)
+            ? SubtitleStyle.DyslexicFontName
+            : settings.SubtitleFontName.Trim();
+        config.SubtitleFontSize = Math.Clamp(settings.SubtitleFontSize, 8, 400);
+        config.SubtitleLetterSpacing = Math.Clamp(settings.SubtitleLetterSpacing, 0, 20);
+        config.SubtitleBold = settings.SubtitleBold;
+        config.SubtitleOutline = Math.Clamp(settings.SubtitleOutline, 0, 20);
+        config.SubtitleMarginV = Math.Clamp(settings.SubtitleMarginV, 0, 500);
+
         if (settings.SubtitleAppearance is not null)
         {
             var appearance = settings.SubtitleAppearance;
@@ -1973,6 +1996,206 @@ public class LapseController : ControllerBase
         }
     }
 
+    // ------------------------------------------------- readable subtitles and fonts
+
+    /// <summary>
+    /// Gets where Jellyfin reads subtitle fonts from, what is in there, and whether the
+    /// server is set to use them at all.
+    /// </summary>
+    /// <returns>The current state.</returns>
+    [HttpGet("Lapse/Fonts")]
+    public ActionResult<FontStatus> GetFonts()
+    {
+        return _fontInstaller.GetStatus();
+    }
+
+    /// <summary>
+    /// Downloads OpenDyslexic into Jellyfin's font folder and turns the fallback font
+    /// setting on, so a subtitle styled to ask for it actually renders in it.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The state afterwards.</returns>
+    [HttpPost("Lapse/Fonts/InstallDyslexic")]
+    [Authorize(Policy = Policies.RequiresElevation)]
+    public async Task<ActionResult<FontStatus>> InstallDyslexicFont(CancellationToken cancellationToken)
+    {
+        return await _fontInstaller.InstallDyslexicFontAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Writes a readable copy of one of an item's subtitles: the same cues, in ASS, with
+    /// the configured font, size and letter spacing set in the style.
+    ///
+    /// Doing it in the file rather than in a client is the point. Jellyfin's own subtitle
+    /// appearance settings are per client and per device, and most of its clients have no
+    /// font picker at all, so there is no way to set a dyslexia-friendly font once and have
+    /// it apply on the TV, the phone and the browser. A style written into the subtitle is
+    /// read by every player that renders ASS, wherever it is playing.
+    /// </summary>
+    /// <param name="request">Which subtitle.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>What was written.</returns>
+    [HttpPost("Lapse/Restyle")]
+    public async Task<ActionResult<RestyleResult>> Restyle(
+        [FromBody] RestyleRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (CheckSubtitleAccess() is { } denied)
+        {
+            return denied;
+        }
+
+        if (request is null || string.IsNullOrWhiteSpace(request.SubtitlePath))
+        {
+            return BadRequest("A subtitle is required");
+        }
+
+        var item = _libraryManager.GetItemById(request.ItemId);
+        if (item is null)
+        {
+            return NotFound("Item not found");
+        }
+
+        var match = FindSubtitle(request.ItemId, request.SubtitlePath);
+        if (match is null)
+        {
+            return BadRequest("That subtitle doesn't belong to this item");
+        }
+
+        if (!match.TextBased)
+        {
+            return BadRequest("That's a picture based subtitle (PGS or VobSub). There are no characters in it to set a font on - it needs OCR first.");
+        }
+
+        var (sourcePath, sourceError) = await ResolveToFileAsync(item, match, cancellationToken).ConfigureAwait(false);
+        if (sourcePath is null)
+        {
+            return BadRequest(sourceError ?? "Could not get that subtitle out of the video file.");
+        }
+
+        var config = Plugin.Instance!.Configuration;
+        var style = new SubtitleStyle
+        {
+            FontName = config.SubtitleFontName,
+            FontSize = config.SubtitleFontSize,
+            LetterSpacing = config.SubtitleLetterSpacing,
+            Bold = config.SubtitleBold,
+            Outline = config.SubtitleOutline,
+            MarginV = config.SubtitleMarginV
+        };
+
+        var destination = BuildRestyleDestination(sourcePath);
+        var result = new RestyleResult { OutputPath = destination, FontName = style.FontName };
+
+        try
+        {
+            result.Cues = await _converter
+                .ConvertAsync(sourcePath, destination, style, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is NotSupportedException or InvalidDataException or IOException or TimeoutException)
+        {
+            return BadRequest(ex.Message);
+        }
+
+        // Replacing only makes sense for a subtitle that was already a file. An embedded
+        // track was extracted to get here, so the file at sourcePath is one this request
+        // just made and the track is still in the video either way.
+        if (request.ReplaceOriginal && !match.IsEmbedded)
+        {
+            try
+            {
+                System.IO.File.Delete(sourcePath);
+                result.RemovedOriginal = true;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // The styled file is written, which is what was asked for. A leftover
+                // original is worth reporting as such rather than as a failure.
+                _ = ex;
+            }
+        }
+
+        // A style naming a font the renderer can't find still renders - in something else.
+        // Saying so is the difference between "it didn't work" and "install the font".
+        var fonts = _fontInstaller.GetStatus();
+        result.FontAvailable = fonts.FallbackFontEnabled
+            && fonts.Fonts.Exists(f => f.StartsWith(style.FontName, StringComparison.OrdinalIgnoreCase));
+
+        result.Success = true;
+        return result;
+    }
+
+    // Sits beside the subtitle it came from as another track, named so Jellyfin still
+    // reads the language off it. Always .ass: it is the only one of the four formats with
+    // anywhere to put a font.
+    private static string BuildRestyleDestination(string sourcePath)
+    {
+        var directory = System.IO.Path.GetDirectoryName(sourcePath) ?? string.Empty;
+        var stem = System.IO.Path.GetFileNameWithoutExtension(sourcePath);
+
+        // Restyling something already restyled replaces it rather than stacking the tag.
+        if (stem.EndsWith(".readable", StringComparison.OrdinalIgnoreCase))
+        {
+            stem = stem[..^".readable".Length];
+        }
+
+        return System.IO.Path.Combine(directory, stem + ".readable.ass");
+    }
+
+    /// <summary>
+    /// Writes every text subtitle track inside an item's video out as a file beside it,
+    /// and - only if asked - rebuilds the video without those tracks.
+    ///
+    /// The point of the second half is direct play: an embedded track means a client has
+    /// to render it itself, which the web client gets the timing wrong on often enough to
+    /// be a known annoyance, or burn it in, which is a transcode and has to be turned on
+    /// per client. The same subtitle as a file beside the video has neither problem.
+    ///
+    /// Both steps past the extraction are opted into per request. Nothing automatic in the
+    /// plugin calls this: no scheduled task, no automation action, no webhook. Rewriting
+    /// somebody's library files is a thing to be asked for each time.
+    /// </summary>
+    /// <param name="request">Which item, and how far to go.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>What was extracted, and what happened to the video.</returns>
+    [HttpPost("Lapse/ExtractEmbedded")]
+    public async Task<ActionResult<RemuxResult>> ExtractEmbedded(
+        [FromBody] ExtractEmbeddedRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (CheckSubtitleAccess() is { } denied)
+        {
+            return denied;
+        }
+
+        if (request is null)
+        {
+            return BadRequest("Nothing to do");
+        }
+
+        // Taking tracks out of a video is a change to the library's own files rather than
+        // to a subtitle beside them, so it stays with the administrators however the
+        // subtitle access setting is set. Extracting on its own adds a file and removes
+        // nothing, and follows the same permission as the rest of the subtitle work.
+        if (request.RemoveFromVideo && !User.IsInRole(AdministratorRole))
+        {
+            return Forbid();
+        }
+
+        var item = _libraryManager.GetItemById(request.ItemId);
+        if (item is null || string.IsNullOrEmpty(item.Path))
+        {
+            return NotFound("Item not found, or it has no video file");
+        }
+
+        var result = await _remuxer
+            .ExtractEmbeddedSubtitlesAsync(item, request.RemoveFromVideo, request.ReplaceOriginal, cancellationToken)
+            .ConfigureAwait(false);
+
+        return result;
+    }
+
     /// <summary>
     /// Writes one of an item's subtitles out in a different format, without syncing it.
     /// The source is left alone unless the request asks for it to be replaced.
@@ -2054,7 +2277,7 @@ public class LapseController : ControllerBase
 
         try
         {
-            var cues = await _converter.ConvertAsync(sourcePath, destination, cancellationToken).ConfigureAwait(false);
+            var cues = await _converter.ConvertAsync(sourcePath, destination, cancellationToken: cancellationToken).ConfigureAwait(false);
 
             var removed = false;
 
@@ -2244,7 +2467,7 @@ public class LapseController : ControllerBase
 
             try
             {
-                await _converter.ConvertAsync(path, destination, cancellationToken).ConfigureAwait(false);
+                await _converter.ConvertAsync(path, destination, cancellationToken: cancellationToken).ConfigureAwait(false);
                 result.ConvertedFrom = SubtitleFormats.GetName(path);
                 result.SubtitlePath = destination;
             }

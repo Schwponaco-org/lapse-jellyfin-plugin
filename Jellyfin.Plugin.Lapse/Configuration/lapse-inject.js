@@ -397,6 +397,14 @@
             scroller.appendChild(makeMenuButton('lapse-sync-all-subtitles', 'Sync Subtitles to Reference', 'compare_arrows', function () {
                 openReferencePopup(context);
             }));
+
+            scroller.appendChild(makeMenuButton('lapse-extract-embedded', 'Extract Embedded Subtitles', 'file_download', function () {
+                openExtractPopup(context);
+            }));
+
+            scroller.appendChild(makeMenuButton('lapse-readable-subtitles', 'Readable Subtitles', 'accessibility_new', function () {
+                openRestylePopup(context);
+            }));
         }
 
         log('added the LAPSE buttons for ' + context.type + ' ' + context.id);
@@ -830,6 +838,237 @@
         }
 
         return written + '. ' + describeSyncOutcome(result.Sync);
+    }
+
+    // --- "Readable Subtitles" ---
+    //
+    // Writes a copy of the subtitle with the font, size and letter spacing set in the file
+    // itself. Jellyfin's own subtitle appearance settings are per client and per device,
+    // and most of its clients have no font picker at all, so this is the only way to set a
+    // dyslexia-friendly font once and have the TV, the phone and the browser all honour it.
+
+    function openRestylePopup(context) {
+        showLapseToast('Checking subtitles...');
+
+        Promise.all([
+            lapseGet('Lapse/Items/' + context.id + '/Subtitles'),
+            lapseGet('Lapse/Fonts').catch(function () { return null; })
+        ]).then(function (results) {
+            var subtitles = results[0].filter(function (s) { return s.TextBased !== false; });
+
+            if (subtitles.length === 0) {
+                showLapseToast('No subtitle on this item has text in it to restyle.');
+                return;
+            }
+
+            showRestyleDialog(context, subtitles, results[1]);
+        }).catch(function (err) {
+            showLapseToast('Could not check subtitles: ' + err.message);
+        });
+    }
+
+    function showRestyleDialog(context, subtitles, fonts) {
+        var ready = fonts && fonts.DyslexicInstalled && fonts.FallbackFontEnabled;
+
+        var fontNote = ready
+            ? '<div class="fieldDescription">OpenDyslexic is installed on this server, so the styled subtitle will render in it.</div>'
+            : '<div class="fieldDescription"><strong>The font isn\'t installed yet.</strong> The styled file will still be ' +
+              'written, and the larger text and wider letter spacing will apply, but it will render in the player\'s ' +
+              'normal font until an admin installs OpenDyslexic from the LAPSE dashboard under Subtitle appearance.</div>';
+
+        var overlay = openOverlay(
+            '<h3>Readable Subtitles</h3>' +
+            '<div class="fieldDescription">Writes a copy of the subtitle with a dyslexia-friendly font, larger text ' +
+            'and wider letter spacing set inside the file. Because the styling is in the file rather than in a client ' +
+            'setting, every client that plays it honours it - phone, TV and browser alike, with nothing to set up on each one.</div>' +
+            fontNote +
+            '<div class="selectContainer">' +
+            '  <label class="selectLabel">Subtitle</label>' +
+            '  <select is="emby-select" id="lapseRestyleSubtitle" class="emby-select-withcolor emby-select">' +
+            subtitleOptionsHtml(subtitles) +
+            '  </select>' +
+            '</div>' +
+            '<label class="emby-checkbox-label lapseStackedCheck">' +
+            '  <input type="checkbox" is="emby-checkbox" id="lapseRestyleReplace" />' +
+            '  <span>Delete the original once the styled copy is written</span>' +
+            '</label>' +
+            '<div class="fieldDescription">Leave this off and both are offered as separate tracks in the player, so the ' +
+            'styled one can be picked by whoever wants it and everyone else keeps the original.</div>' +
+            '<div class="lapseDialogButtons">' +
+            '  <button is="emby-button" type="button" class="raised" id="lapseRestyleCancel"><span>Cancel</span></button>' +
+            '  <button is="emby-button" type="button" class="raised button-submit" id="lapseRestyleApply"><span>Write it</span></button>' +
+            '</div>');
+
+        var select = overlay.querySelector('#lapseRestyleSubtitle');
+
+        overlay.querySelector('#lapseRestyleCancel').addEventListener('click', function () {
+            overlay.remove();
+        });
+
+        overlay.querySelector('#lapseRestyleApply').addEventListener('click', function () {
+            var subtitlePath = select.value;
+            var replace = overlay.querySelector('#lapseRestyleReplace').checked;
+
+            overlay.remove();
+            showLapseToast('Writing a readable copy...');
+
+            lapsePost('Lapse/Restyle', {
+                ItemId: context.id,
+                SubtitlePath: subtitlePath,
+                ReplaceOriginal: replace
+            }).then(function (result) {
+                var message = 'Wrote ' + result.Cues + ' cues to ' + result.OutputPath;
+
+                if (result.RemovedOriginal) {
+                    message += ', and deleted the original';
+                }
+
+                if (!result.FontAvailable) {
+                    message += '. ' + result.FontName + ' is not installed on this server yet, so it will render in the ' +
+                        'player\'s normal font until it is';
+                }
+
+                showLapseToast(message + '. Run a library scan to pick the new file up.');
+            }).catch(function (err) {
+                showLapseToast('Could not restyle: ' + err.message);
+            });
+        });
+    }
+
+    // --- "Extract Embedded Subtitles" ---
+    //
+    // Pulls the tracks inside the video out as files beside it. Removing them from the
+    // video afterwards is the part people want for direct play, and it is the part that
+    // rewrites a library file, so it is two deliberate checkboxes rather than one.
+
+    function openExtractPopup(context) {
+        showLapseToast('Checking subtitles...');
+
+        lapseGet('Lapse/Items/' + context.id + '/Subtitles').then(function (subtitles) {
+            var embedded = subtitles.filter(function (s) { return s.IsEmbedded; });
+
+            if (embedded.length === 0) {
+                showLapseToast('There are no subtitle tracks inside this video file.');
+                return;
+            }
+
+            showExtractDialog(context, embedded);
+        }).catch(function (err) {
+            showLapseToast('Could not check subtitles: ' + err.message);
+        });
+    }
+
+    function showExtractDialog(context, embedded) {
+        var textual = embedded.filter(function (s) { return s.TextBased !== false; });
+        var pictures = embedded.length - textual.length;
+
+        var trackList = embedded.map(function (s) {
+            return '<li>' + escapeHtml(s.DisplayName) +
+                (s.TextBased === false ? ' <em>&mdash; picture based, stays in the video</em>' : '') +
+                '</li>';
+        }).join('');
+
+        var overlay = openOverlay(
+            '<h3>Extract Embedded Subtitles</h3>' +
+            '<div class="fieldDescription">Writes every text subtitle track inside this video out as a file ' +
+            'beside it. A subtitle as a file plays back on every client without the video having to be ' +
+            'transcoded, which a track inside the video often does need.</div>' +
+            '<ul class="lapseTrackList">' + trackList + '</ul>' +
+            (pictures > 0
+                ? '<div class="fieldDescription">' + pictures + ' picture based track' + (pictures === 1 ? '' : 's') +
+                  ' (PGS or VobSub) cannot be turned into text and will be left in the video whatever you pick here.</div>'
+                : '') +
+            (textual.length === 0
+                ? '<div class="fieldDescription"><strong>None of these tracks can be extracted.</strong> They need OCR first, with something like Subtitle Edit.</div>'
+                : '<label class="emby-checkbox-label lapseStackedCheck">' +
+                  '  <input type="checkbox" is="emby-checkbox" id="lapseExtractRemove" />' +
+                  '  <span>Also remove those tracks from the video file</span>' +
+                  '</label>' +
+                  '<div class="fieldDescription">Rebuilds the video without them. Nothing is re-encoded, so the ' +
+                  'picture and sound come out identical, but it does write a fresh copy of the whole file.</div>' +
+                  '<label class="emby-checkbox-label lapseStackedCheck hide" id="lapseExtractReplaceRow">' +
+                  '  <input type="checkbox" is="emby-checkbox" id="lapseExtractReplace" />' +
+                  '  <span>Replace the original video file</span>' +
+                  '</label>' +
+                  '<div class="fieldDescription hide" id="lapseExtractReplaceNote">Leave this off and the rebuilt video ' +
+                  'is written beside the original as a .nosubs file, so you can check it before deleting anything. ' +
+                  'Turn it on and the original is replaced once the rebuild has finished cleanly.</div>') +
+            '<div class="lapseDialogButtons">' +
+            '  <button is="emby-button" type="button" class="raised" id="lapseExtractCancel"><span>Cancel</span></button>' +
+            '  <button is="emby-button" type="button" class="raised button-submit" id="lapseExtractApply"' +
+            (textual.length === 0 ? ' disabled' : '') + '><span>Extract</span></button>' +
+            '</div>');
+
+        var removeCheck = overlay.querySelector('#lapseExtractRemove');
+        var replaceRow = overlay.querySelector('#lapseExtractReplaceRow');
+        var replaceNote = overlay.querySelector('#lapseExtractReplaceNote');
+        var replaceCheck = overlay.querySelector('#lapseExtractReplace');
+
+        // Replacing the original only means anything once removal is on, and showing it
+        // before then invites someone to tick it without reading what it replaces.
+        if (removeCheck) {
+            removeCheck.addEventListener('change', function () {
+                var removing = removeCheck.checked;
+                replaceRow.classList.toggle('hide', !removing);
+                replaceNote.classList.toggle('hide', !removing);
+
+                if (!removing) {
+                    replaceCheck.checked = false;
+                }
+            });
+        }
+
+        overlay.querySelector('#lapseExtractCancel').addEventListener('click', function () {
+            overlay.remove();
+        });
+
+        overlay.querySelector('#lapseExtractApply').addEventListener('click', function () {
+            var remove = !!(removeCheck && removeCheck.checked);
+            var replace = !!(replaceCheck && replaceCheck.checked);
+
+            if (replace && !window.confirm(
+                'This replaces the original video file with a rebuilt copy that has no subtitle tracks in it. ' +
+                'The subtitles are written out as files first, and nothing is re-encoded. Carry on?')) {
+                return;
+            }
+
+            overlay.remove();
+            showLapseToast(remove
+                ? 'Extracting subtitles and rebuilding the video. This can take a while on a large file...'
+                : 'Extracting subtitles...');
+
+            lapsePost('Lapse/ExtractEmbedded', {
+                ItemId: context.id,
+                RemoveFromVideo: remove,
+                ReplaceOriginal: replace
+            }).then(function (result) {
+                showLapseToast(describeExtractOutcome(result));
+            }).catch(function (err) {
+                showLapseToast('Could not extract: ' + err.message);
+            });
+        });
+    }
+
+    function describeExtractOutcome(result) {
+        if (!result.Success) {
+            return result.Error || 'Nothing was extracted.';
+        }
+
+        var count = (result.ExtractedPaths || []).length;
+        var message = 'Extracted ' + count + ' subtitle' + (count === 1 ? '' : 's') + ' to files';
+
+        if (result.RemovedCount > 0) {
+            message += result.ReplacedOriginal
+                ? ' and rebuilt the video without ' + (result.RemovedCount === 1 ? 'that track' : 'those tracks')
+                : ' and wrote ' + result.VideoPath + ' without ' + (result.RemovedCount === 1 ? 'that track' : 'those tracks');
+        }
+
+        if ((result.KeptTracks || []).length > 0) {
+            message += '. ' + result.KeptTracks.length + ' picture based track' +
+                (result.KeptTracks.length === 1 ? ' was' : 's were') + ' left in the video';
+        }
+
+        return message + '. Run a library scan to pick the new files up.';
     }
 
     // --- "Shift Subtitles" ---
@@ -1385,6 +1624,9 @@
             '    <option value="OverwriteNoBackup">Overwrite, no backup</option>' +
             '  </select>' +
             '  <div class="fieldDescription">Just for this run. The default is on the File output page.</div>' +
+            '  <div class="fieldDescription hide" id="lapseAdvEmbeddedNote">The subtitle you picked is still inside the video file. ' +
+            'LAPSE cannot write back into the video, so it pulls the track out to a file beside it and the result goes there ' +
+            'whichever option you choose here. The track stays in the video as well.</div>' +
             '</div>' +
             translationSection +
             '<div class="lapseDialogButtons">' +
@@ -1428,6 +1670,27 @@
 
         modeSelect.addEventListener('change', syncPenaltyVisibility);
         syncPenaltyVisibility();
+
+        // Picking Overwrite on a track that lives inside the mkv reads as "replace that
+        // track", which is not something any of these output modes can do. Saying so up
+        // front is the difference between one extracted file and a folder full of them.
+        var subtitleSelect = overlay.querySelector('#lapseAdvSubtitle');
+        var embeddedNote = overlay.querySelector('#lapseAdvEmbeddedNote');
+
+        function syncEmbeddedNote() {
+            if (!embeddedNote) {
+                return;
+            }
+
+            var picked = subtitleSelect ? subtitleSelect.value : '';
+            embeddedNote.classList.toggle('hide', picked.indexOf('embedded://') !== 0);
+        }
+
+        if (subtitleSelect) {
+            subtitleSelect.addEventListener('change', syncEmbeddedNote);
+        }
+
+        syncEmbeddedNote();
 
         // "Sync every other subtitle to it" only means anything once a reference track is
         // picked, so it stays out of the way until then.

@@ -83,6 +83,7 @@ public class LingarrTranslationProvider : ITranslationProvider
 
         var client = _httpClientFactory.CreateClient("Lapse");
         var results = new List<TranslatedLine>(lines.Count);
+        var source = ResolveSource(sourceLanguage, config);
 
         for (var i = 0; i < lines.Count; i++)
         {
@@ -91,10 +92,7 @@ public class LingarrTranslationProvider : ITranslationProvider
             var payload = new
             {
                 subtitleLine = lines[i],
-
-                // Lingarr wants a source language; "auto" is what its own UI sends when
-                // the user hasn't pinned one down.
-                sourceLanguage = string.IsNullOrWhiteSpace(sourceLanguage) ? "auto" : sourceLanguage,
+                sourceLanguage = source,
                 targetLanguage,
                 contextLinesBefore = Context(lines, i - ContextLines, i),
                 contextLinesAfter = Context(lines, i + 1, i + 1 + ContextLines)
@@ -182,6 +180,30 @@ public class LingarrTranslationProvider : ITranslationProvider
         }
 
         return raw;
+    }
+
+    /// <summary>
+    /// Lingarr validates both languages as .NET cultures and turns down anything that
+    /// isn't one, so "auto" - which the rest of the plugin uses to mean "nobody said" -
+    /// comes back as a 500 reading "all configured translation services were skipped, no
+    /// service supports auto->xx". Send a real code instead: the configured default, or
+    /// English, which is what the overwhelming majority of subtitles being translated
+    /// away from are in.
+    /// </summary>
+    private static string ResolveSource(string? sourceLanguage, Configuration.PluginConfiguration config)
+    {
+        var trimmed = sourceLanguage?.Trim();
+
+        if (!string.IsNullOrEmpty(trimmed) && !trimmed.Equals("auto", StringComparison.OrdinalIgnoreCase))
+        {
+            return trimmed;
+        }
+
+        var configured = config.TranslationDefaultSourceLanguage?.Trim();
+
+        return string.IsNullOrEmpty(configured) || configured.Equals("auto", StringComparison.OrdinalIgnoreCase)
+            ? "en"
+            : configured;
     }
 
     private static List<string> Context(IReadOnlyList<string> lines, int from, int to)

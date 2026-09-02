@@ -159,6 +159,17 @@
     font-weight: 500;
 }
 
+/* A second heading within one panel, for a section that belongs with what's above it but
+   works a different way - readable subtitles sit under appearance, but write a file
+   rather than restyling playback. */
+.lapsePanelSubtitle {
+    margin: 2em 0 .6em;
+    padding-top: 1.2em;
+    border-top: 1px solid rgba(255, 255, 255, .12);
+    font-size: 1.1em;
+    font-weight: 500;
+}
+
 /* Narrow screens can't spare 15em for navigation, so it becomes a scrolling strip of
    chips above the content instead. */
 @media (max-width: 62em) {

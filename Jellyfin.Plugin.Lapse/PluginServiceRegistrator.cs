@@ -41,6 +41,8 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddSingleton<SubtitleShifter>();
         serviceCollection.AddSingleton<SubtitleConverter>();
         serviceCollection.AddSingleton<SubtitleExtractor>();
+        serviceCollection.AddSingleton<SubtitleRemuxer>();
+        serviceCollection.AddSingleton<FontInstaller>();
         serviceCollection.AddSingleton<SyncQueueManager>();
 
         serviceCollection.AddSingleton<SeriesSyncService>();

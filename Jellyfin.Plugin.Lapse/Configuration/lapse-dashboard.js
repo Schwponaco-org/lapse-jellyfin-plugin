@@ -2845,6 +2845,18 @@
         view.querySelector('#lapseDefaultTargetLanguage').value = currentSettings.TranslationDefaultTargetLanguage || '';
         view.querySelector('#lapseDefaultSourceLanguage').value = currentSettings.TranslationDefaultSourceLanguage || '';
 
+        view.querySelector('#lapseStyleFontName').value = currentSettings.SubtitleFontName || 'OpenDyslexic';
+        view.querySelector('#lapseStyleFontSize').value = currentSettings.SubtitleFontSize || 78;
+        view.querySelector('#lapseStyleLetterSpacing').value =
+            currentSettings.SubtitleLetterSpacing === undefined ? 2 : currentSettings.SubtitleLetterSpacing;
+        view.querySelector('#lapseStyleOutline').value =
+            currentSettings.SubtitleOutline === undefined ? 3.5 : currentSettings.SubtitleOutline;
+        view.querySelector('#lapseStyleMarginV').value =
+            currentSettings.SubtitleMarginV === undefined ? 70 : currentSettings.SubtitleMarginV;
+        view.querySelector('#lapseStyleBold').checked = !!currentSettings.SubtitleBold;
+
+        updateReadableLabels(view);
+
         view.querySelector('#lapseSubToSubPlacement').value = currentSettings.SubToSubPlacement || 'ReferenceFolder';
         view.querySelector('#lapseSubToSubCustomFolder').value = currentSettings.SubToSubCustomFolder || '';
 
@@ -3017,6 +3029,63 @@
         return rgb + alpha.toString(16).padStart(2, '0').toUpperCase();
     }
 
+    // The sliders each show their own value, and the font section says whether the font
+    // the style names is actually somewhere the player can find it - a style asking for a
+    // font that isn't installed still renders, just in something else.
+    function updateReadableLabels(view) {
+        view.querySelector('#lapseStyleFontSizeValue').textContent =
+            view.querySelector('#lapseStyleFontSize').value;
+        view.querySelector('#lapseStyleLetterSpacingValue').textContent =
+            view.querySelector('#lapseStyleLetterSpacing').value;
+        view.querySelector('#lapseStyleOutlineValue').textContent =
+            view.querySelector('#lapseStyleOutline').value;
+        view.querySelector('#lapseStyleMarginVValue').textContent =
+            view.querySelector('#lapseStyleMarginV').value;
+    }
+
+    function renderFontStatus(view, status) {
+        var strip = view.querySelector('#lapseFontStatus');
+
+        if (!status) {
+            strip.textContent = 'Could not read the server\'s font settings.';
+            return;
+        }
+
+        if (status.Error) {
+            strip.textContent = status.Error;
+            return;
+        }
+
+        var parts = [];
+
+        if (status.DyslexicInstalled) {
+            parts.push('OpenDyslexic is installed.');
+        } else {
+            parts.push('OpenDyslexic is not installed yet.');
+        }
+
+        if (!status.FallbackFontEnabled) {
+            parts.push('The server\'s fallback font setting is off, so nothing in the font folder is used. ' +
+                'Installing below turns it on.');
+        }
+
+        parts.push('Font folder: ' + status.FolderPath);
+
+        if (status.Fonts && status.Fonts.length) {
+            parts.push('Installed: ' + status.Fonts.join(', ') + '.');
+        }
+
+        strip.textContent = parts.join(' ');
+    }
+
+    function refreshFontStatus(view) {
+        return lapseGet('Lapse/Fonts').then(function (status) {
+            renderFontStatus(view, status);
+        }).catch(function () {
+            renderFontStatus(view, null);
+        });
+    }
+
     function currentAppearance(view) {
         return {
             Enabled: view.querySelector('#lapseAppearanceEnabled').checked,
@@ -3120,6 +3189,12 @@
             TranslationIncludeMetadataHeader: view.querySelector('#lapseMetadataHeader').checked,
             TranslationDefaultTargetLanguage: view.querySelector('#lapseDefaultTargetLanguage').value.trim() || null,
             TranslationDefaultSourceLanguage: view.querySelector('#lapseDefaultSourceLanguage').value.trim() || null,
+            SubtitleFontName: view.querySelector('#lapseStyleFontName').value.trim() || 'OpenDyslexic',
+            SubtitleFontSize: parseInt(view.querySelector('#lapseStyleFontSize').value, 10) || 78,
+            SubtitleLetterSpacing: parseFloat(view.querySelector('#lapseStyleLetterSpacing').value) || 0,
+            SubtitleOutline: parseFloat(view.querySelector('#lapseStyleOutline').value) || 0,
+            SubtitleMarginV: parseInt(view.querySelector('#lapseStyleMarginV').value, 10) || 0,
+            SubtitleBold: view.querySelector('#lapseStyleBold').checked,
             SubtitleAppearance: currentAppearance(view),
             Engines: []
         };
@@ -3397,6 +3472,28 @@
         view.querySelector('#btnResetAppearance').addEventListener('click', function () {
             resetAppearance(view);
         });
+        view.querySelector('#btnSaveReadable').addEventListener('click', function () {
+            saveSettings(view, 'Readable subtitle style saved.');
+        });
+        view.querySelector('#btnInstallDyslexicFont').addEventListener('click', function () {
+            var strip = view.querySelector('#lapseFontStatus');
+            strip.textContent = 'Downloading OpenDyslexic...';
+
+            lapsePost('Lapse/Fonts/InstallDyslexic').then(function (status) {
+                renderFontStatus(view, status);
+            }).catch(function (err) {
+                strip.textContent = 'Could not install the font: ' + err.message;
+            });
+        });
+
+        ['#lapseStyleFontSize', '#lapseStyleLetterSpacing', '#lapseStyleOutline', '#lapseStyleMarginV']
+            .forEach(function (selector) {
+                view.querySelector(selector).addEventListener('input', function () {
+                    updateReadableLabels(view);
+                });
+            });
+
+        refreshFontStatus(view);
         view.querySelector('#btnNewArrToken').addEventListener('click', function () {
             lapsePost('Lapse/Webhook/Arr/Token').then(function (result) {
                 if (currentSettings) {

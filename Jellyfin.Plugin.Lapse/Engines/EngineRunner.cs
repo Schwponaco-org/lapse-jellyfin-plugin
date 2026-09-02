@@ -377,7 +377,7 @@ public class EngineRunner
 
             try
             {
-                await _converter.ConvertAsync(subtitlePath, convertedInput, cancellationToken).ConfigureAwait(false);
+                await _converter.ConvertAsync(subtitlePath, convertedInput, cancellationToken: cancellationToken).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is NotSupportedException or InvalidDataException or IOException or TimeoutException)
             {
@@ -553,7 +553,7 @@ public class EngineRunner
                 // The engine wrote in the format it was given; the caller asked for a
                 // different one. Converting on the way out means one file lands, in the
                 // format that was asked for, rather than a synced file plus a stray copy.
-                await _converter.ConvertAsync(workPath, destination, cancellationToken).ConfigureAwait(false);
+                await _converter.ConvertAsync(workPath, destination, cancellationToken: cancellationToken).ConfigureAwait(false);
             }
             else
             {
