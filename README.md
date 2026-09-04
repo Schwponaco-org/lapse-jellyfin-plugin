@@ -45,7 +45,7 @@ Elsewhere in the dashboard:
 
 ### Subtitle formats
 
-LAPSE reads and writes `.srt`, `.ass`, `.ssa`, `.vtt`, `.sub` (MicroDVD), `.sup` (PGS), `.sbv`, `.idx`/`.sub` (VobSub), `.smi`, `.ttml` and `.dfxp`, and writes each one back in the format it read. Picture-based subtitles (PGS, VobSub) have no text to work with, but their timing still gets moved. alass and ffsubsync only take `.srt`, `.ass`, `.ssa` and `.vtt`; anything else is converted to `.srt` automatically when one of those is the active engine.
+LAPSE reads and writes `.srt`, `.ass`, `.ssa`, `.vtt`, `.sub` (MicroDVD), `.sup` (PGS), `.sbv`, `.idx`+`.sub` (VobSub, as a pair), `.smi`, `.ttml` and `.dfxp`, and writes each one back in the format it read. Picture-based subtitles (PGS, VobSub) have no text to work with, but their timing still gets moved. alass and ffsubsync only take `.srt`, `.ass`, `.ssa` and `.vtt`; anything else is converted to `.srt` automatically when one of those is the active engine.
 
 ## Engines
 
