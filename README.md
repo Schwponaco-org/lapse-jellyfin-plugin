@@ -6,7 +6,7 @@
 
 Subtitles that show up late, drift out over the runtime, or belong to a different cut of the film. LAPSE listens to the audio, works out where the speech actually is, and moves the subtitle to match. Press Sync on an item and it sorts itself out.
 
-This repo is the Jellyfin plugin. The actual syncing is done by a separate program called the engine, which the plugin downloads for you on first run. Three engines are supported and you only need one.
+This repo is the Jellyfin plugin. The actual syncing is done by a separate program called the engine, which the plugin downloads for you on first run. Three engines are supported; you only need one.
 
 ## Installing
 
