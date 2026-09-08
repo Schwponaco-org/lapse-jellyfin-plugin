@@ -18,7 +18,7 @@ https://raw.githubusercontent.com/rs-jensen/lapse-jellyfin-plugin/main/manifest.
 
 Find LAPSE in the **Catalog** tab, install it, and restart Jellyfin.
 
-Open the plugin from **Dashboard > Plugins > LAPSE** and install an engine from the **Engines** tab (or the Install button a fresh install shows you). A fresh install has no engine on disk and cannot sync anything until you do this.
+Open the plugin from **Dashboard > Plugins > LAPSE** and install an engine from the **Engines** tab (or the Install button a fresh install shows). A fresh install has no engine on disk and cannot sync anything until you do this.
 
 Requires Jellyfin 10.11.11 or newer.
 
