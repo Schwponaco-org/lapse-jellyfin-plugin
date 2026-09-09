@@ -36,7 +36,7 @@ Every film, episode and loose video gets these entries in its three dot menu:
 
 Elsewhere in the dashboard:
 
-- **Sync status, Bulk sync, Subtitle to subtitle** - a searchable list of every syncable item, a page to sync a whole library or folder at once, and a way to line up two subtitle files directly without a library item involved. An item counts as synced once its subtitle files have been synced; tracks still inside the video file are left out of that unless you ask for them, since nothing automatic touches those.
+- **Sync status, Bulk sync, Subtitle to subtitle** - a searchable list of every syncable item, a page to sync a whole library or folder at once, and a page to line up two subtitle files directly without a library item involved. An item counts as synced once its subtitle files have been synced; tracks still inside the video file are left out of that unless you ask for them, since nothing automatic touches those.
 - **Stop** - any running job, whether it is a whole library, a series or a scheduled run, can be stopped from the progress strip on the dashboard or from the progress toast wherever it was started.
 - **Automation** - libraries can pick up new items automatically or sync on a schedule, and unattended runs can sync, convert, translate, or react to a Radarr/Sonarr import webhook. Everything here is off by default; pressing a button yourself always works regardless.
 - **Access control** - the menu entries above are admin only by default, but can be opened up to specific users or everyone signed in.
