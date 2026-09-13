@@ -1,7 +1,7 @@
 ---
 name: "LAPSE"
 guid: "486090e1-ca92-46e1-8549-9f6bb914a1d0"
-version: "1.5.5.0"
+version: "1.5.6.0"
 targetAbi: "10.11.0.0"
 framework: "net9.0"
 overview: "Sync subtitles to audio (or subtitle to subtitle) using the LAPSE engine. Open Settings after installing to set it up."
@@ -21,27 +21,35 @@ owner: "rs-jensen"
 artifacts:
 - "Jellyfin.Plugin.Lapse.dll"
 changelog: >
-  Subtitle tracks living inside a video file can now be pulled out as ordinary
-  subtitle files from a new "Extract Embedded Subtitles" entry in the item
-  menu. Removing the tracks from the video afterwards, and replacing the
-  original video with the rebuilt one, are two further opt-ins on the same
-  dialog, so the safe answer stays the default. Nothing is re-encoded, so the
-  picture and sound come out identical, and a track that could not be saved as
-  a file first (PGS, VobSub) is never dropped.
+  Readable Subtitles now fits its styling to the script the subtitle is
+  actually in, instead of assuming Latin. OpenDyslexic has no Arabic, Hebrew,
+  Thai or CJK glyphs at all, so those get a configurable fallback font
+  instead and keep the larger text, heavier outline and margin; letter
+  spacing is dropped where it would pull joined-up letters apart or separate
+  a stacked mark from its base; and Arabic and Hebrew are written right to
+  left. The dominant script is worked out by counting letters in the
+  dialogue, so a subtitle with the odd English name in it is still read
+  correctly.
 
-  A new "Readable Subtitles" entry writes a copy of a subtitle with a
-  dyslexia-friendly font, larger text and wider letter spacing set inside the
-  file rather than in a client setting. The dashboard can install OpenDyslexic
-  into Jellyfin's fallback font folder and turn the server's fallback font
-  setting on.
+  The dialog now ticks individual subtitles rather than restyling whatever
+  was selected, and by default writes the readable version beside the
+  original as a second track rather than over it, so one person's readable
+  subtitle no longer takes everyone else's away on a shared library.
+  Replacing is still offered, but the original is kept as a backup, and
+  "Back to normal" in the same dialog undoes either kind - deleting the
+  copies it made, or restoring what it replaced. Automation can now write
+  readable copies unattended, off by default, either adding them beside
+  every subtitle a run touches or replacing them.
 
-  Syncing the same embedded track more than once no longer leaves a pile of
-  duplicate subtitle files behind. The extracted file now has one name per
-  track and is reused, which also means an overwrite output mode has something
-  of its own to overwrite. The sync dialog now says so when the chosen track is
-  still inside the video, since no output mode can write back into it.
+  Subtitle appearance during playback can now be set per user rather than
+  server-wide, from a new "Subtitle settings" entry in the player's own
+  subtitle menu: size, letter spacing, colour, background and font,
+  including any font installed on the server. It follows the account onto
+  every device and changes nothing for anyone else sharing the library. The
+  dashboard's own appearance settings remain the starting point for anybody
+  who hasn't set their own.
 
-  Automatic translation through Lingarr no longer fails with HTTP 500. The
-  unattended path never set a source language, so it sent "auto", which Lingarr
-  validates as a culture and rejects. It now uses the configured default and
-  falls back to the subtitle's own filename language tag.
+  The subtitle format list now says which of the three formats sharing the
+  .sub extension - MicroDVD, MPL2 or SubViewer 2 - a file actually is, since
+  the extension alone doesn't say, and only one of the three needs a frame
+  rate to make sense of its numbers.
