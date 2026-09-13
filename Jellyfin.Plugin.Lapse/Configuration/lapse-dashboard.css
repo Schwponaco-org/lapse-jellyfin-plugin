@@ -743,6 +743,59 @@
     font-size: .92em;
 }
 
+/* The three formats that share the .sub extension: what each one looks like inside, and
+   whether it needs a frame rate. Same grid idea as the format lists above, stacking on a
+   narrow screen rather than squeezing three columns into a phone. */
+.lapseSubKinds {
+    display: grid;
+    grid-template-columns: auto auto 1fr;
+    gap: .35em .9em;
+    align-items: baseline;
+    margin-top: .5em;
+}
+
+.lapseSubKindHead {
+    font-size: .82em;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    opacity: .65;
+}
+
+.lapseSubKindName {
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.lapseSubKindShape code {
+    display: inline-block;
+    padding: .1em .4em;
+    border-radius: .25em;
+    background: rgba(127, 127, 127, .18);
+    font-size: .92em;
+}
+
+@media (max-width: 40em) {
+    .lapseSubKinds {
+        grid-template-columns: 1fr;
+        gap: .15em;
+    }
+
+    /* The column headings only mean anything next to their column, so they go and the one
+       answer that reads as a bare "No" on its own gets its question back instead. */
+    .lapseSubKindHead {
+        display: none;
+    }
+
+    .lapseSubKindFps::before {
+        content: "Needs a frame rate: ";
+        opacity: .65;
+    }
+
+    .lapseSubKindName {
+        margin-top: .5em;
+    }
+}
+
 /* --- engine version next to the name --- */
 
 .lapseVersionBadge {

@@ -45,7 +45,17 @@ Elsewhere in the dashboard:
 
 ### Subtitle formats
 
-LAPSE reads and writes `.srt`, `.ass`, `.ssa`, `.vtt`, `.sub` (MicroDVD), `.sup` (PGS), `.sbv`, `.idx`+`.sub` (VobSub, as a pair), `.smi`, `.ttml` and `.dfxp`, and writes each one back in the format it read. Picture-based subtitles (PGS, VobSub) have no text to work with, but their timing still gets moved. alass and ffsubsync only take `.srt`, `.ass`, `.ssa` and `.vtt`; anything else is converted to `.srt` automatically when one of those is the active engine.
+Subtitles: `.srt`, `.ass`, `.ssa`, `.vtt`, `.sub` (MicroDVD, MPL2 and SubViewer 2), `.mpl2`, `.sup` (PGS), `.sbv`, `.idx` (VobSub, point it at the `.idx` file), `.smi`, `.ttml`, `.dfxp`. Each one is written back in the format it was read in.
+
+Three formats share `.sub` and the name says nothing about which one you have, so LAPSE reads the file instead:
+
+| | Looks like | Needs a frame rate |
+|---|---|---|
+| MicroDVD | `{450}{487}text` | Yes, frames mean nothing without one |
+| MPL2 | `[180][195]text` | No, the numbers are tenths of a second |
+| SubViewer 2 | `00:03:00.00,00:03:01.50` on its own line | No |
+
+Picture-based subtitles (PGS, VobSub) have no text to work with, but their timing still gets moved. alass and ffsubsync only take `.srt`, `.ass`, `.ssa` and `.vtt`; anything else is converted to `.srt` automatically when one of those is the active engine.
 
 ## Engines
 

@@ -886,10 +886,36 @@
             '<p>Each engine writes a file back in the format it read it in. Anything the engine ' +
             'in use cannot read is converted to .srt first and synced as that, so nothing is ' +
             'turned away for its format alone.</p>' +
-            '<p>.sup (PGS) and .idx (VobSub) are pictures of text rather than text. LAPSE can ' +
-            'still move their timing, because timing is timing, but converting, translating and ' +
-            'shifting by hand all need words and cannot touch them. Those need OCR first, with ' +
-            'something like Subtitle Edit.</p>';
+            '<p>.sup (PGS) and .idx (VobSub, point it at the .idx file) are pictures of text ' +
+            'rather than text. LAPSE can still move their timing, because timing is timing, but ' +
+            'converting, translating and shifting by hand all need words and cannot touch them. ' +
+            'Those need OCR first, with something like Subtitle Edit.</p>' +
+            subFormatsHtml();
+    }
+
+    // Three formats share the .sub extension and the name says nothing about which one you
+    // have, so LAPSE reads the file instead. Worth spelling out, because it's the one place
+    // where two files with the same extension behave differently - and where one of them
+    // needs a frame rate before its numbers mean anything.
+    function subFormatsHtml() {
+        var kinds = [
+            ['MicroDVD', '{450}{487}text', 'Yes, frames mean nothing without one'],
+            ['MPL2', '[180][195]text', 'No, the numbers are tenths of a second'],
+            ['SubViewer 2', '00:03:00.00,00:03:01.50 on its own line', 'No']
+        ];
+
+        return '<p>Three formats share .sub and the name says nothing about which one you have, ' +
+            'so LAPSE reads the file instead:</p>' +
+            '<div class="lapseSubKinds">' +
+            '<div class="lapseSubKindHead"></div>' +
+            '<div class="lapseSubKindHead">Looks like</div>' +
+            '<div class="lapseSubKindHead">Needs a frame rate</div>' +
+            kinds.map(function (kind) {
+                return '<div class="lapseSubKindName">' + escapeHtml(kind[0]) + '</div>' +
+                    '<div class="lapseSubKindShape"><code>' + escapeHtml(kind[1]) + '</code></div>' +
+                    '<div class="lapseSubKindFps">' + escapeHtml(kind[2]) + '</div>';
+            }).join('') +
+            '</div>';
     }
 
     // Anything worth knowing about running an engine outside Jellyfin. Only LAPSE has one
