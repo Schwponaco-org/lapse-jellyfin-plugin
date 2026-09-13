@@ -64,6 +64,7 @@ public class LapseController : ControllerBase
     private readonly OpenSubtitlesService _openSubtitles;
     private readonly ArrWebhookService _arrWebhookService;
     private readonly SyncHistoryService _historyService;
+    private readonly ReadableSubtitleService _readable;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="LapseController"/> class.
@@ -88,6 +89,7 @@ public class LapseController : ControllerBase
     /// <param name="openSubtitles">Fetches a subtitle for an item that has none.</param>
     /// <param name="arrWebhookService">Turns Radarr/Sonarr imports into syncs.</param>
     /// <param name="historyService">Puts a sync back the way it was.</param>
+    /// <param name="readable">Writes readable copies of subtitles, and puts them back.</param>
     public LapseController(
         ILibraryManager libraryManager,
         IUserManager userManager,
@@ -108,7 +110,8 @@ public class LapseController : ControllerBase
         SeriesSyncService seriesSyncService,
         OpenSubtitlesService openSubtitles,
         ArrWebhookService arrWebhookService,
-        SyncHistoryService historyService)
+        SyncHistoryService historyService,
+        ReadableSubtitleService readable)
     {
         _libraryManager = libraryManager;
         _userManager = userManager;
@@ -130,6 +133,7 @@ public class LapseController : ControllerBase
         _openSubtitles = openSubtitles;
         _arrWebhookService = arrWebhookService;
         _historyService = historyService;
+        _readable = readable;
     }
 
     // The role name Jellyfin puts in the token for an administrator. Its own constant
@@ -1448,6 +1452,8 @@ public class LapseController : ControllerBase
             TranslationDefaultTargetLanguage = config.TranslationDefaultTargetLanguage,
             TranslationDefaultSourceLanguage = config.TranslationDefaultSourceLanguage,
             SubtitleFontName = config.SubtitleFontName,
+            SubtitleNonLatinFontName = config.SubtitleNonLatinFontName,
+            ReadableAutomation = config.ReadableAutomation,
             SubtitleFontSize = config.SubtitleFontSize,
             SubtitleLetterSpacing = config.SubtitleLetterSpacing,
             SubtitleBold = config.SubtitleBold,
@@ -1484,15 +1490,105 @@ public class LapseController : ControllerBase
     }
 
     /// <summary>
-    /// Gets just the subtitle appearance settings. Separate from the rest because the
-    /// injected script needs these on every page load for any signed in user, not only
-    /// for an admin sitting on the dashboard.
+    /// Gets the subtitle appearance settings that apply to the caller: their own if they
+    /// have set any, and the server-wide ones otherwise. Separate from the rest of the
+    /// settings because the injected script needs these on every page load for any signed
+    /// in user, not only for an admin sitting on the dashboard.
     /// </summary>
     /// <returns>The appearance settings.</returns>
     [HttpGet("Lapse/Appearance")]
     public ActionResult<SubtitleAppearance> GetAppearance()
     {
-        return Plugin.Instance!.Configuration.SubtitleAppearance;
+        return FindUserAppearance()?.Appearance ?? Plugin.Instance!.Configuration.SubtitleAppearance;
+    }
+
+    /// <summary>
+    /// Saves the caller's own subtitle appearance, which from then on overrides the
+    /// server-wide one for them and nobody else.
+    ///
+    /// This is what the subtitle menu writes to during playback. It needs no admin rights
+    /// and touches nothing outside the calling user's own settings, which is the point:
+    /// on a shared library, someone who needs large text in a dyslexia-friendly font can
+    /// set it for themselves without changing what anyone else sees.
+    /// </summary>
+    /// <param name="appearance">The settings to keep.</param>
+    /// <returns>The settings as they were saved.</returns>
+    [HttpPost("Lapse/Appearance/Mine")]
+    public ActionResult<SubtitleAppearance> SaveMyAppearance([FromBody] SubtitleAppearance appearance)
+    {
+        if (appearance is null)
+        {
+            return BadRequest("A request body is required");
+        }
+
+        var user = GetCallingUser();
+        if (user is null)
+        {
+            return Unauthorized();
+        }
+
+        var config = Plugin.Instance!.Configuration;
+        var id = user.Id.ToString("N", CultureInfo.InvariantCulture);
+        var existing = config.UserSubtitleAppearances.Find(a => string.Equals(a.UserId, id, StringComparison.OrdinalIgnoreCase));
+
+        if (existing is null)
+        {
+            existing = new UserSubtitleAppearance { UserId = id };
+            config.UserSubtitleAppearances.Add(existing);
+        }
+
+        existing.Appearance = new SubtitleAppearance
+        {
+            Enabled = appearance.Enabled,
+            FontSizePx = Math.Clamp(appearance.FontSizePx, 8, 200),
+            TextColor = NormalizeColor(appearance.TextColor, SubtitleAppearance.DefaultTextColor),
+            BackgroundColor = NormalizeColor(appearance.BackgroundColor, SubtitleAppearance.DefaultBackgroundColor),
+            BackgroundEnabled = appearance.BackgroundEnabled,
+            FontFamily = Blank(appearance.FontFamily),
+            LetterSpacingPx = Math.Clamp(appearance.LetterSpacingPx, 0, 20)
+        };
+
+        Plugin.Instance!.SaveConfiguration();
+        return existing.Appearance;
+    }
+
+    /// <summary>
+    /// Throws away the caller's own subtitle appearance, putting them back on whatever the
+    /// server-wide setting is.
+    /// </summary>
+    /// <returns>The settings that apply now.</returns>
+    [HttpPost("Lapse/Appearance/Mine/Reset")]
+    public ActionResult<SubtitleAppearance> ResetMyAppearance()
+    {
+        var user = GetCallingUser();
+        if (user is null)
+        {
+            return Unauthorized();
+        }
+
+        var config = Plugin.Instance!.Configuration;
+        var id = user.Id.ToString("N", CultureInfo.InvariantCulture);
+
+        if (config.UserSubtitleAppearances.RemoveAll(a => string.Equals(a.UserId, id, StringComparison.OrdinalIgnoreCase)) > 0)
+        {
+            Plugin.Instance!.SaveConfiguration();
+        }
+
+        return config.SubtitleAppearance;
+    }
+
+    private UserSubtitleAppearance? FindUserAppearance()
+    {
+        var user = GetCallingUser();
+        if (user is null)
+        {
+            return null;
+        }
+
+        var id = user.Id.ToString("N", CultureInfo.InvariantCulture);
+
+        return Plugin.Instance!.Configuration.UserSubtitleAppearances
+            .Find(a => string.Equals(a.UserId, id, StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>
@@ -1782,6 +1878,8 @@ public class LapseController : ControllerBase
         config.SubtitleFontName = string.IsNullOrWhiteSpace(settings.SubtitleFontName)
             ? SubtitleStyle.DyslexicFontName
             : settings.SubtitleFontName.Trim();
+        config.SubtitleNonLatinFontName = Blank(settings.SubtitleNonLatinFontName);
+        config.ReadableAutomation = settings.ReadableAutomation;
         config.SubtitleFontSize = Math.Clamp(settings.SubtitleFontSize, 8, 400);
         config.SubtitleLetterSpacing = Math.Clamp(settings.SubtitleLetterSpacing, 0, 20);
         config.SubtitleBold = settings.SubtitleBold;
@@ -2023,20 +2121,26 @@ public class LapseController : ControllerBase
     }
 
     /// <summary>
-    /// Writes a readable copy of one of an item's subtitles: the same cues, in ASS, with
-    /// the configured font, size and letter spacing set in the style.
+    /// Writes readable copies of the subtitles it's given: the same cues, in ASS, with the
+    /// configured font, size and letter spacing set in the style, fitted to whatever
+    /// writing system each one turns out to be in.
     ///
     /// Doing it in the file rather than in a client is the point. Jellyfin's own subtitle
     /// appearance settings are per client and per device, and most of its clients have no
     /// font picker at all, so there is no way to set a dyslexia-friendly font once and have
     /// it apply on the TV, the phone and the browser. A style written into the subtitle is
     /// read by every player that renders ASS, wherever it is playing.
+    ///
+    /// Only the subtitles named in the request are touched, and by default each one is
+    /// written as a second track rather than over the top of the first. A library is
+    /// usually shared, and one person's dyslexia-friendly Danish subtitle is no reason for
+    /// anybody else's English one to be rewritten.
     /// </summary>
-    /// <param name="request">Which subtitle.</param>
+    /// <param name="request">Which subtitles, and whether they replace the originals.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>What was written.</returns>
+    /// <returns>What was written, one entry per subtitle.</returns>
     [HttpPost("Lapse/Restyle")]
-    public async Task<ActionResult<RestyleResult>> Restyle(
+    public async Task<ActionResult<RestyleResponse>> Restyle(
         [FromBody] RestyleRequest request,
         CancellationToken cancellationToken)
     {
@@ -2045,9 +2149,18 @@ public class LapseController : ControllerBase
             return denied;
         }
 
-        if (request is null || string.IsNullOrWhiteSpace(request.SubtitlePath))
+        if (request is null)
         {
-            return BadRequest("A subtitle is required");
+            return BadRequest("A request body is required");
+        }
+
+        var wanted = request.SubtitlePaths.Count > 0
+            ? request.SubtitlePaths
+            : new List<string?> { request.SubtitlePath }.FindAll(p => !string.IsNullOrWhiteSpace(p)).ConvertAll(p => p!);
+
+        if (wanted.Count == 0)
+        {
+            return BadRequest("At least one subtitle is required");
         }
 
         var item = _libraryManager.GetItemById(request.ItemId);
@@ -2056,91 +2169,132 @@ public class LapseController : ControllerBase
             return NotFound("Item not found");
         }
 
-        var match = FindSubtitle(request.ItemId, request.SubtitlePath);
-        if (match is null)
-        {
-            return BadRequest("That subtitle doesn't belong to this item");
-        }
+        var response = new RestyleResponse();
 
-        if (!match.TextBased)
+        foreach (var path in wanted)
         {
-            return BadRequest("That's a picture based subtitle (PGS or VobSub). There are no characters in it to set a font on - it needs OCR first.");
-        }
+            var match = FindSubtitle(request.ItemId, path);
 
-        var (sourcePath, sourceError) = await ResolveToFileAsync(item, match, cancellationToken).ConfigureAwait(false);
-        if (sourcePath is null)
-        {
-            return BadRequest(sourceError ?? "Could not get that subtitle out of the video file.");
-        }
+            if (match is null)
+            {
+                response.Files.Add(new RestyleResult
+                {
+                    SourcePath = path,
+                    Error = "That subtitle doesn't belong to this item"
+                });
+                continue;
+            }
 
-        var config = Plugin.Instance!.Configuration;
-        var style = new SubtitleStyle
-        {
-            FontName = config.SubtitleFontName,
-            FontSize = config.SubtitleFontSize,
-            LetterSpacing = config.SubtitleLetterSpacing,
-            Bold = config.SubtitleBold,
-            Outline = config.SubtitleOutline,
-            MarginV = config.SubtitleMarginV
-        };
+            if (!match.TextBased)
+            {
+                response.Files.Add(new RestyleResult
+                {
+                    SourcePath = path,
+                    Error = "That's a picture based subtitle (PGS or VobSub). There are no characters in it to set a font on - it needs OCR first."
+                });
+                continue;
+            }
 
-        var destination = BuildRestyleDestination(sourcePath);
-        var result = new RestyleResult { OutputPath = destination, FontName = style.FontName };
+            var (sourcePath, sourceError) = await ResolveToFileAsync(item, match, cancellationToken).ConfigureAwait(false);
 
-        try
-        {
-            result.Cues = await _converter
-                .ConvertAsync(sourcePath, destination, style, cancellationToken)
+            if (sourcePath is null)
+            {
+                response.Files.Add(new RestyleResult
+                {
+                    SourcePath = path,
+                    Error = sourceError ?? "Could not get that subtitle out of the video file."
+                });
+                continue;
+            }
+
+            var result = await _readable
+                .MakeReadableAsync(item, sourcePath, request.ReplaceOriginal, match.IsEmbedded, cancellationToken)
                 .ConfigureAwait(false);
-        }
-        catch (Exception ex) when (ex is NotSupportedException or InvalidDataException or IOException or TimeoutException)
-        {
-            return BadRequest(ex.Message);
+
+            response.Files.Add(result);
         }
 
-        // Replacing only makes sense for a subtitle that was already a file. An embedded
-        // track was extracted to get here, so the file at sourcePath is one this request
-        // just made and the track is still in the video either way.
-        if (request.ReplaceOriginal && !match.IsEmbedded)
-        {
-            try
-            {
-                System.IO.File.Delete(sourcePath);
-                result.RemovedOriginal = true;
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                // The styled file is written, which is what was asked for. A leftover
-                // original is worth reporting as such rather than as a failure.
-                _ = ex;
-            }
-        }
-
-        // A style naming a font the renderer can't find still renders - in something else.
-        // Saying so is the difference between "it didn't work" and "install the font".
-        var fonts = _fontInstaller.GetStatus();
-        result.FontAvailable = fonts.FallbackFontEnabled
-            && fonts.Fonts.Exists(f => f.StartsWith(style.FontName, StringComparison.OrdinalIgnoreCase));
-
-        result.Success = true;
-        return result;
+        response.Success = response.Files.Exists(f => f.Success);
+        return response;
     }
 
-    // Sits beside the subtitle it came from as another track, named so Jellyfin still
-    // reads the language off it. Always .ass: it is the only one of the four formats with
-    // anywhere to put a font.
-    private static string BuildRestyleDestination(string sourcePath)
+    /// <summary>
+    /// Puts readable subtitles back the way they were: a copy is deleted, and a subtitle
+    /// that was replaced is restored from the backup taken at the time.
+    ///
+    /// The counterpart to <see cref="Restyle"/>, and the reason replacing is safe to
+    /// offer at all. Someone who tries the readable styling and doesn't get on with it, or
+    /// who set it for a household that has since changed its mind, gets the library back
+    /// the way it was without going near a shell.
+    /// </summary>
+    /// <param name="request">Which item, and which subtitle - or all of them.</param>
+    /// <returns>What was put back.</returns>
+    [HttpPost("Lapse/Restyle/Revert")]
+    public ActionResult<RestyleRevertResponse> RevertRestyle([FromBody] RestyleRevertRequest request)
     {
-        var directory = System.IO.Path.GetDirectoryName(sourcePath) ?? string.Empty;
-        var stem = System.IO.Path.GetFileNameWithoutExtension(sourcePath);
-
-        // Restyling something already restyled replaces it rather than stacking the tag.
-        if (stem.EndsWith(".readable", StringComparison.OrdinalIgnoreCase))
+        if (CheckSubtitleAccess() is { } denied)
         {
-            stem = stem[..^".readable".Length];
+            return denied;
         }
 
-        return System.IO.Path.Combine(directory, stem + ".readable.ass");
+        if (request is null)
+        {
+            return BadRequest("A request body is required");
+        }
+
+        var item = _libraryManager.GetItemById(request.ItemId);
+        if (item is null)
+        {
+            return NotFound("Item not found");
+        }
+
+        var subtitles = _subtitleLocator.GetExternalSubtitles(item);
+        var response = new RestyleRevertResponse();
+
+        var targets = string.IsNullOrWhiteSpace(request.SubtitlePath)
+            ? ReadableSubtitleService.FindReadable(item, subtitles)
+            : new List<string> { request.SubtitlePath };
+
+        foreach (var target in targets)
+        {
+            // Same rule as everywhere else: only act on a file that belongs to this item.
+            // A readable subtitle the library hasn't rescanned yet won't be listed, so a
+            // path the plugin itself found beside the video counts too.
+            var known = subtitles.Exists(s => string.Equals(s.Path, target, StringComparison.Ordinal))
+                || IsBesideItem(item, target);
+
+            if (!known)
+            {
+                response.Files.Add(new RestyleRevertItem
+                {
+                    Path = target,
+                    Error = "That subtitle doesn't belong to this item"
+                });
+                continue;
+            }
+
+            response.Files.Add(_readable.Revert(target));
+        }
+
+        response.Success = response.Files.Exists(f => f.Success);
+        return response;
+    }
+
+    // Sits in the same folder as the item's video and is named after it, which is what
+    // every subtitle the plugin writes does.
+    private static bool IsBesideItem(BaseItem item, string path)
+    {
+        if (string.IsNullOrEmpty(item.Path))
+        {
+            return false;
+        }
+
+        var folder = System.IO.Path.GetDirectoryName(item.Path);
+        var stem = System.IO.Path.GetFileNameWithoutExtension(item.Path);
+
+        return folder is not null
+            && string.Equals(System.IO.Path.GetDirectoryName(path), folder, StringComparison.Ordinal)
+            && System.IO.Path.GetFileName(path).StartsWith(stem, StringComparison.Ordinal);
     }
 
     /// <summary>

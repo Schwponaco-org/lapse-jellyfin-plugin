@@ -32,6 +32,28 @@ internal sealed class SubtitleCue
 }
 
 /// <summary>
+/// What a styled conversion wrote, and what it found while writing it.
+/// </summary>
+public class StyledConversionResult
+{
+    /// <summary>
+    /// Gets or sets how many cues came across.
+    /// </summary>
+    public int Cues { get; set; }
+
+    /// <summary>
+    /// Gets or sets the writing system the dialogue turned out to be in.
+    /// </summary>
+    public SubtitleScript Script { get; set; }
+
+    /// <summary>
+    /// Gets or sets the style as it was actually written, after being fitted to the
+    /// script. Null when no style was asked for.
+    /// </summary>
+    public SubtitleStyle? Style { get; set; }
+}
+
+/// <summary>
 /// Turns a subtitle file into another format.
 ///
 /// The four formats the plugin works in - srt, vtt, ass and ssa - are read and written
@@ -47,6 +69,12 @@ internal sealed class SubtitleCue
 /// </summary>
 public partial class SubtitleConverter
 {
+    /// <summary>
+    /// The comment written into the header of a subtitle the plugin restyled, so one can
+    /// be told from an ordinary conversion later without guessing from the file name.
+    /// </summary>
+    public const string ReadableMarker = "; LAPSE-Readable: 1";
+
     // 00:01:23,456 / 00:01:23.456 / 0:01:23.45 - every timestamp shape the text formats use.
     [GeneratedRegex(@"(?<h>\d{1,3}):(?<m>\d{2}):(?<s>\d{2})[,.](?<f>\d{1,3})")]
     private static partial Regex TimestampRegex();
@@ -125,6 +153,42 @@ public partial class SubtitleConverter
         SubtitleStyle? style = null,
         CancellationToken cancellationToken = default)
     {
+        var result = await ConvertStyledAsync(sourcePath, destinationPath, style, null, cancellationToken)
+            .ConfigureAwait(false);
+
+        return result.Cues;
+    }
+
+    /// <summary>
+    /// Converts a subtitle file, fitting the style to the writing system the dialogue
+    /// turns out to be in.
+    ///
+    /// This is the restyling path. It reads the file first and only then decides what the
+    /// style line should say, because the answer depends on the text: a Latin-only
+    /// typeface is no use to an Arabic subtitle, letter spacing breaks a script whose
+    /// letters join, and a right to left script has to be marked as one in the file.
+    /// </summary>
+    /// <param name="sourcePath">The file to read.</param>
+    /// <param name="destinationPath">The file to write. Its extension decides the format.</param>
+    /// <param name="style">The style to start from, before it's fitted to the script.
+    /// Null writes the plain default style.</param>
+    /// <param name="nonLatinFontName">The font to fall back to when the style asks for one
+    /// that can't render the script.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>What was written, and what it turned out to be.</returns>
+    /// <exception cref="NotSupportedException">The source isn't a format that can be converted.</exception>
+    /// <exception cref="InvalidDataException">The source held no cues.</exception>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Security",
+        "CA3003:Review code for file path injection vulnerabilities",
+        Justification = "Callers hand in a subtitle the library lists for an item, and a destination derived from it with a known extension.")]
+    public async Task<StyledConversionResult> ConvertStyledAsync(
+        string sourcePath,
+        string destinationPath,
+        SubtitleStyle? style,
+        string? nonLatinFontName,
+        CancellationToken cancellationToken = default)
+    {
         if (GetConversionProblem(sourcePath) is { } problem)
         {
             throw new NotSupportedException(problem);
@@ -161,17 +225,28 @@ public partial class SubtitleConverter
                 throw new InvalidDataException($"No subtitle cues could be read out of {Path.GetFileName(sourcePath)}.");
             }
 
-            await File.WriteAllTextAsync(destinationPath, Write(cues, target, style), SubtitleEncoding.Utf8NoBom, cancellationToken)
+            // Only the dialogue decides the script. Cue numbers and timestamps are ASCII
+            // in every file, so reading them in would make every subtitle look Latin.
+            var script = SubtitleScripts.Detect(JoinDialogue(cues));
+            var fitted = style?.ForScript(script, nonLatinFontName);
+
+            await File.WriteAllTextAsync(destinationPath, Write(cues, target, fitted), SubtitleEncoding.Utf8NoBom, cancellationToken)
                 .ConfigureAwait(false);
 
             _logger.LogInformation(
-                "Converted {Source} to {Target} at {Destination} ({Count} cues)",
+                "Converted {Source} to {Target} at {Destination} ({Count} cues, {Script})",
                 Path.GetFileName(sourcePath),
                 target,
                 destinationPath,
-                cues.Count);
+                cues.Count,
+                SubtitleScripts.GetName(script));
 
-            return cues.Count;
+            return new StyledConversionResult
+            {
+                Cues = cues.Count,
+                Script = script,
+                Style = fitted
+            };
         }
         finally
         {
@@ -196,6 +271,30 @@ public partial class SubtitleConverter
     {
         var path = _mediaEncoder.EncoderPath;
         return !string.IsNullOrWhiteSpace(path) && File.Exists(path);
+    }
+
+    // Enough dialogue to tell one alphabet from another with room to spare. A film's worth
+    // of cues would answer the same question having read a hundred times as much.
+    private const int ScriptSampleChars = 20000;
+
+    private static string JoinDialogue(List<SubtitleCue> cues)
+    {
+        var builder = new StringBuilder();
+
+        foreach (var cue in cues)
+        {
+            foreach (var line in cue.Lines)
+            {
+                builder.Append(line).Append(' ');
+            }
+
+            if (builder.Length >= ScriptSampleChars)
+            {
+                break;
+            }
+        }
+
+        return builder.ToString();
     }
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage(
@@ -479,8 +578,17 @@ public partial class SubtitleConverter
         var fields = (style ?? new SubtitleStyle()).ToStyleFields(advanced);
 
         builder.Append("[Script Info]\n")
-            .Append("; Written by the LAPSE Jellyfin plugin\n")
-            .Append("ScriptType: ").Append(advanced ? "v4.00+" : "v4.00").Append('\n')
+            .Append("; Written by the LAPSE Jellyfin plugin\n");
+
+        // A file written with a style of its own was asked for by somebody pressing
+        // Readable Subtitles, as against an ordinary format conversion. Saying so in the
+        // file is what lets it be recognised later and put back.
+        if (style is not null)
+        {
+            builder.Append(ReadableMarker).Append('\n');
+        }
+
+        builder.Append("ScriptType: ").Append(advanced ? "v4.00+" : "v4.00").Append('\n')
             .Append("WrapStyle: 0\n")
             .Append("ScaledBorderAndShadow: yes\n")
             .Append("PlayResX: 1920\n")

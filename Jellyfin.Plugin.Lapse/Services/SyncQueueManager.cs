@@ -37,6 +37,7 @@ public class SyncQueueManager : IDisposable
     private readonly EngineRunner _runner;
     private readonly SubtitleConverter _converter;
     private readonly Translation.TranslationService _translationService;
+    private readonly ReadableSubtitleService _readable;
     private readonly ILogger<SyncQueueManager> _logger;
     private readonly object _lock = new();
     private readonly List<QueueItem> _items = new();
@@ -73,6 +74,7 @@ public class SyncQueueManager : IDisposable
     /// that ask for it.</param>
     /// <param name="translationService">Translates subtitles, when automatic translation
     /// is turned on.</param>
+    /// <param name="readable">Writes readable copies, when that automation is turned on.</param>
     /// <param name="logger">Logger.</param>
     public SyncQueueManager(
         ILibraryManager libraryManager,
@@ -82,6 +84,7 @@ public class SyncQueueManager : IDisposable
         EngineRunner runner,
         SubtitleConverter converter,
         Translation.TranslationService translationService,
+        ReadableSubtitleService readable,
         ILogger<SyncQueueManager> logger)
     {
         _libraryManager = libraryManager;
@@ -91,6 +94,7 @@ public class SyncQueueManager : IDisposable
         _runner = runner;
         _converter = converter;
         _translationService = translationService;
+        _readable = readable;
         _logger = logger;
     }
 
@@ -643,6 +647,7 @@ public class SyncQueueManager : IDisposable
                 // The whole job for this file was the conversion. Syncing is somebody
                 // else's press, or another run with a different action set.
                 await TranslateForAutomationAsync(item, workPath, cancellationToken).ConfigureAwait(false);
+                await MakeReadableForAutomationAsync(item, workPath, cancellationToken).ConfigureAwait(false);
                 continue;
             }
 
@@ -684,6 +689,10 @@ public class SyncQueueManager : IDisposable
                 // Translate what the sync produced rather than what it read, so the
                 // translation carries the corrected timings.
                 await TranslateForAutomationAsync(item, result.OutputPath ?? workPath, cancellationToken).ConfigureAwait(false);
+
+                // Same reasoning: the readable copy is made from the synced file, so it
+                // has the corrected timings rather than the ones the sync just fixed.
+                await MakeReadableForAutomationAsync(item, result.OutputPath ?? workPath, cancellationToken).ConfigureAwait(false);
             }
         }
 
@@ -841,6 +850,50 @@ public class SyncQueueManager : IDisposable
             // A translation that failed leaves the synced subtitle untouched, so this is
             // logged rather than being allowed to fail the item.
             _logger.LogWarning("Auto-translating {Subtitle} into {Language} failed: {Error}", subtitlePath, language, result.Error);
+        }
+    }
+
+    // Off unless an admin turned it on. When it is on, it either adds a readable track
+    // beside each subtitle or replaces it, which is the difference between giving the one
+    // person who needs it something to pick and changing what the whole household sees -
+    // so it's two settings rather than one switch.
+    private async Task MakeReadableForAutomationAsync(BaseItem item, string subtitlePath, CancellationToken cancellationToken)
+    {
+        var mode = Plugin.Instance?.Configuration.ReadableAutomation ?? ReadableAutomationMode.Off;
+
+        if (mode == ReadableAutomationMode.Off)
+        {
+            return;
+        }
+
+        if (!SubtitleFormats.IsTextBased(subtitlePath) || !File.Exists(subtitlePath))
+        {
+            return;
+        }
+
+        // Restyling a readable subtitle would only write it again under the same name on
+        // every run, and in replace mode would back up the styled file over the original.
+        if (ReadableSubtitleService.IsReadable(subtitlePath))
+        {
+            return;
+        }
+
+        var result = await _readable
+            .MakeReadableAsync(item, subtitlePath, mode == ReadableAutomationMode.Replace, wasEmbedded: false, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (result.Success)
+        {
+            _logger.LogInformation(
+                "Wrote a readable {Script} subtitle to {Path}",
+                result.Script,
+                result.OutputPath);
+        }
+        else
+        {
+            // A subtitle that couldn't be restyled is still a synced subtitle, so this is
+            // logged rather than allowed to fail the item.
+            _logger.LogWarning("Could not make {Path} readable: {Error}", subtitlePath, result.Error);
         }
     }
 

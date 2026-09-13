@@ -278,6 +278,16 @@ public class PluginSettings
     public string? SubtitleFontName { get; set; }
 
     /// <summary>
+    /// Gets or sets the font a restyled subtitle asks for when its text isn't Latin.
+    /// </summary>
+    public string? SubtitleNonLatinFontName { get; set; }
+
+    /// <summary>
+    /// Gets or sets what automatic runs do about readable subtitles.
+    /// </summary>
+    public ReadableAutomationMode ReadableAutomation { get; set; }
+
+    /// <summary>
     /// Gets or sets the font size a restyled subtitle uses, against a 1080-tall script.
     /// </summary>
     public int SubtitleFontSize { get; set; } = 78;

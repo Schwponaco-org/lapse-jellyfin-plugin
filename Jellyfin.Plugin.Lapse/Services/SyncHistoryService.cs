@@ -80,6 +80,8 @@ public class SyncHistoryService
                 : "There's nothing left to put back - the backup or the file it wrote has gone.";
         }
 
+        var restored = entry.OutputPath;
+
         try
         {
             if (entry.WroteNewFile)
@@ -89,9 +91,23 @@ public class SyncHistoryService
             }
             else
             {
-                File.Copy(entry.BackupPath!, entry.OutputPath!, overwrite: true);
+                // A backup is named after the file it was taken from, so that name is
+                // where it belongs - which isn't always the file that was written. Making
+                // a subtitle readable can replace a .srt with an .ass, and putting the
+                // original back then means restoring the .srt and removing the .ass.
+                var original = StripBackupSuffix(entry.BackupPath!) ?? entry.OutputPath!;
+
+                File.Copy(entry.BackupPath!, original, overwrite: true);
                 File.Delete(entry.BackupPath!);
-                _logger.LogInformation("Reverted a sync by restoring {Path}", entry.OutputPath);
+
+                if (!string.Equals(original, entry.OutputPath, StringComparison.Ordinal)
+                    && File.Exists(entry.OutputPath!))
+                {
+                    File.Delete(entry.OutputPath!);
+                }
+
+                _logger.LogInformation("Reverted by restoring {Path}", original);
+                restored = original;
             }
 
             entry.Reverted = true;
@@ -100,13 +116,28 @@ public class SyncHistoryService
 
             return entry.WroteNewFile
                 ? $"Deleted {Path.GetFileName(entry.OutputPath)}."
-                : $"Put the original {Path.GetFileName(entry.OutputPath)} back.";
+                : $"Put the original {Path.GetFileName(restored)} back.";
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             _logger.LogWarning(ex, "Could not revert the sync of {Path}", entry.OutputPath);
             return "Could not put it back: " + ex.Message;
         }
+    }
+
+    // Both suffixes the plugin appends when it copies a file out of the way before writing
+    // over it: an engine's .bak, and the readable restyle's own.
+    private static string? StripBackupSuffix(string backupPath)
+    {
+        foreach (var suffix in new[] { ".bak", ReadableSubtitleService.BackupExtension })
+        {
+            if (backupPath.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+            {
+                return backupPath[..^suffix.Length];
+            }
+        }
+
+        return null;
     }
 
     // The item's record still claims that subtitle is synced, which after a revert it
