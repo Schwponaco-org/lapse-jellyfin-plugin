@@ -63,6 +63,14 @@ public class SubtitleStyle
     public int MarginV { get; set; } = 60;
 
     /// <summary>
+    /// Gets or sets the ASS Encoding field. 1 leaves the reading direction to the
+    /// renderer, which is right for every left to right script; Arabic and Hebrew get
+    /// their charset number, which is what tells libass the paragraph runs the other way.
+    /// See <see cref="SubtitleScripts.GetAssEncoding"/>.
+    /// </summary>
+    public int Encoding { get; set; } = SubtitleScripts.AutoEncoding;
+
+    /// <summary>
     /// Gets the dyslexia-friendly preset: the installable typeface, a little larger than
     /// standard, with the tracking opened up and a heavier outline.
     /// </summary>
@@ -78,6 +86,69 @@ public class SubtitleStyle
     };
 
     /// <summary>
+    /// Returns this style adjusted for the writing system the subtitle is actually in.
+    ///
+    /// The readable preset is a set of decisions about the Latin alphabet, and three of
+    /// them are wrong elsewhere. A Latin-only typeface has no Arabic, Hebrew, Thai or CJK
+    /// glyphs in it, so asking for one gives a row of empty boxes. Letter spacing pulls
+    /// Arabic's joined letters apart and separates Thai and Indic marks from what they
+    /// belong to. And a right to left script has to say so in the file, or it renders
+    /// backwards.
+    ///
+    /// What survives is everything that helps regardless of script: the larger text, the
+    /// heavier outline and the margin.
+    /// </summary>
+    /// <param name="script">The script the subtitle's dialogue is in.</param>
+    /// <param name="nonLatinFontName">The font to use when the chosen one can't render
+    /// the script. Empty falls back to <see cref="DefaultFontName"/>, which every system
+    /// has something for.</param>
+    /// <returns>A copy of this style, fit for that script.</returns>
+    public SubtitleStyle ForScript(SubtitleScript script, string? nonLatinFontName = null)
+    {
+        var adapted = new SubtitleStyle
+        {
+            FontName = FontName,
+            FontSize = FontSize,
+            LetterSpacing = LetterSpacing,
+            Bold = Bold,
+            Outline = Outline,
+            MarginV = MarginV,
+            Encoding = SubtitleScripts.GetAssEncoding(script)
+        };
+
+        if (SubtitleScripts.RejectsLetterSpacing(script))
+        {
+            adapted.LetterSpacing = 0;
+        }
+
+        // Only a font known to be Latin-only gets swapped out. An admin who typed a font
+        // name of their own has said which font they want, and it may well be the one that
+        // covers their library's language - second-guessing that would be worse than
+        // leaving it alone.
+        if (!SubtitleScripts.IsLatinTypefaceEnough(script) && IsLatinOnlyFont(FontName))
+        {
+            adapted.FontName = string.IsNullOrWhiteSpace(nonLatinFontName)
+                ? DefaultFontName
+                : nonLatinFontName.Trim();
+        }
+
+        return adapted;
+    }
+
+    /// <summary>
+    /// Says whether a font name is one we know carries nothing but Latin. Only the font
+    /// the plugin installs itself is on that list, because it's the only one whose
+    /// coverage the plugin can be sure of.
+    /// </summary>
+    /// <param name="fontName">The font name.</param>
+    /// <returns>True when the font has no non-Latin glyphs.</returns>
+    public static bool IsLatinOnlyFont(string? fontName)
+    {
+        return fontName is not null
+            && fontName.Trim().StartsWith(DyslexicFontName, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
     /// Builds the comma separated body of a Style line, from the font name onwards, in the
     /// order the given format declared.
     /// </summary>
@@ -91,13 +162,14 @@ public class SubtitleStyle
         var bold = Bold ? "-1" : "0";
         var outline = Math.Clamp(Outline, 0, 20).ToString("0.#", CultureInfo.InvariantCulture);
         var margin = Math.Clamp(MarginV, 0, 500).ToString(CultureInfo.InvariantCulture);
+        var encoding = Math.Clamp(Encoding, 0, 255).ToString(CultureInfo.InvariantCulture);
 
         if (!advanced)
         {
             // V4: Fontname, Fontsize, PrimaryColour, SecondaryColour, TertiaryColour,
             // BackColour, Bold, Italic, BorderStyle, Outline, Shadow, Alignment, MarginL,
             // MarginR, MarginV, AlphaLevel, Encoding
-            return $"{font},{size},&H00FFFFFF,&H000000FF,&H00000000,&H00000000,{bold},0,1,{outline},1,2,60,60,{margin},0,1";
+            return $"{font},{size},&H00FFFFFF,&H000000FF,&H00000000,&H00000000,{bold},0,1,{outline},1,2,60,60,{margin},0,{encoding}";
         }
 
         var spacing = Math.Clamp(LetterSpacing, 0, 20).ToString("0.#", CultureInfo.InvariantCulture);
@@ -105,7 +177,7 @@ public class SubtitleStyle
         // V4+: Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour,
         // BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle,
         // BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-        return $"{font},{size},&H00FFFFFF,&H000000FF,&H00000000,&H00000000,{bold},0,0,0,100,100,{spacing},0,1,{outline},1,2,60,60,{margin},1";
+        return $"{font},{size},&H00FFFFFF,&H000000FF,&H00000000,&H00000000,{bold},0,0,0,100,100,{spacing},0,1,{outline},1,2,60,60,{margin},{encoding}";
     }
 
     // A comma or a newline in the font name would end the field early and shift every

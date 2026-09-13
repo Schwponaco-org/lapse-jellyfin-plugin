@@ -2846,6 +2846,8 @@
         view.querySelector('#lapseDefaultSourceLanguage').value = currentSettings.TranslationDefaultSourceLanguage || '';
 
         view.querySelector('#lapseStyleFontName').value = currentSettings.SubtitleFontName || 'OpenDyslexic';
+        view.querySelector('#lapseStyleNonLatinFontName').value = currentSettings.SubtitleNonLatinFontName || '';
+        view.querySelector('#lapseReadableAutomation').value = currentSettings.ReadableAutomation || 'Off';
         view.querySelector('#lapseStyleFontSize').value = currentSettings.SubtitleFontSize || 78;
         view.querySelector('#lapseStyleLetterSpacing').value =
             currentSettings.SubtitleLetterSpacing === undefined ? 2 : currentSettings.SubtitleLetterSpacing;
@@ -3190,6 +3192,8 @@
             TranslationDefaultTargetLanguage: view.querySelector('#lapseDefaultTargetLanguage').value.trim() || null,
             TranslationDefaultSourceLanguage: view.querySelector('#lapseDefaultSourceLanguage').value.trim() || null,
             SubtitleFontName: view.querySelector('#lapseStyleFontName').value.trim() || 'OpenDyslexic',
+            SubtitleNonLatinFontName: view.querySelector('#lapseStyleNonLatinFontName').value.trim() || null,
+            ReadableAutomation: view.querySelector('#lapseReadableAutomation').value,
             SubtitleFontSize: parseInt(view.querySelector('#lapseStyleFontSize').value, 10) || 78,
             SubtitleLetterSpacing: parseFloat(view.querySelector('#lapseStyleLetterSpacing').value) || 0,
             SubtitleOutline: parseFloat(view.querySelector('#lapseStyleOutline').value) || 0,

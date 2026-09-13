@@ -160,21 +160,89 @@
 
         style.textContent = buildAppearanceCss(appearance);
         stampAllSubtitleElements();
+        ensureChosenFontIsLoadable(appearance.FontFamily);
+    }
+
+    // The fonts installed on the server, read once and kept. Only needed when somebody has
+    // picked one, which most people won't have.
+    var installedFonts = null;
+
+    function loadInstalledFonts() {
+        if (installedFonts) {
+            return Promise.resolve(installedFonts);
+        }
+
+        return lapseGet('Lapse/Fonts').then(function (status) {
+            installedFonts = status || { Fonts: [] };
+            return installedFonts;
+        }).catch(function () {
+            return { Fonts: [] };
+        });
+    }
+
+    function ensureChosenFontIsLoadable(family) {
+        if (!family) {
+            return;
+        }
+
+        loadInstalledFonts().then(function (status) {
+            var match = (status.Fonts || []).filter(function (file) {
+                return familyNameFor(file).toLowerCase() === String(family).toLowerCase();
+            });
+
+            // Nothing matching means the font is expected to be on the device already -
+            // a system font somebody typed in - and the stylesheet asks for it by name
+            // without any of this.
+            if (match.length) {
+                ensureFontFaceLoaded(preferRegular(match));
+            }
+        });
+    }
+
+    // A family usually arrives as several files. The upright one is the one to register:
+    // the browser synthesises bold and italic from it, where registering the bold file
+    // would leave everything permanently bold.
+    function preferRegular(files) {
+        for (var i = 0; i < files.length; i++) {
+            if (/[-_]Regular\./i.test(files[i])) {
+                return files[i];
+            }
+        }
+
+        return files[0];
     }
 
     function backgroundOf(appearance) {
         return appearance.BackgroundEnabled ? (appearance.BackgroundColor || '#00000080') : 'transparent';
     }
 
+    function fontStackOf(appearance) {
+        // Always leave a fallback behind whatever was picked, so a glyph the chosen font
+        // hasn't got - an Arabic letter in OpenDyslexic, say - still draws instead of
+        // coming out as an empty box.
+        return appearance.FontFamily
+            ? '"' + appearance.FontFamily.replace(/["\\]/g, '') + '", sans-serif'
+            : '';
+    }
+
+    function spacingOf(appearance) {
+        return (appearance.LetterSpacingPx || 0) + 'px';
+    }
+
     function buildAppearanceCss(appearance) {
         var fontSize = (appearance.FontSizePx || 48) + 'px';
         var color = appearance.TextColor || '#FFFFFF';
         var background = backgroundOf(appearance);
+        var fontStack = fontStackOf(appearance);
+        var spacing = spacingOf(appearance);
+        var family = fontStack ? '  font-family: ' + fontStack + ' !important;' : '';
 
         return '' +
             SUBTITLE_SELECTORS.join(', ') + ' {' +
             '  font-size: ' + fontSize + ' !important;' +
             '  color: ' + color + ' !important;' +
+            '  letter-spacing: ' + spacing + ' !important;' +
+            family +
             '}' +
             '.videoSubtitlesInner, .videoSubtitles .videoSubtitlesInner {' +
             '  background-color: ' + background + ' !important;' +
@@ -185,7 +253,58 @@
             '  font-size: ' + fontSize + ';' +
             '  color: ' + color + ';' +
             '  background-color: ' + background + ';' +
+            '  letter-spacing: ' + spacing + ';' +
+            (fontStack ? '  font-family: ' + fontStack + ';' : '') +
             '}';
+    }
+
+    // A font in Jellyfin's fallback folder is on the server, not on the device, so the
+    // browser has to be told where to fetch it from before it can draw anything in it.
+    // The server already serves that folder for its own subtitle burn-in, which is what
+    // makes this a link rather than an upload.
+    function ensureFontFaceLoaded(fileName) {
+        if (!fileName) {
+            return;
+        }
+
+        var id = 'lapseSubtitleFontFace';
+        var style = document.getElementById(id);
+
+        if (style && style.getAttribute('data-lapse-font') === fileName) {
+            return;
+        }
+
+        if (!style) {
+            style = document.createElement('style');
+            style.id = id;
+            document.head.appendChild(style);
+        }
+
+        var family = familyNameFor(fileName);
+
+        // A stylesheet's url() carries no Authorization header, and that endpoint needs
+        // one, so the token goes in the query string - which is what the web client's own
+        // ASS renderer does with the same folder.
+        var url = ApiClient.getUrl('FallbackFont/Fonts/' + encodeURIComponent(fileName), {
+            api_key: ApiClient.accessToken()
+        });
+
+        style.setAttribute('data-lapse-font', fileName);
+        style.textContent =
+            '@font-face {' +
+            '  font-family: "' + family + '";' +
+            '  src: url("' + url + '");' +
+            '  font-display: swap;' +
+            '}';
+    }
+
+    // OpenDyslexic-Regular.otf is a file name; "OpenDyslexic" is what CSS asks for. The
+    // face suffixes are dropped so the regular, bold and italic files all land under one
+    // family and the browser picks between them the way it would locally.
+    function familyNameFor(fileName) {
+        return String(fileName)
+            .replace(/\.(otf|ttf|woff2?|woff)$/i, '')
+            .replace(/[-_](Regular|Bold|Italic|BoldItalic|Medium|Light)$/i, '');
     }
 
     function stampSubtitleElement(element) {
@@ -197,6 +316,14 @@
         element.setAttribute('data-lapse-styled', '1');
         element.style.setProperty('font-size', (appearance.FontSizePx || 48) + 'px', 'important');
         element.style.setProperty('color', appearance.TextColor || '#FFFFFF', 'important');
+        element.style.setProperty('letter-spacing', spacingOf(appearance), 'important');
+
+        var fontStack = fontStackOf(appearance);
+        if (fontStack) {
+            element.style.setProperty('font-family', fontStack, 'important');
+        } else {
+            element.style.removeProperty('font-family');
+        }
 
         // The background belongs on the inner element - putting it on the outer one paints
         // the whole width of the video rather than a box around the words.
@@ -214,6 +341,8 @@
             element.style.removeProperty('font-size');
             element.style.removeProperty('color');
             element.style.removeProperty('background-color');
+            element.style.removeProperty('letter-spacing');
+            element.style.removeProperty('font-family');
             element.removeAttribute('data-lapse-styled');
         });
     }
@@ -280,6 +409,34 @@
         }
 
         return null;
+    }
+
+    // Set when the subtitle button on the player's control bar is pressed, so the action
+    // sheet that opens a moment later can be recognised as the subtitle track list rather
+    // than any of the other sheets the same bar opens.
+    var pendingSubtitleMenu = 0;
+
+    function rememberSubtitleMenuFromClick(e) {
+        if (!e.target.closest) {
+            return;
+        }
+
+        var button = e.target.closest('.btnSubtitles, [data-action="subtitles"]');
+
+        // Older and newer jellyfin-web builds disagree about the class, but the icon has
+        // been the same throughout, so fall back to that.
+        if (!button) {
+            var icon = e.target.closest('.closed_caption');
+            button = icon ? icon.closest('button') : null;
+        }
+
+        if (button) {
+            pendingSubtitleMenu = Date.now();
+        }
+    }
+
+    function isSubtitleMenuOpening() {
+        return (Date.now() - pendingSubtitleMenu) < 1500;
     }
 
     function rememberCardContextFromClick(e) {
@@ -412,6 +569,17 @@
 
     function handleActionSheetOpened(sheet) {
         if (sheet.querySelector('.lapseSyncButton')) {
+            return;
+        }
+
+        // The subtitle list that opens from the player's own control bar. Adding the
+        // appearance entry here is the point of the whole per-user appearance: it puts
+        // the settings where somebody actually notices the subtitles are too small,
+        // which is while they're watching, rather than three menus into the dashboard
+        // where most people can't go at all.
+        if (isSubtitleMenuOpening()) {
+            pendingSubtitleMenu = 0;
+            addSubtitleSettingsButton(sheet);
             return;
         }
 
@@ -840,6 +1008,176 @@
         return written + '. ' + describeSyncOutcome(result.Sync);
     }
 
+    // --- "Subtitle settings", in the player's own subtitle menu ---
+    //
+    // Everything here is the calling user's own and is saved against their account, so it
+    // follows them from the TV to the phone without being set again, and changes nothing
+    // for anybody else sharing the library. That is the difference between this and the
+    // dashboard's appearance settings, which are the server-wide starting point.
+
+    var DYSLEXIC_PRESET = {
+        Enabled: true,
+        FontSizePx: 60,
+        LetterSpacingPx: 2,
+        FontFamily: 'OpenDyslexic',
+        TextColor: '#FFFFFF',
+        BackgroundColor: '#000000B3',
+        BackgroundEnabled: true
+    };
+
+    function addSubtitleSettingsButton(sheet) {
+        var scroller = sheet.querySelector('.actionSheetScroller') || sheet;
+
+        scroller.appendChild(makeMenuButton('lapse-subtitle-settings', 'Subtitle settings', 'text_format', function () {
+            openSubtitleSettingsDialog();
+        }));
+
+        log('added the subtitle settings entry to the player menu');
+    }
+
+    function openSubtitleSettingsDialog() {
+        Promise.all([
+            lapseGet('Lapse/Appearance'),
+            loadInstalledFonts()
+        ]).then(function (results) {
+            showSubtitleSettingsDialog(results[0] || {}, results[1] || { Fonts: [] });
+        }).catch(function (err) {
+            showLapseToast('Could not read the subtitle settings: ' + err.message);
+        });
+    }
+
+    function fontOptionsHtml(status, chosen) {
+        var families = [];
+
+        (status.Fonts || []).forEach(function (file) {
+            var family = familyNameFor(file);
+            if (families.indexOf(family) === -1) {
+                families.push(family);
+            }
+        });
+
+        // Whatever is already set stays in the list even if the font has since been
+        // removed from the server, so opening the dialog can't silently change it.
+        if (chosen && families.indexOf(chosen) === -1) {
+            families.push(chosen);
+        }
+
+        var options = '<option value="">The client\'s own font</option>';
+
+        families.forEach(function (family) {
+            options += '<option value="' + escapeHtml(family) + '"' +
+                (family === chosen ? ' selected' : '') + '>' + escapeHtml(family) + '</option>';
+        });
+
+        return options;
+    }
+
+    function showSubtitleSettingsDialog(appearance, fonts) {
+        var size = appearance.FontSizePx || 48;
+        var spacing = appearance.LetterSpacingPx || 0;
+        var note = (fonts.Fonts || []).length
+            ? ''
+            : '<div class="fieldDescription">No font has been installed on this server yet, so the list only offers the ' +
+              'client\'s own. An admin can add OpenDyslexic from the LAPSE dashboard under Subtitle appearance.</div>';
+
+        var overlay = openOverlay(
+            '<h3>Subtitle settings</h3>' +
+            '<div class="fieldDescription">Yours alone. These follow your account onto every device you sign in on, ' +
+            'and change nothing for anybody else using this server.</div>' +
+            '<label class="emby-checkbox-label lapseStackedCheck">' +
+            '  <input type="checkbox" is="emby-checkbox" id="lapseAppearanceEnabled"' + (appearance.Enabled ? ' checked' : '') + ' />' +
+            '  <span>Style subtitles during playback</span>' +
+            '</label>' +
+            '<div class="selectContainer">' +
+            '  <label class="selectLabel">Font</label>' +
+            '  <select is="emby-select" id="lapseAppearanceFont" class="emby-select-withcolor emby-select">' +
+            fontOptionsHtml(fonts, appearance.FontFamily || '') +
+            '  </select>' +
+            '</div>' +
+            note +
+            '<div class="inputContainer">' +
+            '  <label class="inputLabel inputLabelUnfocused">Text size: <span id="lapseAppearanceSizeValue">' + size + 'px</span></label>' +
+            '  <input type="range" id="lapseAppearanceSize" min="16" max="120" value="' + size + '" class="lapseRange" />' +
+            '</div>' +
+            '<div class="inputContainer">' +
+            '  <label class="inputLabel inputLabelUnfocused">Letter spacing: <span id="lapseAppearanceSpacingValue">' + spacing + 'px</span></label>' +
+            '  <input type="range" id="lapseAppearanceSpacing" min="0" max="10" step="0.5" value="' + spacing + '" class="lapseRange" />' +
+            '</div>' +
+            '<div class="inputContainer">' +
+            '  <label class="inputLabel inputLabelUnfocused" for="lapseAppearanceColor">Text colour</label>' +
+            '  <input type="color" id="lapseAppearanceColor" value="' + escapeHtml(appearance.TextColor || '#FFFFFF') + '" />' +
+            '</div>' +
+            '<label class="emby-checkbox-label lapseStackedCheck">' +
+            '  <input type="checkbox" is="emby-checkbox" id="lapseAppearanceBackground"' +
+            (appearance.BackgroundEnabled === false ? '' : ' checked') + ' />' +
+            '  <span>Draw a box behind the text</span>' +
+            '</label>' +
+            '<div class="lapseDialogButtons">' +
+            '  <button is="emby-button" type="button" class="raised" id="lapseAppearanceDyslexic"><span>Dyslexia-friendly</span></button>' +
+            '  <button is="emby-button" type="button" class="raised" id="lapseAppearanceReset"><span>Reset</span></button>' +
+            '  <button is="emby-button" type="button" class="raised button-submit" id="lapseAppearanceSave"><span>Save</span></button>' +
+            '</div>');
+
+        var sizeInput = overlay.querySelector('#lapseAppearanceSize');
+        var spacingInput = overlay.querySelector('#lapseAppearanceSpacing');
+
+        sizeInput.addEventListener('input', function () {
+            overlay.querySelector('#lapseAppearanceSizeValue').textContent = sizeInput.value + 'px';
+        });
+
+        spacingInput.addEventListener('input', function () {
+            overlay.querySelector('#lapseAppearanceSpacingValue').textContent = spacingInput.value + 'px';
+        });
+
+        function collect() {
+            return {
+                Enabled: overlay.querySelector('#lapseAppearanceEnabled').checked,
+                FontSizePx: parseInt(sizeInput.value, 10),
+                LetterSpacingPx: parseFloat(spacingInput.value),
+                FontFamily: overlay.querySelector('#lapseAppearanceFont').value,
+                TextColor: overlay.querySelector('#lapseAppearanceColor').value,
+                BackgroundColor: appearance.BackgroundColor || '#00000080',
+                BackgroundEnabled: overlay.querySelector('#lapseAppearanceBackground').checked
+            };
+        }
+
+        overlay.querySelector('#lapseAppearanceDyslexic').addEventListener('click', function () {
+            overlay.remove();
+            saveMyAppearance(DYSLEXIC_PRESET, 'Subtitles are now dyslexia-friendly, for you.');
+        });
+
+        overlay.querySelector('#lapseAppearanceReset').addEventListener('click', function () {
+            overlay.remove();
+            showLapseToast('Putting your subtitle settings back...');
+
+            lapsePost('Lapse/Appearance/Mine/Reset').then(function (applied) {
+                appearanceSettings = applied;
+                applySubtitleAppearance();
+                showLapseToast('Back to this server\'s own subtitle settings.');
+            }).catch(function (err) {
+                showLapseToast('Could not reset: ' + err.message);
+            });
+        });
+
+        overlay.querySelector('#lapseAppearanceSave').addEventListener('click', function () {
+            var wanted = collect();
+            overlay.remove();
+            saveMyAppearance(wanted, 'Subtitle settings saved.');
+        });
+    }
+
+    function saveMyAppearance(wanted, message) {
+        lapsePost('Lapse/Appearance/Mine', wanted).then(function (saved) {
+            // Applied straight away rather than on the next page load, so the effect of a
+            // change is visible on the film that is playing right now.
+            appearanceSettings = saved;
+            applySubtitleAppearance();
+            showLapseToast(message);
+        }).catch(function (err) {
+            showLapseToast('Could not save the subtitle settings: ' + err.message);
+        });
+    }
+
     // --- "Readable Subtitles" ---
     //
     // Writes a copy of the subtitle with the font, size and letter spacing set in the file
@@ -867,71 +1205,165 @@
         });
     }
 
+    // A readable subtitle is recognisable by its name, which is what lets the dialog offer
+    // to undo one without asking the server first.
+    function isReadablePath(path) {
+        return /\.readable\.ass$/i.test(String(path || ''));
+    }
+
+    function restyleSubtitleChecksHtml(subtitles) {
+        return subtitles.map(function (s, index) {
+            var readable = isReadablePath(s.Path);
+
+            return '<label class="emby-checkbox-label lapseStackedCheck">' +
+                '  <input type="checkbox" is="emby-checkbox" class="lapseRestyleTrack" ' +
+                'value="' + escapeHtml(s.Path) + '"' + (index === 0 && !readable ? ' checked' : '') + ' />' +
+                '  <span>' + escapeHtml(s.DisplayName) + (readable ? ' (already readable)' : '') + '</span>' +
+                '</label>';
+        }).join('');
+    }
+
     function showRestyleDialog(context, subtitles, fonts) {
         var ready = fonts && fonts.DyslexicInstalled && fonts.FallbackFontEnabled;
+        var anyReadable = subtitles.some(function (s) { return isReadablePath(s.Path); });
 
         var fontNote = ready
-            ? '<div class="fieldDescription">OpenDyslexic is installed on this server, so the styled subtitle will render in it.</div>'
+            ? '<div class="fieldDescription">OpenDyslexic is installed on this server, so the styled subtitle will render in it. ' +
+              'A subtitle that isn\'t in the Latin alphabet - Arabic, Hebrew, Thai, Chinese - keeps the larger text, the ' +
+              'heavier outline and the margin, but gets a font that has those letters in it, because OpenDyslexic hasn\'t.</div>'
             : '<div class="fieldDescription"><strong>The font isn\'t installed yet.</strong> The styled file will still be ' +
               'written, and the larger text and wider letter spacing will apply, but it will render in the player\'s ' +
               'normal font until an admin installs OpenDyslexic from the LAPSE dashboard under Subtitle appearance.</div>';
 
         var overlay = openOverlay(
             '<h3>Readable Subtitles</h3>' +
-            '<div class="fieldDescription">Writes a copy of the subtitle with a dyslexia-friendly font, larger text ' +
-            'and wider letter spacing set inside the file. Because the styling is in the file rather than in a client ' +
+            '<div class="fieldDescription">Writes a copy of the subtitles you tick, with a dyslexia-friendly font, larger ' +
+            'text and wider letter spacing set inside the file. Because the styling is in the file rather than in a client ' +
             'setting, every client that plays it honours it - phone, TV and browser alike, with nothing to set up on each one.</div>' +
             fontNote +
+            '<div class="selectContainer"><label class="selectLabel">Subtitles</label></div>' +
+            restyleSubtitleChecksHtml(subtitles) +
+            '<div class="fieldDescription">Only the ones you tick are touched. The rest are left exactly as they are, which ' +
+            'is what you want on a library other people read the other languages of.</div>' +
             '<div class="selectContainer">' +
-            '  <label class="selectLabel">Subtitle</label>' +
-            '  <select is="emby-select" id="lapseRestyleSubtitle" class="emby-select-withcolor emby-select">' +
-            subtitleOptionsHtml(subtitles) +
+            '  <label class="selectLabel">What to do with the original</label>' +
+            '  <select is="emby-select" id="lapseRestyleMode" class="emby-select-withcolor emby-select">' +
+            '    <option value="copy" selected>Keep it, and add the readable one beside it</option>' +
+            '    <option value="replace">Replace it (the original is kept as a backup)</option>' +
             '  </select>' +
             '</div>' +
-            '<label class="emby-checkbox-label lapseStackedCheck">' +
-            '  <input type="checkbox" is="emby-checkbox" id="lapseRestyleReplace" />' +
-            '  <span>Delete the original once the styled copy is written</span>' +
-            '</label>' +
-            '<div class="fieldDescription">Leave this off and both are offered as separate tracks in the player, so the ' +
-            'styled one can be picked by whoever wants it and everyone else keeps the original.</div>' +
+            '<div class="fieldDescription">Keeping it means both are offered as separate tracks in the player, so the styled ' +
+            'one can be picked by whoever wants it and everyone else keeps the original. Either way this can be undone.</div>' +
             '<div class="lapseDialogButtons">' +
             '  <button is="emby-button" type="button" class="raised" id="lapseRestyleCancel"><span>Cancel</span></button>' +
+            (anyReadable
+                ? '  <button is="emby-button" type="button" class="raised" id="lapseRestyleRevert"><span>Back to normal</span></button>'
+                : '') +
             '  <button is="emby-button" type="button" class="raised button-submit" id="lapseRestyleApply"><span>Write it</span></button>' +
             '</div>');
-
-        var select = overlay.querySelector('#lapseRestyleSubtitle');
 
         overlay.querySelector('#lapseRestyleCancel').addEventListener('click', function () {
             overlay.remove();
         });
 
+        if (anyReadable) {
+            overlay.querySelector('#lapseRestyleRevert').addEventListener('click', function () {
+                overlay.remove();
+                revertReadable(context, null);
+            });
+        }
+
         overlay.querySelector('#lapseRestyleApply').addEventListener('click', function () {
-            var subtitlePath = select.value;
-            var replace = overlay.querySelector('#lapseRestyleReplace').checked;
+            var picked = Array.prototype.slice
+                .call(overlay.querySelectorAll('.lapseRestyleTrack:checked'))
+                .map(function (box) { return box.value; });
+
+            if (picked.length === 0) {
+                showLapseToast('Tick at least one subtitle first.');
+                return;
+            }
+
+            var replace = overlay.querySelector('#lapseRestyleMode').value === 'replace';
 
             overlay.remove();
-            showLapseToast('Writing a readable copy...');
+            showLapseToast('Writing ' + (picked.length === 1 ? 'a readable copy' : picked.length + ' readable copies') + '...');
 
             lapsePost('Lapse/Restyle', {
                 ItemId: context.id,
-                SubtitlePath: subtitlePath,
+                SubtitlePaths: picked,
                 ReplaceOriginal: replace
-            }).then(function (result) {
-                var message = 'Wrote ' + result.Cues + ' cues to ' + result.OutputPath;
-
-                if (result.RemovedOriginal) {
-                    message += ', and deleted the original';
-                }
-
-                if (!result.FontAvailable) {
-                    message += '. ' + result.FontName + ' is not installed on this server yet, so it will render in the ' +
-                        'player\'s normal font until it is';
-                }
-
-                showLapseToast(message + '. Run a library scan to pick the new file up.');
+            }).then(function (response) {
+                showLapseToast(describeRestyle(response));
             }).catch(function (err) {
                 showLapseToast('Could not restyle: ' + err.message);
             });
+        });
+    }
+
+    function describeRestyle(response) {
+        var files = response.Files || [];
+        var written = files.filter(function (f) { return f.Success; });
+        var failed = files.filter(function (f) { return !f.Success; });
+
+        if (written.length === 0) {
+            return 'Nothing was written. ' + (failed[0] ? failed[0].Error : '');
+        }
+
+        var parts = [];
+
+        written.forEach(function (file) {
+            var line = file.OutputPath + ' (' + file.Cues + ' cues';
+
+            // The three ways a non-Latin subtitle comes out different from what the
+            // settings asked for. Saying so is the difference between "the font setting
+            // is broken" and "that alphabet needs a different font".
+            if (file.FontSwapped) {
+                line += ', ' + file.Script + ', so it uses ' + file.FontName + ' instead';
+            } else if (file.RightToLeft) {
+                line += ', ' + file.Script + ', written right to left';
+            }
+
+            parts.push(line + ')');
+        });
+
+        var message = 'Wrote ' + parts.join('; ');
+
+        if (written.some(function (f) { return !f.FontAvailable; })) {
+            message += '. The font isn\'t installed on this server yet, so it will render in the player\'s normal one until it is';
+        }
+
+        if (failed.length) {
+            message += '. ' + failed.length + ' could not be done: ' + failed[0].Error;
+        }
+
+        return message + '. Run a library scan to pick the new files up.';
+    }
+
+    function revertReadable(context, subtitlePath) {
+        showLapseToast('Putting the subtitles back...');
+
+        lapsePost('Lapse/Restyle/Revert', {
+            ItemId: context.id,
+            SubtitlePath: subtitlePath
+        }).then(function (response) {
+            var files = response.Files || [];
+            var done = files.filter(function (f) { return f.Success; });
+
+            if (done.length === 0) {
+                showLapseToast('Nothing to put back' + (files[0] && files[0].Error ? ': ' + files[0].Error : '.'));
+                return;
+            }
+
+            var restored = done.filter(function (f) { return f.RestoredPath; }).length;
+            var message = 'Put ' + done.length + ' subtitle' + (done.length === 1 ? '' : 's') + ' back to normal';
+
+            if (restored) {
+                message += ', restoring ' + restored + ' original' + (restored === 1 ? '' : 's') + ' from backup';
+            }
+
+            showLapseToast(message + '. Run a library scan so the player stops offering the removed ones.');
+        }).catch(function (err) {
+            showLapseToast('Could not put them back: ' + err.message);
         });
     }
 
@@ -1866,6 +2298,7 @@
         log('inject.js starting up');
         ensureStylesheetLoaded();
         document.addEventListener('click', rememberCardContextFromClick, true);
+        document.addEventListener('click', rememberSubtitleMenuFromClick, true);
         startWatchingForActionSheets();
         startWatchingForSubtitles();
 

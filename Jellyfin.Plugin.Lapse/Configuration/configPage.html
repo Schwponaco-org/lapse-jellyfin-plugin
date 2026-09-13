@@ -583,6 +583,12 @@
                             This restyles what the player draws during playback. Nothing on disk changes, so
                             turning it off puts everything straight back.
                         </div>
+                        <div class="fieldDescription lapseTightNote">
+                            What is set here is the starting point for everybody who hasn't set their own. Each
+                            user can override it from <strong>Subtitle settings</strong> in the subtitle menu
+                            while something is playing, including the font, and that choice follows their
+                            account onto every device without changing anything for anyone else.
+                        </div>
 
                         <label class="emby-checkbox-label lapseStackedCheck">
                             <input id="lapseAppearanceEnabled" type="checkbox" is="emby-checkbox" />
@@ -657,6 +663,17 @@
                             <div class="fieldDescription">The name the player looks the font up by, e.g. OpenDyslexic.</div>
                         </div>
                         <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="lapseStyleNonLatinFontName">Font for non-Latin subtitles</label>
+                            <input is="emby-input" id="lapseStyleNonLatinFontName" type="text" placeholder="Arial" />
+                            <div class="fieldDescription">
+                                OpenDyslexic has no Arabic, Hebrew, Thai or CJK letters in it, so a subtitle in one of
+                                those would render as empty boxes. Those get this font instead and keep the rest of the
+                                readable styling - the larger text, the heavier outline, the margin. Letter spacing is
+                                dropped where it would pull joined-up letters apart, and Arabic and Hebrew are marked as
+                                running right to left. Leave it empty for Arial.
+                            </div>
+                        </div>
+                        <div class="inputContainer">
                             <label class="inputLabel inputLabelUnfocused" for="lapseStyleFontSize">
                                 Font size: <span id="lapseStyleFontSizeValue"></span>
                             </label>
@@ -686,6 +703,23 @@
                             <input id="lapseStyleBold" type="checkbox" is="emby-checkbox" />
                             <span>Bold</span>
                         </label>
+
+                        <div class="selectContainer">
+                            <label class="selectLabel" for="lapseReadableAutomation">Do this automatically</label>
+                            <select is="emby-select" id="lapseReadableAutomation" class="emby-select-withcolor emby-select">
+                                <option value="Off">No - only when somebody presses the button</option>
+                                <option value="Copy">Yes - add a readable copy beside every subtitle</option>
+                                <option value="Replace">Yes - replace every subtitle with its readable version</option>
+                            </select>
+                            <div class="fieldDescription">
+                                Applies to the subtitles an unattended run touches: the scheduled task, the per-library
+                                schedules, auto-sync on a new item, the bulk runs and the Radarr/Sonarr webhook. Adding a
+                                copy leaves everyone the subtitle they had and puts a readable one in the list beside it.
+                                Replacing changes what everybody sharing the library sees, so it's only worth setting
+                                where everybody watching wants it - the original is kept as a backup either way, and
+                                <strong>Readable Subtitles</strong> in an item's menu puts it back.
+                            </div>
+                        </div>
 
                         <button is="emby-button" type="button" id="btnSaveReadable" class="raised button-submit lapseSmallButton">
                             <span>Save readable subtitle style</span>

@@ -166,9 +166,17 @@ public class PluginConfiguration : BasePluginConfiguration
     public TranslationProvider DefaultTranslationProvider { get; set; } = TranslationProvider.MyMemory;
 
     /// <summary>
-    /// Gets or sets how subtitles are restyled during playback.
+    /// Gets or sets how subtitles are restyled during playback for anybody who hasn't set
+    /// their own. See <see cref="UserSubtitleAppearances"/>.
     /// </summary>
     public SubtitleAppearance SubtitleAppearance { get; set; } = new();
+
+    /// <summary>
+    /// Gets the per-user playback appearance settings, which override the server-wide ones
+    /// above for the user they belong to. One person needing large dyslexia-friendly text
+    /// is not a reason for everyone sharing the library to get it.
+    /// </summary>
+    public List<UserSubtitleAppearance> UserSubtitleAppearances { get; } = new();
 
     /// <summary>
     /// Gets or sets the default confidence threshold (0-100) for translation jobs.
@@ -206,6 +214,20 @@ public class PluginConfiguration : BasePluginConfiguration
     /// can find, which for the web client means one in the fallback font folder.
     /// </summary>
     public string SubtitleFontName { get; set; } = Data.SubtitleStyle.DyslexicFontName;
+
+    /// <summary>
+    /// Gets or sets the font a restyled subtitle asks for when its text isn't in the Latin
+    /// alphabet. OpenDyslexic has no Arabic, Hebrew, Thai or CJK glyphs in it at all, so
+    /// asking for it there gives a row of empty boxes; those subtitles get this font
+    /// instead and keep the rest of the readable styling. Empty falls back to Arial, which
+    /// on most systems resolves to something with the glyphs.
+    /// </summary>
+    public string? SubtitleNonLatinFontName { get; set; }
+
+    /// <summary>
+    /// Gets or sets what automatic runs do about readable subtitles. Off by default.
+    /// </summary>
+    public ReadableAutomationMode ReadableAutomation { get; set; } = ReadableAutomationMode.Off;
 
     /// <summary>
     /// Gets or sets the font size a restyled subtitle uses, against a 1080-tall script.
