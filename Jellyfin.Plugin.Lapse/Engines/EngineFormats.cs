@@ -28,10 +28,17 @@ public static class EngineFormats
     /// What LAPSE 2.0.3 reads, taken from the subtitle_formats array in its main.cpp. It
     /// writes back in whatever format it read, so nothing on this list needs converting
     /// on the way in or on the way out.
+    ///
+    /// Three of those formats share the .sub extension - MicroDVD, MPL2 and SubViewer 2 -
+    /// and the extension says nothing about which one a file is, so the engine reads the
+    /// file to tell them apart rather than going by the name. Only MicroDVD needs a frame
+    /// rate, because it counts frames; MPL2's numbers are tenths of a second and SubViewer
+    /// 2's are timestamps. .idx is the VobSub pair, named after the file that holds the
+    /// timings rather than the .sub beside it that holds the pictures.
     /// </summary>
     public static readonly string[] Lapse =
     {
-        ".srt", ".ass", ".ssa", ".vtt", ".sub", ".sup", ".sbv", ".idx", ".smi", ".ttml", ".dfxp"
+        ".srt", ".ass", ".ssa", ".vtt", ".sub", ".mpl2", ".sup", ".sbv", ".idx", ".smi", ".ttml", ".dfxp"
     };
 
     /// <summary>
