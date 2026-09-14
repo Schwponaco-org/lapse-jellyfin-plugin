@@ -173,6 +173,22 @@ public class ReadableSubtitleService
             Replaced = replace
         };
 
+        // A replacement takes the original's name with an .ass extension, which is already
+        // taken when the item carries the same subtitle in two formats - Movie.en.srt next
+        // to the Movie.en.ass that Convert left behind. Writing anyway would destroy a
+        // track nobody asked about, and back up the wrong file while doing it. The styled
+        // file can't be renamed out of the way either, since a revert finds it by that
+        // exact name, so this is a case to turn away rather than guess at.
+        if (replace
+            && !string.Equals(sourcePath, destination, StringComparison.Ordinal)
+            && File.Exists(destination))
+        {
+            result.Error = "There is already a subtitle called "
+                + Path.GetFileName(destination)
+                + " beside this one, and replacing would overwrite it. Write a readable copy instead, or make that subtitle readable rather than this one.";
+            return result;
+        }
+
         // The backup comes first, so a write that fails halfway can't leave someone with
         // neither the original nor a usable styled file.
         if (replace)
@@ -424,7 +440,61 @@ public class ReadableSubtitleService
             stem = stem[..^ReadableTag.Length];
         }
 
+        // Dropping the source's extension is what makes the name readable, but it also
+        // makes it ambiguous: Movie.en.srt and Movie.en.ass - exactly what Convert leaves
+        // behind - both come out as Movie.en.readable.ass, and ticking both in the dialog
+        // means the second quietly overwrites the first. Keeping the extension in the name
+        // is the only thing that tells the two apart, so it goes back in when, and only
+        // when, there is something to be told apart from.
+        //
+        // Only for a copy. A replacement has to keep the plain name, because that name is
+        // how a revert pairs the styled file back up with the .lapsebak beside it; renaming
+        // it here would have the revert delete whatever did hold the plain name instead.
+        // The same collision is turned away in MakeReadableAsync rather than renamed.
+        if (!replace && SharesStemWithAnotherSubtitle(directory, sourcePath, stem))
+        {
+            stem = Path.GetFileName(sourcePath);
+        }
+
         return Path.Combine(directory, replace ? stem + ".ass" : stem + ReadableTag + ".ass");
+    }
+
+    // Whether another subtitle beside this one would reduce to the same name. Answered off
+    // the files rather than off what this run happens to be restyling, so one subtitle
+    // gets the same readable name whether it was ticked on its own or alongside its twin.
+    private static bool SharesStemWithAnotherSubtitle(string directory, string sourcePath, string stem)
+    {
+        if (string.IsNullOrEmpty(directory))
+        {
+            return false;
+        }
+
+        try
+        {
+            foreach (var sibling in Directory.EnumerateFiles(directory, stem + ".*"))
+            {
+                if (string.Equals(sibling, sourcePath, StringComparison.Ordinal)
+                    || !SubtitleFormats.IsSubtitle(sibling))
+                {
+                    continue;
+                }
+
+                // Only a name that reduces to the same stem collides. Movie.en.readable.ass
+                // sits next to Movie.en.srt but reduces to Movie.en.readable, and it's this
+                // subtitle's own output rather than a track competing for the name.
+                if (string.Equals(Path.GetFileNameWithoutExtension(sibling), stem, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Can't tell, so keep the name that has always been used.
+            return false;
+        }
+
+        return false;
     }
 
     // A style naming a font the renderer can't find still renders - in something else.
