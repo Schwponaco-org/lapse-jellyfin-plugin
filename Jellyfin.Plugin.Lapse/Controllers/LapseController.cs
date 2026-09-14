@@ -2154,7 +2154,7 @@ public class LapseController : ControllerBase
             return BadRequest("A request body is required");
         }
 
-        var wanted = request.SubtitlePaths.Count > 0
+        var wanted = request.SubtitlePaths is { Count: > 0 }
             ? request.SubtitlePaths
             : new List<string?> { request.SubtitlePath }.FindAll(p => !string.IsNullOrWhiteSpace(p)).ConvertAll(p => p!);
 
