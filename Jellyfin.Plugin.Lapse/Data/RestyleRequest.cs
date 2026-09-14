@@ -29,10 +29,14 @@ public class RestyleRequest
     public string? SubtitlePath { get; set; }
 
     /// <summary>
-    /// Gets the subtitles to restyle, when more than one was picked. Empty falls back to
-    /// <see cref="SubtitlePath"/>.
+    /// Gets or sets the subtitles to restyle, when more than one was picked. Empty falls
+    /// back to <see cref="SubtitlePath"/>.
     /// </summary>
-    public List<string> SubtitlePaths { get; } = new();
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Usage",
+        "CA2227:Collection properties should be read only",
+        Justification = "Bound from a request body, and System.Text.Json skips collection properties it can't assign to.")]
+    public List<string>? SubtitlePaths { get; set; }
 
     /// <summary>
     /// Gets or sets a value indicating whether the styled copy replaces the subtitle it
