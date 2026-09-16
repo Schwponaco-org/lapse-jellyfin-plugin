@@ -890,6 +890,9 @@
             'rather than text. LAPSE can still move their timing, because timing is timing, but ' +
             'converting, translating and shifting by hand all need words and cannot touch them. ' +
             'Those need OCR first, with something like Subtitle Edit.</p>' +
+            '<p>Whatever a file is read as, it is written back in the encoding it arrived in, so a ' +
+            'Windows-1252 subtitle stays Windows-1252. To force a mixed library onto one encoding ' +
+            'instead, use Write every result in one encoding under the engine\'s advanced settings.</p>' +
             subFormatsHtml();
     }
 

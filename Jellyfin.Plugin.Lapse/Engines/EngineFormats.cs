@@ -25,7 +25,7 @@ namespace Jellyfin.Plugin.Lapse.Engines;
 public static class EngineFormats
 {
     /// <summary>
-    /// What LAPSE 2.0.3 reads, taken from the subtitle_formats array in its main.cpp. It
+    /// What LAPSE 2.2 reads, taken from the subtitle_formats array in its main.cpp. It
     /// writes back in whatever format it read, so nothing on this list needs converting
     /// on the way in or on the way out.
     ///
@@ -35,6 +35,13 @@ public static class EngineFormats
     /// rate, because it counts frames; MPL2's numbers are tenths of a second and SubViewer
     /// 2's are timestamps. .idx is the VobSub pair, named after the file that holds the
     /// timings rather than the .sub beside it that holds the pictures.
+    ///
+    /// The engine will also open a .txt, or a file with no extension at all, and sniff it
+    /// for one of the text formats above before turning it away. That is deliberately not
+    /// on this list, for the same reason the engine leaves it off its own --formats answer
+    /// and its container leaves it out of a scan: .txt files sit in media folders for all
+    /// sorts of reasons that have nothing to do with subtitles. See
+    /// <see cref="Services.SubtitleFormats.ConvertibleExtensions"/>.
     /// </summary>
     public static readonly string[] Lapse =
     {
