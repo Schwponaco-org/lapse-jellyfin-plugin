@@ -16,6 +16,7 @@ namespace Jellyfin.Plugin.Lapse.Engines;
 ///
 /// lapse &lt;video_or_subtitle&gt; &lt;subtitle&gt; [auto|ols|nosplit|split] [penalty]
 ///       [--output PATH] [--confidence N] [--audio-track N] [--sub-track N]
+///       [--fps N] [--snap [ms]] [--encoding NAME]
 ///       [--no-backup] [--no-sidecar] [--no-embedded] [--full-scan] [--no-cache]
 ///       [--force] [--strict] [--dry-run] [--json] [--quiet]
 ///
@@ -131,10 +132,16 @@ public partial class LapseEngine : IEngine
         AddNumber(args, runtime, values, "subTrack", "--sub-track");
         AddNumber(args, runtime, values, "fps", "--fps");
 
+        // --snap takes its window as an optional value. The engine's own default is 120ms;
+        // the plugin always passes a number so what's in the box is what runs.
+        AddNumber(args, runtime, values, "snap", "--snap");
+
         AddSwitch(args, runtime, values, "noEmbedded", "--no-embedded");
         AddSwitch(args, runtime, values, "fullScan", "--full-scan");
         AddSwitch(args, runtime, values, "noCache", "--no-cache");
         AddSwitch(args, runtime, values, "force", "--force");
+
+        AddText(args, runtime, values, "encoding", "--encoding");
 
         // The runner asks for this on a second attempt, after the engine turned a very
         // short subtitle away for having too few cues to be sure about.
@@ -200,10 +207,12 @@ public partial class LapseEngine : IEngine
             ExecutableName = "lapse",
             EditsInPlace = true,
             Tier = EngineTier.Recommended,
-            AdvancedNote = "There is nothing here for text encoding, and there does not need to be. "
-                + "LAPSE detects the encoding of the subtitle it reads and writes the result back in the "
-                + "same one, so a Windows-1252 file stays Windows-1252 and a UTF-8 file stays UTF-8. "
-                + "The other two engines take encoding arguments because they do not do this.",
+            AdvancedNote = "Text encoding needs no setting here for the usual case. LAPSE detects the "
+                + "encoding of the subtitle it reads and writes the result back in the same one, so a "
+                + "Windows-1252 file stays Windows-1252 and a UTF-8 file stays UTF-8. The encoding picker "
+                + "is for the other case: a library that is a mix of UTF-16 and old codepage files, which "
+                + "you would rather were all one thing. The other two engines take encoding arguments "
+                + "because they cannot work it out for themselves.",
             WhyUrl = BenchmarksUrl,
             WhyLabel = "Why is this recommended? Read more on GitHub",
             DeploymentNote = "LAPSE also ships as a Docker image with a file watcher in it. Point it at "
@@ -283,6 +292,46 @@ public partial class LapseEngine : IEngine
 
         descriptor.Parameters.Add(new EngineParameter
         {
+            Key = "snap",
+            Label = "Snap cue starts onto picture cuts (ms)",
+            Description = "A subtitler writing to picture puts a line up on the cut, so a file moved by "
+                + "one number can be right to within a few frames and still read late all the way through. "
+                + "This pulls a cue start that lands within the given window onto the cut itself, and moves "
+                + "the cue's end with it so the line stays up just as long. The cuts come from the keyframes "
+                + "already in the video, which costs an index read and no decoding. Blank leaves it off; 120 "
+                + "is the engine's own window. It does nothing when the reference is another subtitle rather "
+                + "than a video, or when the video was encoded without scene detection.",
+            Flag = "--snap",
+            Kind = EngineParameterKind.Number,
+            Minimum = 0,
+            Maximum = 1000,
+            BlankMeansUnset = true
+        });
+
+        descriptor.Parameters.Add(new EngineParameter
+        {
+            Key = "encoding",
+            Label = "Write every result in one encoding",
+            Description = "A subtitle goes back out in whatever it came in as unless this is set, which is "
+                + "what you want almost every time. Pick an encoding and every result is written that way "
+                + "instead, which is the quick way to get a library of mixed UTF-16 and codepage files down "
+                + "to one. The engine cannot tell one ASCII compatible codepage from another, so converting "
+                + "one to UTF-8 reads it as ISO-8859-1: right for Western European subtitles, wrong for "
+                + "Cyrillic and CJK, where the result is valid UTF-8 with the wrong letters in it. .sup and "
+                + ".idx hold pictures rather than text and are left alone either way.",
+            Flag = "--encoding",
+            Kind = EngineParameterKind.Select,
+            BlankMeansUnset = true
+        });
+        descriptor.Parameters[^1].Options.Add(new EngineParameterOption(string.Empty, "Keep what each file came in as (default)"));
+        descriptor.Parameters[^1].Options.Add(new EngineParameterOption("utf8", "UTF-8"));
+        descriptor.Parameters[^1].Options.Add(new EngineParameterOption("utf8-bom", "UTF-8 with a byte order mark"));
+        descriptor.Parameters[^1].Options.Add(new EngineParameterOption("utf16le", "UTF-16 little endian"));
+        descriptor.Parameters[^1].Options.Add(new EngineParameterOption("utf16be", "UTF-16 big endian"));
+        descriptor.Parameters[^1].Options.Add(new EngineParameterOption("latin1", "ISO-8859-1 (Latin-1)"));
+
+        descriptor.Parameters.Add(new EngineParameter
+        {
             Key = "noEmbedded",
             Label = "Ignore embedded subtitles",
             Description = "Always listen to the audio instead of lining up against a subtitle track already inside the video. Slower, but right when the embedded track is itself out of sync.",
@@ -359,6 +408,22 @@ public partial class LapseEngine : IEngine
         {
             args.Add(flag);
             args.Add(value.Value.ToString(CultureInfo.InvariantCulture));
+        }
+    }
+
+    // Same, for the ones whose value is a word rather than a number. A build that predates
+    // the flag would reject it outright, so the runtime probe is asked first here too.
+    private static void AddText(
+        List<string> args,
+        EngineRuntimeInfo runtime,
+        EngineParameterValues values,
+        string key,
+        string flag)
+    {
+        if (values.ShouldPass(key) && runtime.HasFlag(flag))
+        {
+            args.Add(flag);
+            args.Add(values.GetString(key));
         }
     }
 

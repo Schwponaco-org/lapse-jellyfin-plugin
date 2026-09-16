@@ -58,6 +58,12 @@ Three formats share `.sub` and the name says nothing about which one you have, s
 
 Picture-based subtitles (PGS, VobSub) have no text to work with, but their timing still gets moved. alass and ffsubsync only take `.srt`, `.ass`, `.ssa` and `.vtt`; anything else is converted to `.srt` automatically when one of those is the active engine.
 
+### Text encoding
+
+A subtitle normally goes back out in whatever encoding it came in as: LAPSE works out what that was and writes the result the same way, so a Windows-1252 file stays Windows-1252 and a UTF-8 file stays UTF-8. Nothing needs setting for that.
+
+For a library that is a mix of UTF-16 and old codepage files, **Write every result in one encoding** under an engine's advanced settings forces every result to `utf8`, `utf8-bom`, `utf16le`, `utf16be` or `latin1` instead. The engine cannot tell one ASCII-compatible codepage from another, so converting one to UTF-8 reads it as ISO-8859-1 - right for Western European subtitles, wrong for Cyrillic and CJK. Picture-based formats hold no text and are left alone either way. Needs an engine build that has `--encoding`; the setting is simply not passed to one that doesn't.
+
 ## Engines
 
 - **LAPSE** - the engine this plugin is built around, and the one to use. Works out on its own whether a subtitle is early, drifting, or split across a re-cut, and reports how confident it is. Reads the most formats of the three. Builds for Linux, macOS and Windows.
