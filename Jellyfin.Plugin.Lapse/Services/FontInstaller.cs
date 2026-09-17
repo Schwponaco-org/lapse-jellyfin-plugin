@@ -194,6 +194,38 @@ public class FontInstaller
         return GetStatus();
     }
 
+    /// <summary>
+    /// Deletes any installed OpenDyslexic font files from the fallback font folder.
+    /// </summary>
+    /// <returns>The state afterwards, with an error set if it didn't work.</returns>
+    public FontStatus UninstallDyslexicFont()
+    {
+        var options = _configurationManager.GetEncodingOptions();
+        var folder = ResolveFolder(options.FallbackFontPath);
+
+        if (Directory.Exists(folder))
+        {
+            try
+            {
+                foreach (var file in Directory.EnumerateFiles(folder))
+                {
+                    if (Path.GetFileName(file).StartsWith("OpenDyslexic", StringComparison.OrdinalIgnoreCase))
+                    {
+                        File.Delete(file);
+                    }
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                var failed = GetStatus();
+                failed.Error = "Could not remove OpenDyslexic: " + ex.Message;
+                return failed;
+            }
+        }
+
+        return GetStatus();
+    }
+
     // Flattened on purpose: the archive nests its fonts under a folder or two, and the
     // fallback font folder is read as a flat list of files.
     [System.Diagnostics.CodeAnalysis.SuppressMessage(
