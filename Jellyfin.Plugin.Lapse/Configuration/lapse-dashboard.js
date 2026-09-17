@@ -15,6 +15,7 @@
     var currentSettings = null;
     var currentOverview = null;
     var currentDiagnostics = null;
+    var currentFontStatus = null;
     var currentUsers = [];
     var ignoreSearchPending = false;
     var ignoreSearchFetched = false;
@@ -3076,6 +3077,14 @@
 
     function renderFontStatus(view, status) {
         var strip = view.querySelector('#lapseFontStatus');
+        currentFontStatus = status;
+
+        var button = view.querySelector('#btnInstallDyslexicFont');
+        if (button) {
+            button.querySelector('span').textContent = (status && status.DyslexicInstalled)
+                ? 'Remove OpenDyslexic'
+                : 'Install OpenDyslexic';
+        }
 
         if (!status) {
             strip.textContent = 'Could not read the server\'s font settings.';
@@ -3510,8 +3519,19 @@
         });
         view.querySelector('#btnInstallDyslexicFont').addEventListener('click', function () {
             var strip = view.querySelector('#lapseFontStatus');
-            strip.textContent = 'Downloading OpenDyslexic...';
+            var installed = currentFontStatus && currentFontStatus.DyslexicInstalled;
 
+            if (installed) {
+                strip.textContent = 'Removing OpenDyslexic...';
+                lapseDelete('Lapse/Fonts/Dyslexic').then(function (status) {
+                    renderFontStatus(view, status);
+                }).catch(function (err) {
+                    strip.textContent = 'Could not remove the font: ' + err.message;
+                });
+                return;
+            }
+
+            strip.textContent = 'Downloading OpenDyslexic...';
             lapsePost('Lapse/Fonts/InstallDyslexic').then(function (status) {
                 renderFontStatus(view, status);
             }).catch(function (err) {

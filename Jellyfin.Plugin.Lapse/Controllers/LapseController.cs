@@ -2121,6 +2121,17 @@ public class LapseController : ControllerBase
     }
 
     /// <summary>
+    /// Deletes the OpenDyslexic font files from Jellyfin's font folder.
+    /// </summary>
+    /// <returns>The state afterwards.</returns>
+    [HttpDelete("Lapse/Fonts/Dyslexic")]
+    [Authorize(Policy = Policies.RequiresElevation)]
+    public ActionResult<FontStatus> UninstallDyslexicFont()
+    {
+        return _fontInstaller.UninstallDyslexicFont();
+    }
+
+    /// <summary>
     /// Writes readable copies of the subtitles it's given: the same cues, in ASS, with the
     /// configured font, size and letter spacing set in the style, fitted to whatever
     /// writing system each one turns out to be in.
