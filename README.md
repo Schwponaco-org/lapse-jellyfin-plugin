@@ -41,6 +41,7 @@ Elsewhere in the dashboard:
 - **Automation** - libraries can pick up new items automatically or sync on a schedule, and unattended runs can sync, convert, translate, write readable copies, or react to a Radarr/Sonarr import webhook. Readable copies can be added beside every subtitle or replace them, and replacing still keeps the original as a backup. Everything here is off by default; pressing a button yourself always works regardless.
 - **Subtitle settings, per user** - **Subtitle settings** appears in the player's own subtitle menu while something is playing: size, letter spacing, colour, background and font, including any font installed on the server. It is saved against the account rather than the device, so it follows the person from the TV to the phone, and it changes nothing for anybody else sharing the library. What an admin sets under Subtitle appearance is the starting point for whoever hasn't set their own.
 - **Access control** - the menu entries above are admin only by default, but can be opened up to specific users or everyone signed in.
+- **Multi engine sync** (experimental) - when LAPSE is not sure about a sync, run the other engines over the same subtitle and keep every answer as its own subtitle track until you pick the right one. See below.
 - **Undo** - every recent sync can be reversed with one press, whether that means restoring a backup or deleting the file the run added.
 - **Fetching from OpenSubtitles** (experimental) - if an item has no subtitle at all, LAPSE can fetch one before syncing, using your own OpenSubtitles account.
 
@@ -84,6 +85,36 @@ LAPSE also ships as a standalone Docker image with a file watcher, for syncing s
 | Overwrite, no backup | Replaces the subtitle and keeps nothing. |
 
 Jellyfin picks up a new file as an extra subtitle track on its next scan.
+
+## Multi engine sync (experimental)
+
+LAPSE is the only engine that says how sure it is of its own answer. alass and ffsubsync just hand back a timing with nothing attached to say whether it is any good. That asymmetry is what this feature is built on: LAPSE decides when there is doubt, and the other engines are there to give you something to compare against when there is.
+
+It needs LAPSE set as your default engine and at least one of alass or ffsubsync installed. Turn it on under **Settings > Multi engine sync**.
+
+How it works:
+
+1. You sync as normal. If LAPSE is sure, nothing changes and you get one file, same as always.
+2. If LAPSE is not sure, the other engines run over the same subtitle. Each answer is written as its own file next to the video, named after the engine that produced it, so `Movie.en.srt` gets you `Movie.en.lapse.srt`, `Movie.en.alass.srt` and `Movie.en.ffsubsync.srt`.
+3. The item is rescanned straight away, so those turn up as extra subtitle tracks rather than waiting for the next library scan.
+4. Play the item and switch between the tracks with Jellyfin's own subtitle picker until one lines up.
+5. Open the subtitle menu and press **Keep this subtitle**. The one you kept is written out using your File output setting, and the others are deleted.
+
+Nothing is overwritten while you are choosing. The subtitle you synced stays exactly where it is until you keep one of the answers or throw them all away. The File output setting applies at the moment you keep one, so "overwrite, keep a backup" still leaves you a `.bak` of the file that was there before.
+
+If you are not watching, the same decision is available from the item's three dot menu under **Choose the right subtitle**, and everything waiting is listed on the settings page.
+
+### Formats
+
+LAPSE reads twelve subtitle formats. alass and ffsubsync read four: `.srt`, `.ass`, `.ssa` and `.vtt`. A subtitle in one of the other eight has to be converted before the other engines can say anything about it, and the format that conversion produces is set on this page.
+
+That is separate from the Conversion tab on purpose. Conversion there changes the files in your library. This one only makes a temporary copy for the other engines to work on, and only when LAPSE is unsure.
+
+PGS (`.sup`) and VobSub (`.idx`) subtitles are pictures of text, not text. They cannot be converted into anything the other two engines read, so for those files you only ever get LAPSE's answer and this feature does nothing at all.
+
+### Bulk runs
+
+Bulk, scheduled and webhook runs can do this too, but it is off by default and worth leaving off. Every subtitle LAPSE is unsure about leaves two or three extra files behind, and every one of them is waiting on you to watch something and decide. A run over a large library can leave you with more files to go through than you will ever get to. It works better on the films and episodes you actually noticed a problem with.
 
 ## License
 

@@ -38,6 +38,7 @@ public class SyncQueueManager : IDisposable
     private readonly SubtitleConverter _converter;
     private readonly Translation.TranslationService _translationService;
     private readonly ReadableSubtitleService _readable;
+    private readonly MultiEngineSyncService _multiEngine;
     private readonly ILogger<SyncQueueManager> _logger;
     private readonly object _lock = new();
     private readonly List<QueueItem> _items = new();
@@ -75,6 +76,8 @@ public class SyncQueueManager : IDisposable
     /// <param name="translationService">Translates subtitles, when automatic translation
     /// is turned on.</param>
     /// <param name="readable">Writes readable copies, when that automation is turned on.</param>
+    /// <param name="multiEngine">Collects the other engines' answers when LAPSE isn't sure
+    /// and unattended runs have been allowed to do that.</param>
     /// <param name="logger">Logger.</param>
     public SyncQueueManager(
         ILibraryManager libraryManager,
@@ -85,6 +88,7 @@ public class SyncQueueManager : IDisposable
         SubtitleConverter converter,
         Translation.TranslationService translationService,
         ReadableSubtitleService readable,
+        MultiEngineSyncService multiEngine,
         ILogger<SyncQueueManager> logger)
     {
         _libraryManager = libraryManager;
@@ -95,6 +99,7 @@ public class SyncQueueManager : IDisposable
         _converter = converter;
         _translationService = translationService;
         _readable = readable;
+        _multiEngine = multiEngine;
         _logger = logger;
     }
 
@@ -346,6 +351,14 @@ public class SyncQueueManager : IDisposable
     /// <returns>A line saying what happened and why.</returns>
     public static string DescribeSkip(SyncResult result)
     {
+        if (result.CandidateCount > 0)
+        {
+            return $"LAPSE wasn't sure, so the other engines were asked the same question. "
+                + $"{result.CandidateCount} answers are sitting next to the video, and the original subtitle "
+                + "has not been touched. Play the item, switch between the subtitle tracks until one lines up, "
+                + "then open the subtitle menu and press \"Keep this subtitle\".";
+        }
+
         if (result.AlreadyInSync)
         {
             var tolerance = Plugin.Instance?.Configuration.AlreadyInSyncToleranceMs ?? 100;
@@ -654,9 +667,19 @@ public class SyncQueueManager : IDisposable
             var referencePath = reference?.Path ?? item.Path;
 
             var result = await _runner
-                .RunAsync(engine, referencePath, workPath, mode, penalty, outputMode: null, destinationOverride: null, outputFormat: null, cancellationToken)
+                .RunAsync(engine, referencePath, workPath, mode, penalty, outputMode: null, destinationOverride: null, outputFormat: null, cancellationToken: cancellationToken)
                 .ConfigureAwait(false);
             lastResult = result;
+
+            // LAPSE wasn't sure. Unattended runs only get to ask the other engines when an
+            // admin has said so, because every subtitle it is unsure about leaves two or
+            // three more files behind, and a whole library's worth of those adds up.
+            if (result.Success && _multiEngine.ShouldBuild(result, unattended: true))
+            {
+                await _multiEngine
+                    .BuildAsync(item, referencePath, workPath, result, cancellationToken)
+                    .ConfigureAwait(false);
+            }
 
             if (!result.Success)
             {

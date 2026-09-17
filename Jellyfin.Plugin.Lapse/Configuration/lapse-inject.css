@@ -29,6 +29,33 @@
     width: 30em;
 }
 
+/* One engine's answer in the multi engine picker. The whole row is the target, since this
+   gets used on a TV remote as often as with a mouse. */
+.lapseCandidateRow {
+    display: flex;
+    align-items: flex-start;
+    gap: .7em;
+    padding: .6em .7em;
+    margin: .4em 0;
+    border-radius: .3em;
+    background: rgba(127, 127, 127, .12);
+    cursor: pointer;
+}
+
+.lapseCandidateRow:hover,
+.lapseCandidateRow:focus-within {
+    background: rgba(127, 127, 127, .22);
+}
+
+.lapseCandidateRow input {
+    margin-top: .25em;
+    flex: 0 0 auto;
+}
+
+.lapseCandidateRow .fieldDescription {
+    margin: .15em 0 0;
+}
+
 .lapseDialogCard h3 {
     margin-top: 0;
 }

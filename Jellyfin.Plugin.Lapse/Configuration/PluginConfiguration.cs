@@ -401,6 +401,55 @@ public class PluginConfiguration : BasePluginConfiguration
     /// </summary>
     public string OpenSubtitlesLanguage { get; set; } = "en";
 
+    // --------------------------------------------------------------- multi engine sync
+    //
+    // Experimental. When LAPSE isn't sure about a sync, run the other engines too and keep
+    // every answer side by side until somebody picks the right one. LAPSE is the only
+    // engine that scores its own answer, which is why the feature hangs off it: alass and
+    // ffsubsync hand back a number with no indication of whether it is any good, so
+    // without LAPSE there is nothing to decide "this needs a second opinion" from.
+
+    /// <summary>
+    /// Gets or sets a value indicating whether a LAPSE result it wasn't sure about sets the
+    /// other installed engines running, so there's something to compare against.
+    /// Experimental, and off until someone turns it on.
+    /// </summary>
+    public bool MultiEngineEnabled { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether alass is one of the engines that gets asked.
+    /// </summary>
+    public bool MultiEngineUseAlass { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether ffsubsync is one of the engines that gets asked.
+    /// </summary>
+    public bool MultiEngineUseFfsubsync { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets which of LAPSE's verdicts sets the others running.
+    /// </summary>
+    public MultiEngineTrigger MultiEngineTrigger { get; set; } = MultiEngineTrigger.UnsureOnly;
+
+    /// <summary>
+    /// Gets or sets what format the candidate files are written in.
+    /// </summary>
+    public CandidateFormat MultiEngineCandidateFormat { get; set; } = CandidateFormat.MatchOriginal;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether unattended runs make candidates too.
+    ///
+    /// Off by default, and worth thinking about before turning on: a bulk run over a large
+    /// library can leave a great many files to go through, since every subtitle LAPSE is
+    /// unsure about produces two or three of them.
+    /// </summary>
+    public bool MultiEngineInBulk { get; set; }
+
+    /// <summary>
+    /// Gets the candidate sets waiting for somebody to choose between them.
+    /// </summary>
+    public List<SyncCandidateSet> PendingCandidates { get; } = new();
+
     /// <summary>
     /// Gets or sets a value indicating whether the Radarr/Sonarr webhook endpoint accepts
     /// requests. Experimental, and off until someone turns it on.
