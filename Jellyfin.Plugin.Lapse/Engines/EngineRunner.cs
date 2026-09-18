@@ -307,6 +307,10 @@ public class EngineRunner
     /// already sitting at that path gets backed up first.</param>
     /// <param name="outputFormat">The format to write the result in (srt, vtt, ass, ssa),
     /// or null to keep the format the subtitle came in.</param>
+    /// <param name="skipConfidencePolicy">Writes the result wherever it was asked to go
+    /// even when the engine wasn't confident, instead of applying the low-confidence
+    /// setting. Multi engine sync uses this: it collects every engine's answer as a file to
+    /// compare, and decides what happens to the original once somebody has picked one.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The parsed result.</returns>
     [System.Diagnostics.CodeAnalysis.SuppressMessage(
@@ -322,6 +326,7 @@ public class EngineRunner
         OutputMode? outputMode = null,
         string? destinationOverride = null,
         string? outputFormat = null,
+        bool skipConfidencePolicy = false,
         CancellationToken cancellationToken = default)
     {
         var enginePath = ResolvePath(engine);
@@ -494,7 +499,11 @@ public class EngineRunner
             result.LowConfidence = result.Verdict is not null
                 && !string.Equals(result.Verdict, "solid", StringComparison.OrdinalIgnoreCase);
 
-            if (result.LowConfidence)
+            // A candidate run has already been told the engine wasn't sure - that's why it
+            // was asked for - and the whole point is to get the answer onto disk to be
+            // compared. Applying the low-confidence setting here would throw away the very
+            // file the caller is collecting.
+            if (result.LowConfidence && !skipConfidencePolicy)
             {
                 var action = Plugin.Instance?.Configuration.LowConfidenceAction ?? LowConfidenceAction.Sidecar;
 

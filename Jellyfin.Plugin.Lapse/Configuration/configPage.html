@@ -75,6 +75,10 @@
                             <span class="lapseNavLabel">Conversion</span>
                             <span class="lapseNavHint" id="lapseConversionHint"></span>
                         </button>
+                        <button type="button" class="lapseNavItem" data-panel="lapsePanelMultiEngine">
+                            <span class="lapseNavLabel">Multi engine sync</span>
+                            <span class="lapseNavHint" id="lapseMultiEngineHint"></span>
+                        </button>
                         <button type="button" class="lapseNavItem" data-panel="lapsePanelAutomation">
                             <span class="lapseNavLabel">Automation</span>
                             <span class="lapseNavHint" id="lapseAutomationHint"></span>
@@ -391,6 +395,125 @@
                         <button is="emby-button" type="button" id="btnSaveConversion" class="raised button-submit lapseSmallButton">
                             <span>Save conversion settings</span>
                         </button>
+                    </section>
+
+                    <section class="lapsePanel" id="lapsePanelMultiEngine">
+                        <h2 class="lapsePanelTitle">
+                            Multi engine sync
+                            <span class="lapseChip lapseChip-experimental">Experimental</span>
+                        </h2>
+                        <div class="lapseNoteStrip">
+                            This is experimental. It writes extra subtitle files and asks you to pick
+                            between them, so it makes more work per sync, not less. It is worth turning on
+                            when LAPSE keeps coming back unsure on files you care about.
+                        </div>
+
+                        <div class="fieldDescription lapseTightNote">
+                            LAPSE is the only engine that says how sure it is of its own answer. alass and
+                            ffsubsync just hand back a timing with nothing attached to say whether it is any
+                            good. That is why this feature needs LAPSE as your default engine: LAPSE decides
+                            when there is doubt, and the other engines are there to give you something to
+                            compare against when there is.
+                        </div>
+
+                        <div class="lapseNoteStrip" id="lapseMultiEngineStatus">Checking what is installed...</div>
+
+                        <h3 class="lapseSubHeading">How it works</h3>
+                        <div class="fieldDescription lapseTightNote">
+                            You sync as normal. If LAPSE is sure, nothing changes and you get one file, same
+                            as always. If LAPSE is not sure, the other engines run over the same subtitle and
+                            each answer is written as its own file next to the video. Jellyfin is asked to
+                            rescan the item straight away, so they turn up as extra subtitle tracks.
+                            <br /><br />
+                            Then you play the item, switch between those tracks until one lines up, open the
+                            subtitle menu and press "Keep this subtitle". The one you kept is written out
+                            using your File output setting and the others are deleted.
+                            <br /><br />
+                            Nothing is overwritten while you are choosing. The subtitle you synced stays
+                            exactly where it is until you keep one of the answers or throw them all away.
+                        </div>
+
+                        <label class="emby-checkbox-label lapseStackedCheck">
+                            <input id="lapseMultiEngineEnabled" type="checkbox" is="emby-checkbox" />
+                            <span>Ask the other engines when LAPSE is not sure</span>
+                        </label>
+
+                        <h3 class="lapseSubHeading">Which engines to ask</h3>
+                        <label class="emby-checkbox-label lapseStackedCheck">
+                            <input id="lapseMultiEngineUseAlass" type="checkbox" is="emby-checkbox" />
+                            <span>alass</span>
+                        </label>
+                        <label class="emby-checkbox-label lapseStackedCheck">
+                            <input id="lapseMultiEngineUseFfsubsync" type="checkbox" is="emby-checkbox" />
+                            <span>ffsubsync</span>
+                        </label>
+                        <div class="fieldDescription lapseTightNote">
+                            Asking both gives you three answers to compare and takes longer per file. Asking
+                            one gives you two. An engine that is not installed is skipped.
+                        </div>
+
+                        <div class="selectContainer">
+                            <label class="selectLabel" for="lapseMultiEngineTrigger">When to ask them</label>
+                            <select is="emby-select" id="lapseMultiEngineTrigger" class="emby-select-withcolor emby-select">
+                                <option value="UnsureOnly">Only when LAPSE says it is unsure</option>
+                                <option value="UnsureAndNothing">When LAPSE is unsure, and when the audio does not back it up at all</option>
+                            </select>
+                            <div class="fieldDescription">
+                                "Unsure" means LAPSE found an answer and thinks it is probably right, but not
+                                by enough to overwrite your file. That is the case worth a second opinion.
+                                The other one usually means the subtitle belongs to a different release, and
+                                the other engines rarely rescue that, so it makes more files for fewer wins.
+                            </div>
+                        </div>
+
+                        <div class="selectContainer">
+                            <label class="selectLabel" for="lapseMultiEngineCandidateFormat">What format to write them in</label>
+                            <select is="emby-select" id="lapseMultiEngineCandidateFormat" class="emby-select-withcolor emby-select">
+                                <option value="MatchOriginal">Match the original file where possible</option>
+                                <option value="Srt">Always .srt</option>
+                                <option value="Ass">Always .ass</option>
+                            </select>
+                        </div>
+
+                        <h3 class="lapseSubHeading">Formats, and why this has its own setting</h3>
+                        <div class="fieldDescription lapseTightNote">
+                            LAPSE reads twelve subtitle formats. alass and ffsubsync read four: .srt, .ass,
+                            .ssa and .vtt. So if your subtitle is in one of the other eight, it has to be
+                            converted before the other engines can say anything about it.
+                            <br /><br />
+                            That conversion is separate from the Conversion tab on purpose. Conversion there
+                            changes the files in your library. This one only makes a temporary copy for the
+                            other engines to work on, and only when LAPSE is unsure. Your library is left
+                            alone either way.
+                            <br /><br />
+                            PGS (.sup) and VobSub (.idx) subtitles are pictures of text, not text. They
+                            cannot be converted into anything the other two engines read. For those files you
+                            only ever get LAPSE's answer, and this feature does nothing at all. The same goes
+                            for a track still inside the video file until you extract it.
+                        </div>
+
+                        <h3 class="lapseSubHeading">Unattended runs</h3>
+                        <label class="emby-checkbox-label lapseStackedCheck">
+                            <input id="lapseMultiEngineInBulk" type="checkbox" is="emby-checkbox" />
+                            <span>Do this during bulk, scheduled and webhook runs too</span>
+                        </label>
+                        <div class="lapseWarningStrip">
+                            On a large library this gets out of hand quickly. Every subtitle LAPSE is unsure
+                            about leaves two or three extra files behind, and every one of them is waiting on
+                            you to watch something and decide. A run over a few thousand items can leave you
+                            with more files to go through than you will ever get to.
+                            <br /><br />
+                            It is generally better to keep this off and use multi engine sync on the films and
+                            episodes you actually noticed a problem with. Everything waiting is listed below,
+                            and you can throw a whole item's worth away in one press.
+                        </div>
+
+                        <button is="emby-button" type="button" id="btnSaveMultiEngine" class="raised button-submit lapseSmallButton">
+                            <span>Save multi engine settings</span>
+                        </button>
+
+                        <h3 class="lapseSubHeading">Waiting to be chosen</h3>
+                        <div id="lapseCandidateList"></div>
                     </section>
 
                     <section class="lapsePanel" id="lapsePanelAutomation">

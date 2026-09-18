@@ -188,6 +188,37 @@ public class PluginSettings
     public string OpenSubtitlesLanguage { get; set; } = "en";
 
     /// <summary>
+    /// Gets or sets a value indicating whether a LAPSE result it wasn't sure about sets the
+    /// other engines running as well.
+    /// </summary>
+    public bool MultiEngineEnabled { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether alass is one of the engines that gets asked.
+    /// </summary>
+    public bool MultiEngineUseAlass { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether ffsubsync is one of the engines that gets asked.
+    /// </summary>
+    public bool MultiEngineUseFfsubsync { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets which of LAPSE's verdicts sets the others running.
+    /// </summary>
+    public MultiEngineTrigger MultiEngineTrigger { get; set; }
+
+    /// <summary>
+    /// Gets or sets what format the candidate files are written in.
+    /// </summary>
+    public CandidateFormat MultiEngineCandidateFormat { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether unattended runs make candidates too.
+    /// </summary>
+    public bool MultiEngineInBulk { get; set; }
+
+    /// <summary>
     /// Gets or sets a value indicating whether the Radarr/Sonarr webhook is accepted.
     /// </summary>
     public bool ArrWebhookEnabled { get; set; }

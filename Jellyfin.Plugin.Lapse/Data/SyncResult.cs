@@ -140,4 +140,11 @@ public class SyncResult
     /// still something meaningful to show the user.
     /// </summary>
     public string? EngineOutput { get; set; }
+
+    /// <summary>
+    /// Gets or sets how many answers multi engine sync left to choose between, when it ran.
+    /// Zero for an ordinary sync. What it means is that nothing was decided: the original
+    /// is still where it was, and this many files are waiting to be compared.
+    /// </summary>
+    public int CandidateCount { get; set; }
 }

@@ -2900,6 +2900,14 @@
         view.querySelector('#lapseArrWebhookEnabled').checked = !!currentSettings.ArrWebhookEnabled;
         renderWebhookUrl(view);
 
+        view.querySelector('#lapseMultiEngineEnabled').checked = !!currentSettings.MultiEngineEnabled;
+        view.querySelector('#lapseMultiEngineUseAlass').checked = !!currentSettings.MultiEngineUseAlass;
+        view.querySelector('#lapseMultiEngineUseFfsubsync').checked = !!currentSettings.MultiEngineUseFfsubsync;
+        view.querySelector('#lapseMultiEngineTrigger').value = currentSettings.MultiEngineTrigger || 'UnsureOnly';
+        view.querySelector('#lapseMultiEngineCandidateFormat').value = currentSettings.MultiEngineCandidateFormat || 'MatchOriginal';
+        view.querySelector('#lapseMultiEngineInBulk').checked = !!currentSettings.MultiEngineInBulk;
+        refreshMultiEngine(view);
+
         renderAppearance(view);
         renderAccess(view);
         renderConversion(view);
@@ -3118,6 +3126,116 @@
         strip.textContent = parts.join(' ');
     }
 
+    // The multi engine panel is the one place where "you can't turn this on yet" needs
+    // saying out loud, since it depends on which engines are installed and on which one is
+    // the default - none of which is visible from this page.
+    function renderMultiEngine(view, status) {
+        var strip = view.querySelector('#lapseMultiEngineStatus');
+        var toggle = view.querySelector('#lapseMultiEngineEnabled');
+
+        if (!status) {
+            strip.textContent = 'Could not check which engines are installed.';
+            return;
+        }
+
+        var availability = status.Availability || {};
+        var parts = [];
+
+        if (availability.Available) {
+            parts.push('Ready to use.');
+            parts.push('Installed and available to ask: ' +
+                [availability.AlassInstalled ? 'alass' : null,
+                 availability.FfsubsyncInstalled ? 'ffsubsync' : null]
+                .filter(function (n) { return n; }).join(' and ') + '.');
+        } else {
+            parts.push(availability.Reason || 'Not available yet.');
+        }
+
+        // Overwriting on a low score means LAPSE has already replaced the file by the time
+        // the other engines could have been asked, so there is nothing left to compare.
+        if (availability.OverwriteAnywayConflict) {
+            parts.push('Your File output setting is "sync it anyway" for low confidence results, ' +
+                'which replaces the subtitle before anything could be compared. Multi engine sync ' +
+                'stays out of the way while that is set. Pick "write it to a sidecar" or "keep the ' +
+                'original" under File output to use this.');
+        }
+
+        strip.textContent = parts.join(' ');
+
+        var usable = !!availability.Available && !availability.OverwriteAnywayConflict;
+        toggle.disabled = !usable;
+        toggle.parentElement.style.opacity = usable ? '' : '.55';
+
+        // The waiting count is the number worth seeing without opening the page, since
+        // every one of them is a decision somebody still has to make.
+        var pending = status.Pending || [];
+        view.querySelector('#lapseMultiEngineHint').textContent = pending.length
+            ? pending.length + ' waiting'
+            : (availability.Enabled && usable ? 'on' : 'off');
+
+        renderCandidateList(view, pending);
+    }
+
+    function renderCandidateList(view, sets) {
+        var host = view.querySelector('#lapseCandidateList');
+
+        if (!sets.length) {
+            host.innerHTML = '<div class="fieldDescription lapseTightNote">' +
+                'Nothing is waiting. When LAPSE is unsure about a sync, the answers show up here ' +
+                'until you keep one of them.</div>';
+            return;
+        }
+
+        host.innerHTML = sets.map(function (set) {
+            var rows = (set.Candidates || []).map(function (c) {
+                return '<li>' + escapeHtml(c.EngineName) + ': ' +
+                    escapeHtml(c.Detail || 'no details') +
+                    ' <span style="opacity:.6">(' + escapeHtml(fileNameOf(c.Path)) + ')</span></li>';
+            }).join('');
+
+            return '<div class="lapseNoteStrip">' +
+                '<strong>' + escapeHtml(set.ItemName || 'Unknown item') + '</strong><br />' +
+                escapeHtml(fileNameOf(set.OriginalPath)) + ' is still where it was. ' +
+                (set.Candidates || []).length + ' answers are waiting:' +
+                '<ul style="margin:.5em 0 .6em 1.2em">' + rows + '</ul>' +
+                '<button is="emby-button" type="button" class="raised lapseSmallButton lapseDiscardCandidates" ' +
+                'data-item="' + escapeHtml(set.ItemId) + '" data-original="' + escapeHtml(set.OriginalPath) + '">' +
+                '<span>Throw these away</span></button>' +
+                '</div>';
+        }).join('');
+
+        host.querySelectorAll('.lapseDiscardCandidates').forEach(function (button) {
+            button.addEventListener('click', function () {
+                lapsePost('Lapse/Candidates/Discard', {
+                    ItemId: button.getAttribute('data-item'),
+                    OriginalPath: button.getAttribute('data-original')
+                }).then(function (decision) {
+                    Dashboard.alert(decision.Message || 'Removed.');
+                    refreshMultiEngine(view);
+                }).catch(function (err) {
+                    Dashboard.alert('Could not remove them: ' + err.message);
+                });
+            });
+        });
+    }
+
+    function fileNameOf(path) {
+        if (!path) {
+            return '';
+        }
+
+        var parts = path.split(/[\\/]/);
+        return parts[parts.length - 1];
+    }
+
+    function refreshMultiEngine(view) {
+        return lapseGet('Lapse/MultiEngine').then(function (status) {
+            renderMultiEngine(view, status);
+        }).catch(function () {
+            renderMultiEngine(view, null);
+        });
+    }
+
     function refreshFontStatus(view) {
         return lapseGet('Lapse/Fonts').then(function (status) {
             renderFontStatus(view, status);
@@ -3216,6 +3334,12 @@
             OpenSubtitlesPassword: view.querySelector('#lapseOpenSubtitlesPassword').value || null,
             OpenSubtitlesLanguage: view.querySelector('#lapseOpenSubtitlesLanguage').value || 'en',
             ArrWebhookEnabled: view.querySelector('#lapseArrWebhookEnabled').checked,
+            MultiEngineEnabled: view.querySelector('#lapseMultiEngineEnabled').checked,
+            MultiEngineUseAlass: view.querySelector('#lapseMultiEngineUseAlass').checked,
+            MultiEngineUseFfsubsync: view.querySelector('#lapseMultiEngineUseFfsubsync').checked,
+            MultiEngineTrigger: view.querySelector('#lapseMultiEngineTrigger').value || 'UnsureOnly',
+            MultiEngineCandidateFormat: view.querySelector('#lapseMultiEngineCandidateFormat').value || 'MatchOriginal',
+            MultiEngineInBulk: view.querySelector('#lapseMultiEngineInBulk').checked,
             DefaultTranslationProvider: view.querySelector('#lapseDefaultProvider').value ||
                 saved.DefaultTranslationProvider || 'MyMemory',
             GoogleTranslateApiKey: inputValue(view, '#lapseGoogleKey', saved.GoogleTranslateApiKey),
@@ -3507,6 +3631,13 @@
         });
         view.querySelector('#btnSaveLabs').addEventListener('click', function () {
             saveSettings(view, 'Experimental settings saved.');
+        });
+        view.querySelector('#btnSaveMultiEngine').addEventListener('click', function () {
+            saveSettings(view, 'Multi engine settings saved.');
+
+            // Turning it on can change what the status strip has to say about it, and the
+            // waiting list is what the person is most likely looking at next.
+            refreshMultiEngine(view);
         });
         view.querySelector('#btnSaveAppearance').addEventListener('click', function () {
             saveSettings(view, 'Subtitle appearance saved.');

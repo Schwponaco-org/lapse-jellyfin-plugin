@@ -23,6 +23,8 @@ using Jellyfin.Plugin.Lapse.Web;
 using MediaBrowser.Common.Api;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
+using MediaBrowser.Controller.Session;
+using MediaBrowser.Model.Entities;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -65,6 +67,8 @@ public class LapseController : ControllerBase
     private readonly ArrWebhookService _arrWebhookService;
     private readonly SyncHistoryService _historyService;
     private readonly ReadableSubtitleService _readable;
+    private readonly MultiEngineSyncService _multiEngine;
+    private readonly ISessionManager _sessionManager;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="LapseController"/> class.
@@ -90,6 +94,9 @@ public class LapseController : ControllerBase
     /// <param name="arrWebhookService">Turns Radarr/Sonarr imports into syncs.</param>
     /// <param name="historyService">Puts a sync back the way it was.</param>
     /// <param name="readable">Writes readable copies of subtitles, and puts them back.</param>
+    /// <param name="multiEngine">Collects the other engines' answers when LAPSE isn't sure.</param>
+    /// <param name="sessionManager">Says which subtitle track someone is watching, so
+    /// keeping the right one is a single press in the player.</param>
     public LapseController(
         ILibraryManager libraryManager,
         IUserManager userManager,
@@ -111,7 +118,9 @@ public class LapseController : ControllerBase
         OpenSubtitlesService openSubtitles,
         ArrWebhookService arrWebhookService,
         SyncHistoryService historyService,
-        ReadableSubtitleService readable)
+        ReadableSubtitleService readable,
+        MultiEngineSyncService multiEngine,
+        ISessionManager sessionManager)
     {
         _libraryManager = libraryManager;
         _userManager = userManager;
@@ -134,6 +143,8 @@ public class LapseController : ControllerBase
         _arrWebhookService = arrWebhookService;
         _historyService = historyService;
         _readable = readable;
+        _multiEngine = multiEngine;
+        _sessionManager = sessionManager;
     }
 
     // The role name Jellyfin puts in the token for an administrator. Its own constant
@@ -554,6 +565,20 @@ public class LapseController : ControllerBase
         var result = await _runner
             .RunAsync(engine, item.Path, subtitlePath, mode, penalty, request.OutputMode, outputFormat: request.OutputFormat)
             .ConfigureAwait(false);
+
+        // LAPSE wasn't sure, and multi engine sync is on: ask the other engines the same
+        // question and keep every answer as a file of its own to compare in the player.
+        if (_multiEngine.ShouldBuild(result, unattended: false))
+        {
+            var set = await _multiEngine
+                .BuildAsync(item, item.Path, subtitlePath, result, HttpContext.RequestAborted)
+                .ConfigureAwait(false);
+
+            if (set is not null)
+            {
+                result.CandidateCount = set.Candidates.Count;
+            }
+        }
 
         SyncQueueManager.SaveRecord(
             request.ItemId,
@@ -1435,6 +1460,12 @@ public class LapseController : ControllerBase
             OpenSubtitlesUsername = config.OpenSubtitlesUsername,
             OpenSubtitlesPassword = config.OpenSubtitlesPassword,
             OpenSubtitlesLanguage = config.OpenSubtitlesLanguage,
+            MultiEngineEnabled = config.MultiEngineEnabled,
+            MultiEngineUseAlass = config.MultiEngineUseAlass,
+            MultiEngineUseFfsubsync = config.MultiEngineUseFfsubsync,
+            MultiEngineTrigger = config.MultiEngineTrigger,
+            MultiEngineCandidateFormat = config.MultiEngineCandidateFormat,
+            MultiEngineInBulk = config.MultiEngineInBulk,
             ArrWebhookEnabled = config.ArrWebhookEnabled,
             ArrWebhookToken = config.ArrWebhookToken,
             AutoUpdateEngines = config.AutoUpdateEngines,
@@ -1859,6 +1890,12 @@ public class LapseController : ControllerBase
         config.OpenSubtitlesUsername = Blank(settings.OpenSubtitlesUsername);
         config.OpenSubtitlesPassword = Blank(settings.OpenSubtitlesPassword);
         config.OpenSubtitlesLanguage = Blank(settings.OpenSubtitlesLanguage) ?? "en";
+        config.MultiEngineEnabled = settings.MultiEngineEnabled;
+        config.MultiEngineUseAlass = settings.MultiEngineUseAlass;
+        config.MultiEngineUseFfsubsync = settings.MultiEngineUseFfsubsync;
+        config.MultiEngineTrigger = settings.MultiEngineTrigger;
+        config.MultiEngineCandidateFormat = settings.MultiEngineCandidateFormat;
+        config.MultiEngineInBulk = settings.MultiEngineInBulk;
         config.ArrWebhookEnabled = settings.ArrWebhookEnabled;
         config.AutoUpdateEngines = settings.AutoUpdateEngines;
         config.CountEmbeddedSubtitlesInStatus = settings.CountEmbeddedSubtitlesInStatus;
@@ -2092,6 +2129,188 @@ public class LapseController : ControllerBase
         {
             return BadRequest(ex.Message);
         }
+    }
+
+    // ------------------------------------------------------------ multi engine sync
+
+    /// <summary>
+    /// Gets whether multi engine sync can be used, and everything still waiting on a
+    /// decision.
+    /// </summary>
+    /// <returns>The current state.</returns>
+    [HttpGet("Lapse/MultiEngine")]
+    [Authorize(Policy = Policies.RequiresElevation)]
+    public ActionResult<object> GetMultiEngineStatus()
+    {
+        return new
+        {
+            Availability = _multiEngine.GetAvailability(),
+            Pending = MultiEngineSyncService.GetPending()
+        };
+    }
+
+    /// <summary>
+    /// Gets the answers waiting to be chosen between for one item, and says which of them
+    /// is playing right now when the caller is watching it.
+    /// </summary>
+    /// <param name="itemId">The item.</param>
+    /// <returns>Its pending sets.</returns>
+    [HttpGet("Lapse/Items/{itemId}/Candidates")]
+    public ActionResult<object> GetItemCandidates([FromRoute] Guid itemId)
+    {
+        var item = _libraryManager.GetItemById(itemId);
+
+        return new
+        {
+            Sets = MultiEngineSyncService.GetPendingFor(itemId),
+            PlayingPath = item is null ? null : ResolvePlayingSubtitlePath(item)
+        };
+    }
+
+    /// <summary>
+    /// Gets what the caller is watching right now and whether the subtitle on screen is one
+    /// of the answers waiting to be chosen.
+    ///
+    /// The player's own track list is what people use to compare the answers, so the press
+    /// that settles it has to work out which track that is. Reading it from the session
+    /// here means it doesn't depend on how a given jellyfin-web version marks the selected
+    /// entry in its menu, and it works the same from a phone as from the browser.
+    /// </summary>
+    /// <returns>The playing item and its pending answers, or an empty result.</returns>
+    [HttpGet("Lapse/Candidates/Playing")]
+    public ActionResult<object> GetPlayingCandidate()
+    {
+        var user = GetCallingUser();
+
+        var playing = _sessionManager.Sessions
+            .Where(s => s.NowPlayingItem is not null)
+            .ToList();
+
+        var session = (user is not null ? playing.Find(s => s.UserId.Equals(user.Id)) : null)
+            ?? playing.FirstOrDefault();
+
+        if (session?.NowPlayingItem is null)
+        {
+            return new { Playing = false };
+        }
+
+        var itemId = session.NowPlayingItem.Id;
+        var sets = MultiEngineSyncService.GetPendingFor(itemId);
+
+        var item = _libraryManager.GetItemById(itemId);
+        var playingPath = item is null ? null : ResolvePlayingSubtitlePath(item);
+        var match = MultiEngineSyncService.MatchPlaying(itemId, playingPath);
+
+        return new
+        {
+            Playing = true,
+            ItemId = itemId,
+            ItemName = session.NowPlayingItem.Name,
+            PlayingPath = playingPath,
+            IsCandidate = match is not null,
+            EngineName = match?.EngineName,
+            Sets = sets
+        };
+    }
+
+    /// <summary>
+    /// Keeps one of the waiting answers and removes the rest.
+    ///
+    /// With no path, this keeps whatever subtitle track the caller is watching right now,
+    /// which is the whole point of the feature: you compare the tracks in the player, and
+    /// the one that lines up is one press away from being the one that stays.
+    /// </summary>
+    /// <param name="request">The item, and optionally which answer.</param>
+    /// <returns>What happened.</returns>
+    [HttpPost("Lapse/Candidates/Keep")]
+    public ActionResult<CandidateDecision> KeepCandidate([FromBody] CandidateRequest request)
+    {
+        if (CheckSubtitleAccess() is { } denied)
+        {
+            return denied;
+        }
+
+        if (request is null || request.ItemId.Equals(default))
+        {
+            return BadRequest("An item id is required");
+        }
+
+        var path = request.Path;
+
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            var item = _libraryManager.GetItemById(request.ItemId);
+            if (item is null)
+            {
+                return NotFound("Item not found");
+            }
+
+            path = ResolvePlayingSubtitlePath(item);
+
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return BadRequest("Could not tell which subtitle you're watching. Pick one from the list instead.");
+            }
+
+            if (MultiEngineSyncService.MatchPlaying(request.ItemId, path) is null)
+            {
+                return BadRequest("The subtitle playing right now isn't one of the answers waiting to be chosen.");
+            }
+        }
+
+        var decision = _multiEngine.Keep(request.ItemId, path);
+        return decision.Success ? decision : BadRequest(decision.Message);
+    }
+
+    /// <summary>
+    /// Throws away every waiting answer for an item and leaves the original subtitle as it
+    /// was.
+    /// </summary>
+    /// <param name="request">The item, and optionally which subtitle's answers.</param>
+    /// <returns>What happened.</returns>
+    [HttpPost("Lapse/Candidates/Discard")]
+    public ActionResult<CandidateDecision> DiscardCandidates([FromBody] CandidateRequest request)
+    {
+        if (CheckSubtitleAccess() is { } denied)
+        {
+            return denied;
+        }
+
+        if (request is null || request.ItemId.Equals(default))
+        {
+            return BadRequest("An item id is required");
+        }
+
+        return _multiEngine.Discard(request.ItemId, request.OriginalPath);
+    }
+
+    // Which subtitle file the caller has on screen right now. Read from the session rather
+    // than from the page, so it doesn't depend on how a particular jellyfin-web version
+    // marks the selected entry in its own menu.
+    private string? ResolvePlayingSubtitlePath(BaseItem item)
+    {
+        var playing = _sessionManager.Sessions
+            .Where(s => s.NowPlayingItem is not null && s.NowPlayingItem.Id.Equals(item.Id))
+            .ToList();
+
+        if (playing.Count == 0)
+        {
+            return null;
+        }
+
+        // Their own session first. Falling back to any session playing this item covers
+        // the case where the press comes from a different device to the one playing it.
+        var user = GetCallingUser();
+        var session = (user is not null ? playing.Find(s => s.UserId.Equals(user.Id)) : null) ?? playing[0];
+
+        if (session.PlayState?.SubtitleStreamIndex is not { } index || index < 0)
+        {
+            return null;
+        }
+
+        return item.GetMediaStreams()
+            .FirstOrDefault(s => s.Type == MediaStreamType.Subtitle && s.Index == index)?
+            .Path;
     }
 
     // ------------------------------------------------- readable subtitles and fonts

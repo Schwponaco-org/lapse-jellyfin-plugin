@@ -562,9 +562,40 @@
             scroller.appendChild(makeMenuButton('lapse-readable-subtitles', 'Readable Subtitles', 'accessibility_new', function () {
                 openRestylePopup(context);
             }));
+
+            addChooseSubtitleButton(scroller, context.id);
         }
 
         log('added the LAPSE buttons for ' + context.type + ' ' + context.id);
+    }
+
+    // Only shown when this item actually has answers waiting, so the menu doesn't grow an
+    // entry that would only ever say "nothing to choose".
+    function addChooseSubtitleButton(scroller, itemId) {
+        lapseGet('Lapse/Items/' + itemId + '/Candidates').then(function (status) {
+            var sets = (status && status.Sets) || [];
+
+            if (!sets.length || !document.body.contains(scroller) || scroller.querySelector('.lapseChooseButton')) {
+                return;
+            }
+
+            var count = sets.reduce(function (total, set) {
+                return total + ((set.Candidates || []).length);
+            }, 0);
+
+            var button = makeMenuButton(
+                'lapse-choose-subtitles',
+                'Choose the right subtitle (' + count + ' waiting)',
+                'compare_arrows',
+                function () {
+                    openCandidatePicker(itemId);
+                });
+
+            button.classList.add('lapseChooseButton');
+            scroller.appendChild(button);
+        }).catch(function (err) {
+            log('could not check for waiting subtitles on ' + itemId + ': ' + err);
+        });
     }
 
     function handleActionSheetOpened(sheet) {
@@ -1033,6 +1064,150 @@
         }));
 
         log('added the subtitle settings entry to the player menu');
+
+        addKeepCandidateButton(sheet, scroller);
+    }
+
+    // Multi engine sync leaves several answers for the same subtitle sitting next to the
+    // video, and the only way to tell which is right is to watch. So the press that settles
+    // it goes here, in the track list you were already using to compare them: switch tracks
+    // until one lines up, open this menu, keep it. The server works out which track is on
+    // screen from the session, so nothing here has to read the menu's own selection.
+    function addKeepCandidateButton(sheet, scroller) {
+        lapseGet('Lapse/Candidates/Playing').then(function (status) {
+            if (!status || !status.Playing || !status.Sets || !status.Sets.length) {
+                return;
+            }
+
+            if (!document.body.contains(sheet) || scroller.querySelector('.lapseKeepButton')) {
+                return;
+            }
+
+            var button;
+
+            if (status.IsCandidate) {
+                button = makeMenuButton(
+                    'lapse-keep-subtitle',
+                    'Keep this subtitle (' + status.EngineName + ')',
+                    'check_circle',
+                    function () {
+                        keepPlayingSubtitle(status.ItemId);
+                    });
+            } else {
+                // They are on the original, or on some other track. Pointing at the picker
+                // is more use than a button that would refuse.
+                button = makeMenuButton(
+                    'lapse-choose-subtitle',
+                    'Choose between the synced subtitles',
+                    'compare_arrows',
+                    function () {
+                        openCandidatePicker(status.ItemId);
+                    });
+            }
+
+            button.classList.add('lapseKeepButton');
+            scroller.appendChild(button);
+            log('added the multi engine entry to the player subtitle menu');
+        }).catch(function (err) {
+            log('could not check for waiting subtitles: ' + err);
+        });
+    }
+
+    function keepPlayingSubtitle(itemId) {
+        showLapseToast('Keeping this one...');
+
+        lapsePost('Lapse/Candidates/Keep', { ItemId: itemId }).then(function (decision) {
+            showLapseToast((decision && decision.Message) || 'Kept it.', true);
+        }).catch(function (err) {
+            showLapseToast('Could not keep it: ' + err.message, true);
+        });
+    }
+
+    // The way in when nobody is watching, or when the track on screen isn't one of the
+    // answers. Same decision, just made from a list instead of from the picture.
+    function openCandidatePicker(itemId) {
+        lapseGet('Lapse/Items/' + itemId + '/Candidates').then(function (status) {
+            var sets = (status && status.Sets) || [];
+
+            if (!sets.length) {
+                showLapseToast('There are no synced subtitles waiting to be chosen for this item.');
+                return;
+            }
+
+            showCandidateDialog(itemId, sets, status.PlayingPath);
+        }).catch(function (err) {
+            showLapseToast('Could not read the waiting subtitles: ' + err.message);
+        });
+    }
+
+    function showCandidateDialog(itemId, sets, playingPath) {
+        var body = sets.map(function (set) {
+            var options = (set.Candidates || []).map(function (c) {
+                var playing = playingPath && c.Path === playingPath ? ' (playing now)' : '';
+                return '<label class="lapseCandidateRow">' +
+                    '<input type="radio" name="lapseCandidate" value="' + escapeHtml(c.Path) + '" />' +
+                    '<span><strong>' + escapeHtml(c.EngineName) + '</strong>' + playing +
+                    '<br /><span class="fieldDescription">' + escapeHtml(c.Detail || 'no details') +
+                    '</span></span></label>';
+            }).join('');
+
+            return '<div class="fieldDescription">' + escapeHtml(baseName(set.OriginalPath)) +
+                ' has not been touched. Pick the answer that lines up:</div>' + options;
+        }).join('');
+
+        var overlay = openOverlay(
+            '<h3>Choose the right subtitle</h3>' +
+            '<div class="fieldDescription">Play the item and switch between these tracks to compare them. ' +
+            'Keeping one writes it out using your File output setting and deletes the rest.</div>' +
+            body +
+            '<div class="lapseDialogButtons">' +
+            '  <button is="emby-button" type="button" class="raised" id="lapseCandidateCancel"><span>Close</span></button>' +
+            '  <button is="emby-button" type="button" class="raised" id="lapseCandidateDiscard"><span>Throw all away</span></button>' +
+            '  <button is="emby-button" type="button" class="raised button-submit" id="lapseCandidateKeep"><span>Keep</span></button>' +
+            '</div>',
+            true);
+
+        overlay.querySelector('#lapseCandidateCancel').addEventListener('click', function () {
+            overlay.remove();
+        });
+
+        overlay.querySelector('#lapseCandidateDiscard').addEventListener('click', function () {
+            overlay.remove();
+            showLapseToast('Removing them...');
+
+            lapsePost('Lapse/Candidates/Discard', { ItemId: itemId }).then(function (decision) {
+                showLapseToast((decision && decision.Message) || 'Removed.', true);
+            }).catch(function (err) {
+                showLapseToast('Could not remove them: ' + err.message, true);
+            });
+        });
+
+        overlay.querySelector('#lapseCandidateKeep').addEventListener('click', function () {
+            var picked = overlay.querySelector('input[name="lapseCandidate"]:checked');
+
+            if (!picked) {
+                showLapseToast('Pick one of them first.');
+                return;
+            }
+
+            overlay.remove();
+            showLapseToast('Keeping it...');
+
+            lapsePost('Lapse/Candidates/Keep', { ItemId: itemId, Path: picked.value }).then(function (decision) {
+                showLapseToast((decision && decision.Message) || 'Kept it.', true);
+            }).catch(function (err) {
+                showLapseToast('Could not keep it: ' + err.message, true);
+            });
+        });
+    }
+
+    function baseName(path) {
+        if (!path) {
+            return '';
+        }
+
+        var parts = path.split(/[\\/]/);
+        return parts[parts.length - 1];
     }
 
     function openSubtitleSettingsDialog() {
