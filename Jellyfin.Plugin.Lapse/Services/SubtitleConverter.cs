@@ -312,6 +312,8 @@ public partial class SubtitleConverter
             CreateNoWindow = true
         };
 
+        ProcessOutput.ReadAsUtf8(startInfo);
+
         // -y so a leftover scratch file can't make this hang on a prompt, and the format
         // comes from the .srt extension on the destination.
         startInfo.ArgumentList.Add("-nostdin");

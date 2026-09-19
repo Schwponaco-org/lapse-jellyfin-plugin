@@ -339,6 +339,8 @@ public partial class EngineCapabilityProbe
             CreateNoWindow = true
         };
 
+        Services.ProcessOutput.ReadAsUtf8(startInfo);
+
         foreach (var argument in arguments)
         {
             startInfo.ArgumentList.Add(argument);

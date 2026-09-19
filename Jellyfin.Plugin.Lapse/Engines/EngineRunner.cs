@@ -259,6 +259,8 @@ public class EngineRunner
             CreateNoWindow = true
         };
 
+        ProcessOutput.ReadAsUtf8(startInfo);
+
         using var process = new Process { StartInfo = startInfo };
 
         try
@@ -744,12 +746,15 @@ public class EngineRunner
             CreateNoWindow = true
         };
 
+        ProcessOutput.ReadAsUtf8(startInfo);
+
         foreach (var arg in args)
         {
             startInfo.ArgumentList.Add(arg);
         }
 
         AddFfmpegToPath(startInfo, ffmpegDirectory);
+        AskPythonForUtf8(startInfo);
 
         _logger.LogInformation("Running engine: {Path} {Args}", enginePath, string.Join(' ', startInfo.ArgumentList));
 
@@ -941,6 +946,16 @@ public class EngineRunner
         {
             startInfo.Environment[variable] = path;
         }
+    }
+
+    // ffsubsync is a Python program, and Python writes to a pipe in the machine's locale
+    // encoding rather than UTF-8. We read UTF-8, so ask it to write that - otherwise the
+    // one engine that isn't a native binary would be the one whose file names came back
+    // as question marks. Engines that aren't Python ignore both variables.
+    private static void AskPythonForUtf8(ProcessStartInfo startInfo)
+    {
+        startInfo.Environment["PYTHONUTF8"] = "1";
+        startInfo.Environment["PYTHONIOENCODING"] = "utf-8";
     }
 
     private static void TryKill(Process process)
