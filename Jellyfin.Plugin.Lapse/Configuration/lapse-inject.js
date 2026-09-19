@@ -581,6 +581,7 @@
             addChooseSubtitleButton(scroller, context.id);
         }
 
+        keepSheetOnScreen(scroller.closest('.actionSheet') || scroller);
         log('added the LAPSE buttons for ' + context.type + ' ' + context.id);
     }
 
@@ -608,6 +609,7 @@
 
             button.classList.add('lapseChooseButton');
             scroller.appendChild(button);
+            keepSheetOnScreen(scroller.closest('.actionSheet') || scroller);
         }).catch(function (err) {
             log('could not check for waiting subtitles on ' + itemId + ': ' + err);
         });
@@ -1866,6 +1868,39 @@
         log('added the subtitle tools entry to the player menu');
 
         addKeepCandidateButton(sheet, scroller);
+        keepSheetOnScreen(sheet);
+    }
+
+    // Jellyfin works out where to put an action sheet from how tall it is, then puts it
+    // there. Anything added afterwards makes it taller than the sum it was placed on, so
+    // it grows downwards off the bottom of the screen and the last entry ends up half cut
+    // off. Nudging it back up afterwards is the cheapest fix that does not involve
+    // reimplementing its positioning.
+    function keepSheetOnScreen(sheet) {
+        // Let the browser lay the new entries out before measuring.
+        requestAnimationFrame(function () {
+            if (!document.body.contains(sheet)) {
+                return;
+            }
+
+            var box = sheet.getBoundingClientRect();
+            var margin = 8;
+            var overflow = box.bottom - (window.innerHeight - margin);
+
+            if (overflow <= 0) {
+                return;
+            }
+
+            var top = parseFloat(sheet.style.top);
+            if (isNaN(top)) {
+                // Positioned by something other than an inline top, so there is nothing
+                // safe to adjust. The scroller's own max-height keeps it usable.
+                return;
+            }
+
+            sheet.style.top = Math.max(margin, top - overflow) + 'px';
+            log('moved the action sheet up ' + Math.round(overflow) + 'px to keep it on screen');
+        });
     }
 
     // Multi engine sync leaves several answers for the same subtitle sitting next to the
@@ -1907,6 +1942,7 @@
 
             button.classList.add('lapseKeepButton');
             scroller.appendChild(button);
+            keepSheetOnScreen(sheet);
             log('added the multi engine entry to the player subtitle menu');
         }).catch(function (err) {
             log('could not check for waiting subtitles: ' + err);

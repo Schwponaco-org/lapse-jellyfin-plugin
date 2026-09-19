@@ -280,6 +280,20 @@
     max-width: min(32em, 92vw);
 }
 
+/* Our entries make the sheet taller than the height Jellyfin positioned it on, so on a
+   short window the last one can still fall off the bottom even after it has been nudged
+   back up. Letting the list scroll means everything stays reachable either way. */
+.actionSheet:has(.lapseSyncButton),
+.actionSheetContent:has(.lapseSyncButton) {
+    max-height: 88vh;
+}
+
+.actionSheet:has(.lapseSyncButton) .actionSheetScroller,
+.actionSheetContent:has(.lapseSyncButton) .actionSheetScroller {
+    max-height: 80vh;
+    overflow-y: auto;
+}
+
 /* --- the in-player subtitle panel ---
 
    Sits over the right edge of the picture while the film keeps playing, because the whole

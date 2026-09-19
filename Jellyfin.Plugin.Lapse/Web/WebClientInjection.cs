@@ -3,6 +3,7 @@
 // Licensed under GPL v3 - see LICENSE for details
 
 using System;
+using System.Globalization;
 using System.IO;
 
 namespace Jellyfin.Plugin.Lapse.Web;
@@ -82,10 +83,45 @@ public static class WebClientInjection
     {
         var prefix = webBasePath.TrimEnd('/');
 
+        // The plugin's version goes in the URL so that updating it actually reaches
+        // people. Without this the browser has no reason to ask for the file again - the
+        // address never changed - so an upgrade leaves everyone running the script they
+        // cached whenever they first loaded the client, and the new version appears to do
+        // nothing at all.
+        var version = BuildVersion();
+
         // data-lapse-inject-css is what the script looks for before adding the stylesheet
         // itself, so tagging it here stops the page ending up with two copies.
-        return $"<link rel=\"stylesheet\" href=\"{prefix}/configurationpage?name=lapse-inject.css\" data-lapse-inject-css=\"1\">"
-            + $"<script src=\"{prefix}/configurationpage?name=lapse-inject.js\" defer></script>";
+        return $"<link rel=\"stylesheet\" href=\"{prefix}/configurationpage?name=lapse-inject.css&amp;v={version}\" data-lapse-inject-css=\"1\">"
+            + $"<script src=\"{prefix}/configurationpage?name=lapse-inject.js&amp;v={version}\" defer></script>";
+    }
+
+    /// <summary>
+    /// Gets the string that makes a cached copy of the script stale when the plugin
+    /// changes. The assembly version is what moves on every release; a build that somehow
+    /// reports none falls back to the assembly's own timestamp, which still changes with
+    /// the file.
+    /// </summary>
+    /// <returns>A short token safe to put in a query string.</returns>
+    private static string BuildVersion()
+    {
+        var assembly = typeof(WebClientInjection).Assembly;
+        var version = assembly.GetName().Version?.ToString();
+
+        if (!string.IsNullOrWhiteSpace(version) && version != "0.0.0.0")
+        {
+            return version;
+        }
+
+        try
+        {
+            return File.GetLastWriteTimeUtc(assembly.Location)
+                .ToString("yyyyMMddHHmmss", CultureInfo.InvariantCulture);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            return "0";
+        }
     }
 
     /// <summary>
