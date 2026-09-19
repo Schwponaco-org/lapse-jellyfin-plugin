@@ -766,6 +766,17 @@ public class MultiEngineSyncService
         return false;
     }
 
+    /// <summary>
+    /// Asks Jellyfin to look at an item again, so a subtitle file written since the last
+    /// scan becomes a track the player will offer. Shared with the in-player panel, which
+    /// needs the same thing for a subtitle it just fetched or synced.
+    /// </summary>
+    /// <param name="itemId">The item to rescan.</param>
+    public void RequestRefreshFor(Guid itemId)
+    {
+        RequestRefresh(itemId);
+    }
+
     // New subtitle files sit unseen until the next library scan, and this feature is built
     // on switching between them in the player straight after the sync.
     private void RequestRefresh(Guid itemId)

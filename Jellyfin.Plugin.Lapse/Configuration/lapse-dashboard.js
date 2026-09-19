@@ -182,7 +182,8 @@
         FontSizePx: 48,
         TextColor: '#FFFFFF',
         BackgroundColor: '#00000080',
-        BackgroundEnabled: true
+        BackgroundEnabled: true,
+        VerticalPositionPercent: 0
     };
 
     // Plain fetch with the auth header jellyfin wants, instead of guessing at
@@ -3248,6 +3249,7 @@
         return {
             Enabled: view.querySelector('#lapseAppearanceEnabled').checked,
             FontSizePx: parseInt(view.querySelector('#lapseAppearanceFontSize').value, 10) || APPEARANCE_DEFAULTS.FontSizePx,
+            VerticalPositionPercent: parseInt(view.querySelector('#lapseAppearancePosition').value, 10) || 0,
             TextColor: view.querySelector('#lapseAppearanceTextColor').value.toUpperCase(),
             BackgroundColor: joinColor(
                 view.querySelector('#lapseAppearanceBgColor').value.toUpperCase(),
@@ -3262,6 +3264,7 @@
 
         view.querySelector('#lapseAppearanceEnabled').checked = !!appearance.Enabled;
         view.querySelector('#lapseAppearanceFontSize').value = appearance.FontSizePx || APPEARANCE_DEFAULTS.FontSizePx;
+        view.querySelector('#lapseAppearancePosition').value = appearance.VerticalPositionPercent || 0;
         view.querySelector('#lapseAppearanceTextColor').value =
             splitColor(appearance.TextColor, APPEARANCE_DEFAULTS.TextColor).rgb;
         view.querySelector('#lapseAppearanceBgColor').value = background.rgb;
@@ -3276,6 +3279,7 @@
         var text = view.querySelector('#lapseAppearancePreviewText');
 
         view.querySelector('#lapseAppearanceFontSizeValue').textContent = appearance.FontSizePx;
+        view.querySelector('#lapseAppearancePositionValue').textContent = appearance.VerticalPositionPercent || 0;
         view.querySelector('#lapseAppearanceBgOpacityValue').textContent =
             view.querySelector('#lapseAppearanceBgOpacity').value;
 
@@ -3293,6 +3297,7 @@
 
         view.querySelector('#lapseAppearanceEnabled').checked = APPEARANCE_DEFAULTS.Enabled;
         view.querySelector('#lapseAppearanceFontSize').value = APPEARANCE_DEFAULTS.FontSizePx;
+        view.querySelector('#lapseAppearancePosition').value = APPEARANCE_DEFAULTS.VerticalPositionPercent;
         view.querySelector('#lapseAppearanceTextColor').value = APPEARANCE_DEFAULTS.TextColor;
         view.querySelector('#lapseAppearanceBgColor').value = background.rgb;
         view.querySelector('#lapseAppearanceBgOpacity').value = background.opacity;
@@ -3718,7 +3723,8 @@
             });
         });
 
-        ['#lapseAppearanceEnabled', '#lapseAppearanceFontSize', '#lapseAppearanceTextColor',
+        ['#lapseAppearanceEnabled', '#lapseAppearanceFontSize', '#lapseAppearancePosition',
+            '#lapseAppearanceTextColor',
             '#lapseAppearanceBgColor', '#lapseAppearanceBgOpacity', '#lapseAppearanceBgEnabled']
             .forEach(function (selector) {
                 view.querySelector(selector).addEventListener('input', function () {

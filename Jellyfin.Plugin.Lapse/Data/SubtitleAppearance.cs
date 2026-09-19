@@ -77,6 +77,22 @@ public class SubtitleAppearance
     public double LetterSpacingPx { get; set; }
 
     /// <summary>
+    /// Gets or sets how far up from the bottom of the picture subtitles sit, as a
+    /// percentage of the video height. Zero is where the player already puts them.
+    ///
+    /// Worth having because the right answer is not the same for everyone or even for
+    /// every film: a release with burnt-in signage along the bottom, a TV that cuts off
+    /// the edge of the picture, or simply a preference for text nearer the middle. The
+    /// player anchors its subtitle strip to the bottom of the window, so this moves that
+    /// strip up.
+    ///
+    /// Only reaches subtitles the player draws as HTML. An ASS or SSA track rendered
+    /// through libass carries its own positioning inside the file and is drawn on a
+    /// canvas, which no amount of styling from out here can move.
+    /// </summary>
+    public int VerticalPositionPercent { get; set; }
+
+    /// <summary>
     /// Returns a copy, so a user's own settings can be edited without writing through to
     /// the server-wide defaults they were copied from.
     /// </summary>
@@ -89,6 +105,7 @@ public class SubtitleAppearance
         BackgroundColor = BackgroundColor,
         BackgroundEnabled = BackgroundEnabled,
         FontFamily = FontFamily,
-        LetterSpacingPx = LetterSpacingPx
+        LetterSpacingPx = LetterSpacingPx,
+        VerticalPositionPercent = VerticalPositionPercent
     };
 }

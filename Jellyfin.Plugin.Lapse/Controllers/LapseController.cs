@@ -1576,7 +1576,12 @@ public class LapseController : ControllerBase
             BackgroundColor = NormalizeColor(appearance.BackgroundColor, SubtitleAppearance.DefaultBackgroundColor),
             BackgroundEnabled = appearance.BackgroundEnabled,
             FontFamily = Blank(appearance.FontFamily),
-            LetterSpacingPx = Math.Clamp(appearance.LetterSpacingPx, 0, 20)
+            LetterSpacingPx = Math.Clamp(appearance.LetterSpacingPx, 0, 20),
+
+            // Past about 85 the text would be off the top of the picture, and there is no
+            // way back from that without finding this setting again on a screen that is
+            // now showing subtitles nobody can read.
+            VerticalPositionPercent = Math.Clamp(appearance.VerticalPositionPercent, 0, 85)
         };
 
         Plugin.Instance!.SaveConfiguration();
@@ -1926,13 +1931,22 @@ public class LapseController : ControllerBase
         if (settings.SubtitleAppearance is not null)
         {
             var appearance = settings.SubtitleAppearance;
+            var previous = config.SubtitleAppearance ?? new SubtitleAppearance();
+
             config.SubtitleAppearance = new SubtitleAppearance
             {
                 Enabled = appearance.Enabled,
                 FontSizePx = Math.Clamp(appearance.FontSizePx, 8, 200),
                 TextColor = NormalizeColor(appearance.TextColor, SubtitleAppearance.DefaultTextColor),
                 BackgroundColor = NormalizeColor(appearance.BackgroundColor, SubtitleAppearance.DefaultBackgroundColor),
-                BackgroundEnabled = appearance.BackgroundEnabled
+                BackgroundEnabled = appearance.BackgroundEnabled,
+                VerticalPositionPercent = Math.Clamp(appearance.VerticalPositionPercent, 0, 85),
+
+                // The dashboard form has no box for either of these, so they arrive empty
+                // whatever was there before. Rebuilding the object from the form alone
+                // would quietly wipe a font somebody had set.
+                FontFamily = appearance.FontFamily ?? previous.FontFamily,
+                LetterSpacingPx = appearance.LetterSpacingPx > 0 ? appearance.LetterSpacingPx : previous.LetterSpacingPx
             };
         }
 
@@ -2129,6 +2143,154 @@ public class LapseController : ControllerBase
         {
             return BadRequest(ex.Message);
         }
+    }
+
+    // -------------------------------------------------------------- the player panel
+
+    /// <summary>
+    /// Gets what the caller is watching and what there is to work on: the item, the
+    /// subtitle track on screen, and every subtitle the item has.
+    ///
+    /// Read from the session rather than worked out in the browser. The panel needs a real
+    /// file path to shift or sync, and the only thing the page knows is a stream index,
+    /// which means nothing on its own. Asking the server also means the panel behaves the
+    /// same whichever jellyfin-web version is serving it.
+    /// </summary>
+    /// <returns>The playing context, or Playing = false when nothing is.</returns>
+    [HttpGet("Lapse/Player/Context")]
+    public ActionResult<object> GetPlayerContext()
+    {
+        var user = GetCallingUser();
+
+        var playing = _sessionManager.Sessions
+            .Where(s => s.NowPlayingItem is not null)
+            .ToList();
+
+        var session = (user is not null ? playing.Find(s => s.UserId.Equals(user.Id)) : null)
+            ?? playing.FirstOrDefault();
+
+        if (session?.NowPlayingItem is null)
+        {
+            return new { Playing = false };
+        }
+
+        var itemId = session.NowPlayingItem.Id;
+        var item = _libraryManager.GetItemById(itemId);
+
+        if (item is null)
+        {
+            return new { Playing = false };
+        }
+
+        var subtitles = _subtitleLocator.GetExternalSubtitles(item);
+        var playingPath = ResolvePlayingSubtitlePath(item);
+
+        var streams = item.GetMediaStreams()
+            .Where(s => s.Type == MediaStreamType.Subtitle)
+            .ToList();
+
+        // A subtitle the plugin can see is not necessarily one the player is offering.
+        // A file written since the last scan is on disk and syncable, but has no stream
+        // index yet, so it cannot be switched to until Jellyfin has picked it up. The
+        // panel needs to tell those two apart to say anything useful about them.
+        var tracks = subtitles.ConvertAll(s => new
+        {
+            s.Path,
+            s.DisplayName,
+            s.Language,
+            s.Format,
+            s.Supported,
+            s.TextBased,
+            s.IsEmbedded,
+            StreamIndex = (int?)streams.Find(ms =>
+                !string.IsNullOrEmpty(ms.Path)
+                && string.Equals(ms.Path, s.Path, StringComparison.OrdinalIgnoreCase))?.Index
+        });
+
+        return new
+        {
+            Playing = true,
+            ItemId = itemId,
+            ItemName = SyncQueueManager.DescribeItem(item),
+            PlayingPath = playingPath,
+
+            // Null when the track on screen is burnt in, still inside the video, or
+            // turned off. The panel uses this to say what it can and cannot act on.
+            PlayingIsFile = playingPath is not null,
+            Subtitles = tracks,
+            CanSync = _registry.GetDefault() is { } engine && System.IO.File.Exists(_runner.ResolvePath(engine)),
+            CanFetch = Plugin.Instance!.Configuration.OpenSubtitlesEnabled,
+            OutputMode = Plugin.Instance!.Configuration.OutputMode.ToString(),
+            Candidates = MultiEngineSyncService.GetPendingFor(itemId)
+        };
+    }
+
+    /// <summary>
+    /// Asks Jellyfin to look at an item's folder again, so a subtitle file written since
+    /// the last scan becomes a track the player will offer.
+    /// </summary>
+    /// <param name="itemId">The item.</param>
+    /// <returns>Nothing useful; the scan happens in the background.</returns>
+    [HttpPost("Lapse/Items/{itemId}/Rescan")]
+    public ActionResult RescanItem([FromRoute] Guid itemId)
+    {
+        if (CheckSubtitleAccess() is { } denied)
+        {
+            return denied;
+        }
+
+        var item = _libraryManager.GetItemById(itemId);
+        if (item is null)
+        {
+            return NotFound("Item not found");
+        }
+
+        _multiEngine.RequestRefreshFor(itemId);
+        return NoContent();
+    }
+
+    /// <summary>
+    /// Fetches a subtitle for an item from OpenSubtitles, for the panel's use while
+    /// something is playing. Experimental, and only does anything when an admin has set
+    /// the account up.
+    /// </summary>
+    /// <param name="itemId">The item.</param>
+    /// <returns>A line saying what happened.</returns>
+    [HttpPost("Lapse/Items/{itemId}/FetchSubtitle")]
+    public async Task<ActionResult<object>> FetchSubtitleForItem([FromRoute] Guid itemId)
+    {
+        if (CheckSubtitleAccess() is { } denied)
+        {
+            return denied;
+        }
+
+        if (!Plugin.Instance!.Configuration.OpenSubtitlesEnabled)
+        {
+            return BadRequest("Fetching from OpenSubtitles is switched off.");
+        }
+
+        var item = _libraryManager.GetItemById(itemId);
+        if (item is null)
+        {
+            return NotFound("Item not found");
+        }
+
+        var fetched = await _openSubtitles.TryFetchAsync(item, HttpContext.RequestAborted).ConfigureAwait(false);
+
+        if (fetched.Path is null)
+        {
+            return new { Success = false, Message = fetched.Error ?? "Nothing was found for this one." };
+        }
+
+        // It is on disk but the player has no idea, so ask for the scan that makes it a
+        // track rather than leaving somebody to wonder why nothing changed.
+        _multiEngine.RequestRefreshFor(itemId);
+
+        return new
+        {
+            Success = true,
+            Message = "Got " + Path.GetFileName(fetched.Path) + ". Give Jellyfin a few seconds to pick it up."
+        };
     }
 
     // ------------------------------------------------------------ multi engine sync
