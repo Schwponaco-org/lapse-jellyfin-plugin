@@ -1,7 +1,7 @@
 ---
 name: "LAPSE"
 guid: "486090e1-ca92-46e1-8549-9f6bb914a1d0"
-version: "1.6.0.0"
+version: "2.0.0.0"
 targetAbi: "10.11.0.0"
 framework: "net9.0"
 overview: "Sync subtitles to audio (or subtitle to subtitle) using the LAPSE engine. Open Settings after installing to set it up."
@@ -21,28 +21,37 @@ owner: "rs-jensen"
 artifacts:
 - "Jellyfin.Plugin.Lapse.dll"
 changelog: >
-  Verified against Jellyfin 12.0 as well as 10.11: plugin load, script
-  injection, subtitle discovery, sync, convert, readable subtitles,
-  embedded extraction and remux all check out unchanged. The build still
-  targets 10.11.0.0, on purpose - every Jellyfin type this plugin uses is
-  the same across both, so one artifact keeps serving 10.11 and 12
-  installs alike rather than cutting 10.11 users off.
+  A big one. LAPSE now has a subtitle panel in the video player itself -
+  open "Subtitle tools" from the CC menu while something is playing and
+  you get a delay slider that drives Jellyfin's own live offset (so it
+  works with libass/ASS, plain text tracks, everything), a Save to file
+  button that bakes the delay in for good, a one-press Sync without
+  leaving the film, quick track switching, a rescan for subtitles LAPSE
+  can see but Jellyfin hasn't picked up, OpenSubtitles fetching, and
+  appearance settings with a live preview. Web client only for now.
 
-  LAPSE's engine gained forced output encoding and cut-snapping, and both
-  are now reachable from the engine's advanced settings. "Write every
-  result in one encoding" forces utf8, utf8-bom, utf16le, utf16be or
-  latin1 instead of a file going back out however it came in, for a
-  library that is a mix of UTF-16 and old codepage files. "Snap cue
-  starts onto picture cuts" pulls a cue that lands within a window of a
-  scene cut onto it, since a subtitler writing to picture puts a line up
-  on the cut and a file moved by one number can be right to within a few
-  frames and still read late throughout. Both are off unless set, and
-  neither is offered to an engine build that predates them.
+  Multi engine sync (experimental): when LAPSE isn't sure a sync actually
+  worked, it can now run alass and ffsubsync over the same subtitle too
+  and write every engine's answer as its own subtitle track, so instead
+  of one questionable file you get all of them to compare in the player
+  and a Keep this subtitle button in the new panel once you've found the
+  one that's actually right. Marked experimental because it's new and
+  leaves extra files sitting next to the video until you act on them; off
+  by default and needs turning on under Settings.
 
-  Ticking individual subtitles in the Readable Subtitles dialog never
-  actually wrote anything - the picked tracks arrived empty on every
-  request and the dialog fell back to "at least one subtitle is
-  required". Fixed, along with the file collision that surfaced behind
-  it: restyling both a .srt and its converted .ass copy at once could
-  overwrite one readable copy with the other, or replace the wrong
-  track entirely.
+  LAPSE also shows up in the dashboard's own sidebar now, under Plugins,
+  instead of being three clicks deep under Dashboard > Plugins > My
+  Plugins.
+
+  Two bugs fixed: alass wouldn't install on Windows (the zip layout
+  tripped up how the plugin picked the binary out of it), and a server
+  running a non-UTF-8 code page - Chinese Windows installs, mainly -
+  could read a finished sync back as garbled JSON and report it as
+  failed even though the file had been written correctly. Engine output
+  is read as UTF-8 explicitly now, whatever the server's locale is.
+
+  Also: the OpenDyslexic button can uninstall the font again once it's
+  installed, instead of just sitting there.
+
+  Checked against Jellyfin 12.0 as well as 10.11 - still one artifact for
+  both, still targeting 10.11.0.0, nothing here needed the newer ABI.

@@ -34,6 +34,8 @@ Every film, episode and loose video gets these entries in its three dot menu:
 - **Readable Subtitles** - writes a copy with a dyslexia-friendly font, larger text and wider letter spacing set inside the file rather than in a client. You tick which subtitles it applies to, so a Danish track can be made readable while the English and Spanish ones are left alone, and by default the copy is written beside the original rather than over it - both are offered in the player, so one person's readable subtitle doesn't take everyone else's away. Replacing is offered too and keeps the original as a backup; either way, **Back to normal** in the same dialog undoes it. Subtitles that aren't in the Latin alphabet keep the larger text, heavier outline and margin, but get a font that has their letters in it: OpenDyslexic has no Arabic, Hebrew, Thai or CJK glyphs. Letter spacing is dropped for scripts whose letters join up or carry stacked marks, and Arabic and Hebrew are marked as running right to left. The font itself installs from the dashboard under Subtitle appearance.
 - **Translate** (experimental) - a separate job from syncing that never touches the original file. Providers include MyMemory (no setup needed), self-hosted LibreTranslate and Lingarr, and DeepL or Google Cloud with a key. Set a default language under Translation and the dialogs start on it, so nothing has to be typed on a TV remote.
 
+While something is playing, there's also **Subtitle tools** at the top of the CC menu (the closed-captions button, not the gear). It opens a panel that slides in from the right without stopping the film, and it's the fastest way to fix a subtitle that's slightly off: a delay slider and nudge buttons move the subtitle live using Jellyfin's own offset, so it works with ASS/libass, plain text tracks, all of it. Happy with where you landed it? **Save to file** writes that delay into the subtitle for good, following whatever File output mode you've set below, and zeroes the live offset so it doesn't get applied twice on the next play. The same panel can also run a Sync without leaving the player, switch between subtitle tracks, rescan for subtitle files LAPSE can see but Jellyfin hasn't picked up yet, fetch from OpenSubtitles, and tweak appearance with a live preview. Web client only for now - nothing here reaches Android TV, iOS, Kodi, and the rest.
+
 Elsewhere in the dashboard:
 
 - **Sync status, Bulk sync, Subtitle to subtitle** - a searchable list of every syncable item, a page to sync a whole library or folder at once, and a page to line up two subtitle files directly without a library item involved. An item counts as synced once its subtitle files have been synced; tracks still inside the video file are left out of that unless you ask for them, since nothing automatic touches those.
@@ -88,17 +90,21 @@ Jellyfin picks up a new file as an extra subtitle track on its next scan.
 
 ## Multi engine sync (experimental)
 
-LAPSE is the only engine that says how sure it is of its own answer. alass and ffsubsync just hand back a timing with nothing attached to say whether it is any good. That asymmetry is what this feature is built on: LAPSE decides when there is doubt, and the other engines are there to give you something to compare against when there is.
+This one is marked experimental for a reason: it's new, it leaves extra files sitting next to your videos until you act on them, and it changes how a sync behaves whenever LAPSE isn't confident. Try it on a library you don't mind babysitting for a bit before turning it on everywhere.
+
+The idea: LAPSE is the only engine that says how sure it is of its own answer. alass and ffsubsync just hand back a timing with nothing attached to say whether it's any good. So when LAPSE is unsure whether a sync actually worked, instead of just guessing or handing you one questionable file, it can run the other engines over the same subtitle too and let you compare all their answers side by side and pick the one that's actually right.
 
 It needs LAPSE set as your default engine and at least one of alass or ffsubsync installed. Turn it on under **Settings > Multi engine sync**.
 
-How it works:
+How it plays out:
 
-1. You sync as normal. If LAPSE is sure, nothing changes and you get one file, same as always.
-2. If LAPSE is not sure, the other engines run over the same subtitle. Each answer is written as its own file next to the video, named after the engine that produced it, so `Movie.en.srt` gets you `Movie.en.lapse.srt`, `Movie.en.alass.srt` and `Movie.en.ffsubsync.srt`.
-3. The item is rescanned straight away, so those turn up as extra subtitle tracks rather than waiting for the next library scan.
-4. Play the item and switch between the tracks with Jellyfin's own subtitle picker until one lines up.
-5. Open the subtitle menu and press **Keep this subtitle**. The one you kept is written out using your File output setting, and the others are deleted.
+1. You sync as normal. If LAPSE is sure of itself, nothing about this feature kicks in - you get one file, same as always.
+2. If LAPSE isn't sure, the other engines quietly run over the same subtitle in the background. Each one's answer is written as its own file next to the video, named after the engine that produced it, so `Movie.en.srt` turns into `Movie.en.lapse.srt`, `Movie.en.alass.srt` and `Movie.en.ffsubsync.srt` all at once.
+3. The item gets rescanned right away, so those show up as extra subtitle tracks immediately instead of waiting for the next library scan.
+4. Now you actually have to look at them: play the item and switch between the tracks with Jellyfin's subtitle picker (or the track list in the **Subtitle tools** panel described above) until you find the one that's actually lined up.
+5. Once you've found it, open **Subtitle tools** and press **Keep this subtitle**. Whichever one was playing gets written out using your File output setting, and the rest are deleted - so nothing is left cluttering the folder once you've decided.
+
+If none of them look right, the same menu has **Throw all away**, which deletes every candidate and leaves the original subtitle exactly as it was.
 
 Nothing is overwritten while you are choosing. The subtitle you synced stays exactly where it is until you keep one of the answers or throw them all away. The File output setting applies at the moment you keep one, so "overwrite, keep a backup" still leaves you a `.bak` of the file that was there before.
 
