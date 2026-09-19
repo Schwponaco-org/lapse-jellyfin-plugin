@@ -1237,16 +1237,6 @@
         return null;
     }
 
-    function currentPlayer() {
-        var manager = playbackManager();
-
-        try {
-            return manager ? manager.getCurrentPlayer() : null;
-        } catch (err) {
-            return null;
-        }
-    }
-
     // The panel talks in delay, the way every other player does: a positive number means
     // the subtitles show up later. Jellyfin's setSubtitleOffset runs the other way - it
     // takes the amount to pull the subtitle forward - so the sign flips on the way in and
@@ -1267,13 +1257,21 @@
         return Math.round(delaySeconds * 1000);
     }
 
+    // Every one of playbackManager's offset methods takes an optional player and falls
+    // back to its own internal "_currentPlayer" when none is given - confirmed by reading
+    // the shipped source of both Jellyfin 10.11.11 and 12.0, where all three are written
+    // as "(t=t||o._currentPlayer)...". The native "Subtitle Offset" slider under the gear
+    // menu never passes one either. Passing our own currentPlayer() result here used to
+    // move the panel's number without moving anything on screen: harmless if it happens to
+    // be the same object, but there is no reason to risk it being a different one when the
+    // manager already has a reliably correct answer of its own. So none of these pass a
+    // player - the bare calls are the ones proven to work.
     function readCurrentDelay() {
         var manager = playbackManager();
-        var player = currentPlayer();
 
-        if (manager && player) {
+        if (manager && manager.getCurrentPlayer && manager.getCurrentPlayer()) {
             try {
-                var offset = parseFloat(manager.getPlayerSubtitleOffset(player));
+                var offset = parseFloat(manager.getPlayerSubtitleOffset());
                 if (!isNaN(offset)) {
                     return jellyfinOffsetToDelay(offset);
                 }
@@ -1287,18 +1285,28 @@
 
     function applyDelay(delaySeconds) {
         var manager = playbackManager();
-        var player = currentPlayer();
 
-        if (manager && player) {
+        if (manager && manager.getCurrentPlayer && manager.getCurrentPlayer()) {
             try {
                 // Without this the player treats the offset as something it is not
                 // currently showing and puts it back to zero on the next track change.
                 if (typeof manager.enableShowingSubtitleOffset === 'function') {
-                    manager.enableShowingSubtitleOffset(player);
+                    manager.enableShowingSubtitleOffset();
                 }
 
-                manager.setSubtitleOffset(delayToJellyfinOffset(delaySeconds), player);
-                return true;
+                manager.setSubtitleOffset(delayToJellyfinOffset(delaySeconds));
+
+                // The call can go through without throwing and still not move anything -
+                // that is exactly what was happening before this was rewritten to stop
+                // passing a player. Reading the offset straight back and comparing it
+                // catches that silently, rather than reporting success on a slider that
+                // visibly isn't doing anything.
+                var confirmed = parseFloat(manager.getPlayerSubtitleOffset());
+                if (!isNaN(confirmed) && Math.abs(confirmed - delayToJellyfinOffset(delaySeconds)) < 0.01) {
+                    return true;
+                }
+
+                log('the player accepted the offset but did not reflect it back, falling back');
             } catch (err) {
                 log('the player refused the subtitle offset: ' + err);
             }
@@ -1689,15 +1697,16 @@
             button.addEventListener('click', function () {
                 var result = document.getElementById('lapseTrackResult');
                 var manager = playbackManager();
-                var player = currentPlayer();
 
-                if (!manager || !player || typeof manager.setSubtitleStreamIndex !== 'function') {
+                if (!manager || !manager.getCurrentPlayer || !manager.getCurrentPlayer()
+                    || typeof manager.setSubtitleStreamIndex !== 'function') {
                     result.textContent = 'LAPSE cannot switch the track from here. Use the normal subtitle list instead.';
                     return;
                 }
 
                 try {
-                    manager.setSubtitleStreamIndex(parseInt(button.getAttribute('data-index'), 10), player);
+                    // No player passed here either - see the note above applyDelay.
+                    manager.setSubtitleStreamIndex(parseInt(button.getAttribute('data-index'), 10));
 
                     // Switching tracks clears the player's offset, so the panel has to
                     // stop claiming a delay that is no longer applied.
@@ -1876,6 +1885,18 @@
     // it grows downwards off the bottom of the screen and the last entry ends up half cut
     // off. Nudging it back up afterwards is the cheapest fix that does not involve
     // reimplementing its positioning.
+    // Jellyfin sizes and positions a sheet before we get anywhere near it, so entries we
+    // add afterwards make it taller than the space it was given. Different sheets in
+    // jellyfin-web are positioned differently - some with an inline "top" next to the
+    // button that opened them, others as a centred or bottom-anchored dialog with no
+    // inline position at all, which is what the "Subtitles" track picker turned out to be.
+    // Nudging the position only helps the first kind and silently does nothing for the
+    // second, which is why entries were still running off the bottom of that one.
+    //
+    // This sets a hard max-height and lets it scroll instead, which works whatever the
+    // sheet turns out to be positioned by. The inline nudge is kept as a second step for
+    // the anchored kind, where sliding it up half a sheet's height looks better than
+    // making the whole thing scroll for one entry's worth of overflow.
     function keepSheetOnScreen(sheet) {
         // Let the browser lay the new entries out before measuring.
         requestAnimationFrame(function () {
@@ -1883,8 +1904,27 @@
                 return;
             }
 
-            var box = sheet.getBoundingClientRect();
             var margin = 8;
+            var available = window.innerHeight - margin * 2;
+
+            var scroller = sheet.querySelector('.actionSheetScroller');
+
+            if (scroller && scroller !== sheet) {
+                // Capping the sheet alone does nothing if the scroller inside keeps
+                // growing regardless of its parent - the header and buttons would be
+                // pushed off screen instead of the list scrolling. Both need a limit.
+                sheet.style.maxHeight = available + 'px';
+                sheet.style.overflowY = 'hidden';
+
+                var chrome = sheet.getBoundingClientRect().height - scroller.getBoundingClientRect().height;
+                scroller.style.maxHeight = Math.max(80, available - chrome) + 'px';
+                scroller.style.overflowY = 'auto';
+            } else {
+                sheet.style.maxHeight = available + 'px';
+                sheet.style.overflowY = 'auto';
+            }
+
+            var box = sheet.getBoundingClientRect();
             var overflow = box.bottom - (window.innerHeight - margin);
 
             if (overflow <= 0) {
@@ -1892,14 +1932,10 @@
             }
 
             var top = parseFloat(sheet.style.top);
-            if (isNaN(top)) {
-                // Positioned by something other than an inline top, so there is nothing
-                // safe to adjust. The scroller's own max-height keeps it usable.
-                return;
+            if (!isNaN(top)) {
+                sheet.style.top = Math.max(margin, top - overflow) + 'px';
+                log('moved the action sheet up ' + Math.round(overflow) + 'px to keep it on screen');
             }
-
-            sheet.style.top = Math.max(margin, top - overflow) + 'px';
-            log('moved the action sheet up ' + Math.round(overflow) + 'px to keep it on screen');
         });
     }
 
