@@ -265,7 +265,11 @@ public class EngineInstaller
         CancellationToken cancellationToken)
     {
         var names = new List<string>();
-        var foundExecutable = false;
+
+        // 0 = nothing yet, 1 = something named after the engine, 2 = the exact name. A tar
+        // is read front to back, so a suffixed name is taken when it turns up and then
+        // given way to the real thing if that appears later on.
+        var bestMatch = 0;
 
         await using (var fileStream = File.OpenRead(archivePath))
         await using (var gzipStream = new GZipStream(fileStream, CompressionMode.Decompress))
@@ -281,10 +285,12 @@ public class EngineInstaller
                 var name = Path.GetFileName(entry.Name);
                 names.Add(entry.Name);
 
-                if (!foundExecutable && IsWantedEntry(name, engine))
+                var match = IsWantedEntry(name, engine) ? 2 : IsEngineVariant(name, engine) ? 1 : 0;
+
+                if (match > bestMatch)
                 {
                     await entry.ExtractToFileAsync(targetPath, overwrite: true, cancellationToken).ConfigureAwait(false);
-                    foundExecutable = true;
+                    bestMatch = match;
                     continue;
                 }
 
@@ -296,7 +302,7 @@ public class EngineInstaller
             }
         }
 
-        if (!foundExecutable)
+        if (bestMatch == 0)
         {
             throw new IOException(BuildNotFoundMessage(engine, names));
         }
@@ -313,9 +319,14 @@ public class EngineInstaller
 
         var entry = archive.Entries.FirstOrDefault(e => IsWantedEntry(e.Name, engine));
 
-        // alass names its Windows build alass-windows64.exe inside the zip rather than
-        // alass.exe, so fall back to the only executable in there when the name doesn't
-        // line up. Anything with exactly one .exe (or one file at all) is unambiguous.
+        // alass's Windows zip calls the binary alass-cli.exe and ships a whole ffmpeg
+        // build next to it, so neither the exact name nor "the only .exe in here" finds
+        // it. A file named after the engine with a suffix is the engine; ffmpeg.exe
+        // sitting beside it is not.
+        entry ??= archive.Entries.FirstOrDefault(e => IsEngineVariant(e.Name, engine));
+
+        // Still nothing, so fall back to the only executable in there. Anything with
+        // exactly one .exe (or one file at all) is unambiguous.
         entry ??= SingleOrNull(archive.Entries.Where(e => e.Name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)));
         entry ??= SingleOrNull(archive.Entries.Where(e => !string.IsNullOrEmpty(e.Name)));
 
@@ -348,6 +359,27 @@ public class EngineInstaller
         var wanted = engine.Descriptor.ExecutableName;
         return string.Equals(entryName, wanted, StringComparison.OrdinalIgnoreCase)
             || string.Equals(entryName, wanted + ".exe", StringComparison.OrdinalIgnoreCase);
+    }
+
+    // Named after the engine but not exactly it: alass-cli.exe, alass-windows64. The
+    // separator is what keeps this honest - it matches the engine's own build under
+    // another name without ever picking up an unrelated binary that happens to start
+    // with the same letters. Only real executables qualify, so a stray alass-cli.dll
+    // or alass-notes.txt is left where it is.
+    private static bool IsEngineVariant(string entryName, IEngine engine)
+    {
+        var extension = Path.GetExtension(entryName);
+        if (extension.Length > 0 && !string.Equals(extension, ".exe", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var wanted = engine.Descriptor.ExecutableName;
+        var stem = Path.GetFileNameWithoutExtension(entryName);
+
+        return stem.Length > wanted.Length
+            && stem.StartsWith(wanted, StringComparison.OrdinalIgnoreCase)
+            && (stem[wanted.Length] == '-' || stem[wanted.Length] == '_');
     }
 
     private static string BuildNotFoundMessage(IEngine engine, IEnumerable<string> entryNames)
