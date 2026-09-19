@@ -70,7 +70,14 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
             new PluginPageInfo
             {
                 Name = Name,
-                EmbeddedResourcePath = $"{prefix}.Configuration.configPage.html"
+                EmbeddedResourcePath = $"{prefix}.Configuration.configPage.html",
+
+                // Puts LAPSE in the dashboard's own left sidebar, under Plugins, instead of
+                // leaving it four clicks deep under Dashboard > Plugins > My Plugins. The
+                // icon is a Material Symbols name, which is the set the web client ships.
+                EnableInMainMenu = true,
+                DisplayName = Name,
+                MenuIcon = "subtitles"
             },
             new PluginPageInfo
             {
