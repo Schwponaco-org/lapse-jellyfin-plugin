@@ -724,6 +724,18 @@
                             </label>
                             <input type="range" id="lapseAppearanceFontSize" min="12" max="120" class="lapseRange" />
                         </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="lapseAppearancePosition">
+                                Height above the bottom: <span id="lapseAppearancePositionValue"></span>%
+                            </label>
+                            <input type="range" id="lapseAppearancePosition" min="0" max="85" class="lapseRange" />
+                            <div class="fieldDescription">
+                                Lifts subtitles off the bottom of the picture, for a release with signage
+                                burnt along the bottom edge or a TV that crops it. Zero leaves them where the
+                                player puts them. This does not move an ASS or SSA track, which carries its
+                                own positioning inside the file.
+                            </div>
+                        </div>
                         <div class="lapseColorRow">
                             <div class="inputContainer">
                                 <label class="inputLabel inputLabelUnfocused" for="lapseAppearanceTextColor">Text colour</label>

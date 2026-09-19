@@ -229,6 +229,21 @@
         return (appearance.LetterSpacingPx || 0) + 'px';
     }
 
+    // The player anchors its subtitle strip to the bottom of the window, so lifting the
+    // text is a matter of moving that strip up. Only reaches subtitles drawn as HTML: an
+    // ASS track goes through libass onto a canvas and carries its own positioning.
+    function positionCssFor(appearance) {
+        var percent = appearance.VerticalPositionPercent || 0;
+
+        if (percent <= 0) {
+            return '';
+        }
+
+        return '.videoSubtitles {' +
+            '  bottom: ' + percent + '% !important;' +
+            '}';
+    }
+
     function buildAppearanceCss(appearance) {
         var fontSize = (appearance.FontSizePx || 48) + 'px';
         var color = appearance.TextColor || '#FFFFFF';
@@ -237,7 +252,7 @@
         var spacing = spacingOf(appearance);
         var family = fontStack ? '  font-family: ' + fontStack + ' !important;' : '';
 
-        return '' +
+        return positionCssFor(appearance) +
             SUBTITLE_SELECTORS.join(', ') + ' {' +
             '  font-size: ' + fontSize + ' !important;' +
             '  color: ' + color + ' !important;' +
@@ -1056,14 +1071,799 @@
         BackgroundEnabled: true
     };
 
+    // ------------------------------------------------------------- the in-player panel
+    //
+    // Everything below is about the moment somebody notices the subtitles are wrong while
+    // they are watching. Up to now that meant stopping, finding the item, using its menu,
+    // and starting the film again to see whether it worked. This puts the same tools over
+    // the picture, so the film keeps playing and you can see what each change did.
+    //
+    // The live delay is Jellyfin's own. Its player already knows how to shift a subtitle
+    // for every way it can draw one (libass for ASS, the browser's own text tracks, and
+    // its internal cue list), and reimplementing that would mean getting all three right
+    // and keeping them right. What Jellyfin does not do is remember the number: it lasts
+    // as long as the session and never touches the file. That is what "Save to file" is
+    // for, and it is the reason this panel earns its place.
+
+    // Jellyfin's player is a webpack module, not a global, so the only way in is to ask
+    // webpack for it. Pushing an empty chunk hands us __webpack_require__, and the module
+    // is found by what it can do rather than by an id, since ids change every build.
+    var webpackRequire = null;
+    var cachedPlaybackManager = null;
+    var bridgeProbes = 0;
+
+    function getWebpackRequire() {
+        if (webpackRequire) {
+            return webpackRequire;
+        }
+
+        try {
+            var chunks = self.webpackChunk;
+            if (!chunks || typeof chunks.push !== 'function') {
+                return null;
+            }
+
+            // The id has to be one webpack has not seen. It only runs the callback for a
+            // chunk it considers not yet loaded, and it marks every id it is handed as
+            // loaded on the way out - so reusing one means the second probe is silently
+            // ignored. A counter rather than a timestamp, because two probes in the same
+            // millisecond would collide.
+            bridgeProbes++;
+
+            chunks.push([['lapse-bridge-' + bridgeProbes], {}, function (req) {
+                webpackRequire = req;
+            }]);
+        } catch (err) {
+            log('could not reach the webpack runtime: ' + err);
+        }
+
+        return webpackRequire;
+    }
+
+    function looksLikePlaybackManager(value) {
+        return !!value
+            && typeof value === 'object'
+            && typeof value.setSubtitleOffset === 'function'
+            && typeof value.getPlayerSubtitleOffset === 'function'
+            && typeof value.getCurrentPlayer === 'function';
+    }
+
+    // The manager can be the module's own exports or one named export of it, depending on
+    // how that module was written. Both shapes get looked at, and reading a property can
+    // run somebody else's getter, so none of it is allowed to throw.
+    function findManagerIn(exports) {
+        if (!exports || typeof exports !== 'object') {
+            return null;
+        }
+
+        if (looksLikePlaybackManager(exports)) {
+            return exports;
+        }
+
+        for (var key in exports) {
+            var value;
+
+            try {
+                value = exports[key];
+            } catch (err) {
+                continue;
+            }
+
+            if (looksLikePlaybackManager(value)) {
+                return value;
+            }
+        }
+
+        return null;
+    }
+
+    // The module that defines the player, found by what its source says rather than by an
+    // id, since ids change with every build. Checked against the real bundles of Jellyfin
+    // 10.11 and 12.0, where exactly one module matches.
+    var MANAGER_SOURCE_MARKER = /getPlayerSubtitleOffset\s*[:=]\s*function/;
+
+    function playbackManager() {
+        if (cachedPlaybackManager) {
+            return cachedPlaybackManager;
+        }
+
+        var req = getWebpackRequire();
+        if (!req) {
+            return null;
+        }
+
+        // A build that keeps its module cache around is the cheap case: the answer is
+        // already sitting there and nothing has to be run to find it. Jellyfin's own
+        // builds do not, hence everything below.
+        if (req.c) {
+            for (var cached in req.c) {
+                var entry;
+
+                try {
+                    entry = req.c[cached] && req.c[cached].exports;
+                } catch (err) {
+                    continue;
+                }
+
+                var hit = findManagerIn(entry);
+                if (hit) {
+                    cachedPlaybackManager = hit;
+                    return hit;
+                }
+            }
+        }
+
+        // Otherwise go through the module factories. Only the ones whose source mentions
+        // the method get required, so this asks webpack for one module rather than
+        // running a few thousand of them to see what comes out. By the time this runs
+        // something is playing, so that module has long since been executed and requiring
+        // it hands back what is already there.
+        var factories = req.m;
+        if (!factories) {
+            return null;
+        }
+
+        for (var id in factories) {
+            var source;
+
+            try {
+                source = String(factories[id]);
+            } catch (err) {
+                continue;
+            }
+
+            if (!MANAGER_SOURCE_MARKER.test(source)) {
+                continue;
+            }
+
+            var exports;
+
+            try {
+                exports = req(id);
+            } catch (err) {
+                log('could not load module ' + id + ' while looking for the player: ' + err);
+                continue;
+            }
+
+            var found = findManagerIn(exports);
+            if (found) {
+                cachedPlaybackManager = found;
+                return found;
+            }
+        }
+
+        return null;
+    }
+
+    function currentPlayer() {
+        var manager = playbackManager();
+
+        try {
+            return manager ? manager.getCurrentPlayer() : null;
+        } catch (err) {
+            return null;
+        }
+    }
+
+    // The panel talks in delay, the way every other player does: a positive number means
+    // the subtitles show up later. Jellyfin's setSubtitleOffset runs the other way - it
+    // takes the amount to pull the subtitle forward - so the sign flips on the way in and
+    // on the way out. Getting this backwards would make every control do the opposite of
+    // what it says, so it lives in these two functions and nowhere else.
+    function delayToJellyfinOffset(delaySeconds) {
+        return -delaySeconds;
+    }
+
+    function jellyfinOffsetToDelay(offsetSeconds) {
+        return -offsetSeconds;
+    }
+
+    // What the file itself would need, in milliseconds. SubtitleShifter adds this to every
+    // timestamp, and a positive delay means the cues have to move later, so this one keeps
+    // the panel's sign.
+    function delayToShiftMs(delaySeconds) {
+        return Math.round(delaySeconds * 1000);
+    }
+
+    function readCurrentDelay() {
+        var manager = playbackManager();
+        var player = currentPlayer();
+
+        if (manager && player) {
+            try {
+                var offset = parseFloat(manager.getPlayerSubtitleOffset(player));
+                if (!isNaN(offset)) {
+                    return jellyfinOffsetToDelay(offset);
+                }
+            } catch (err) {
+                log('could not read the current subtitle offset: ' + err);
+            }
+        }
+
+        return fallbackDelaySeconds;
+    }
+
+    function applyDelay(delaySeconds) {
+        var manager = playbackManager();
+        var player = currentPlayer();
+
+        if (manager && player) {
+            try {
+                // Without this the player treats the offset as something it is not
+                // currently showing and puts it back to zero on the next track change.
+                if (typeof manager.enableShowingSubtitleOffset === 'function') {
+                    manager.enableShowingSubtitleOffset(player);
+                }
+
+                manager.setSubtitleOffset(delayToJellyfinOffset(delaySeconds), player);
+                return true;
+            } catch (err) {
+                log('the player refused the subtitle offset: ' + err);
+            }
+        }
+
+        return applyDelayToTextTracks(delaySeconds);
+    }
+
+    // The way back when the player cannot be reached. Moves the cues the browser is
+    // holding, which covers a subtitle delivered as a text track and nothing else - an ASS
+    // track is drawn on a canvas by libass and has no cues out here to move.
+    var fallbackDelaySeconds = 0;
+
+    function applyDelayToTextTracks(delaySeconds) {
+        var video = document.querySelector('video');
+        if (!video || !video.textTracks) {
+            return false;
+        }
+
+        var moved = false;
+
+        for (var i = 0; i < video.textTracks.length; i++) {
+            var track = video.textTracks[i];
+
+            if (track.mode === 'disabled' || !track.cues || !track.cues.length) {
+                continue;
+            }
+
+            // Keep the untouched timings, so dragging the slider moves everything from
+            // where it started rather than compounding one nudge onto the last.
+            if (!track.lapseBaseline || track.lapseBaseline.length !== track.cues.length) {
+                track.lapseBaseline = [];
+                for (var b = 0; b < track.cues.length; b++) {
+                    track.lapseBaseline.push([track.cues[b].startTime, track.cues[b].endTime]);
+                }
+            }
+
+            for (var c = 0; c < track.cues.length; c++) {
+                var base = track.lapseBaseline[c];
+
+                try {
+                    track.cues[c].startTime = Math.max(0, base[0] + delaySeconds);
+                    track.cues[c].endTime = Math.max(0, base[1] + delaySeconds);
+                } catch (err) {
+                    // a cue that is on screen right now can refuse to be moved
+                }
+            }
+
+            moved = true;
+        }
+
+        if (moved) {
+            fallbackDelaySeconds = delaySeconds;
+        }
+
+        return moved;
+    }
+
+    var PANEL_ID = 'lapsePlayerPanel';
+    var panelContext = null;
+    var panelDelay = 0;
+
+    function panelIsOpen() {
+        return !!document.getElementById(PANEL_ID);
+    }
+
+    var panelWatchdog = null;
+
+    function closePlayerPanel() {
+        var panel = document.getElementById(PANEL_ID);
+        if (panel) {
+            panel.remove();
+        }
+
+        document.removeEventListener('keydown', panelKeyHandler, true);
+
+        if (panelWatchdog) {
+            clearInterval(panelWatchdog);
+            panelWatchdog = null;
+        }
+    }
+
+    // Capture, so this runs before the client's own shortcut handling. Without it, typing
+    // in the panel plays and pauses the film and the arrow keys seek it.
+    function panelKeyHandler(e) {
+        var panel = document.getElementById(PANEL_ID);
+        if (!panel) {
+            return;
+        }
+
+        if (e.key === 'Escape') {
+            closePlayerPanel();
+            e.stopPropagation();
+            e.preventDefault();
+            return;
+        }
+
+        if (panel.contains(e.target)) {
+            e.stopPropagation();
+        }
+    }
+
+    // The panel is anchored to a film that is playing. When that ends - the credits run
+    // out, or somebody navigates away - it would otherwise be left floating over whatever
+    // page they landed on.
+    function watchForPlaybackEnding() {
+        if (panelWatchdog) {
+            clearInterval(panelWatchdog);
+        }
+
+        panelWatchdog = setInterval(function () {
+            if (panelIsOpen() && !document.querySelector('video')) {
+                closePlayerPanel();
+            }
+        }, 1000);
+    }
+
+    function openPlayerPanel() {
+        if (panelIsOpen()) {
+            closePlayerPanel();
+            return;
+        }
+
+        var panel = document.createElement('div');
+        panel.id = PANEL_ID;
+        panel.className = 'lapseTools';
+        panel.innerHTML =
+            '<div class="lapseToolsHead">' +
+            '  <span class="lapseToolsTitleText">Subtitles</span>' +
+            '  <button type="button" class="lapseToolsClose" id="lapseToolsClose" aria-label="Close">&times;</button>' +
+            '</div>' +
+            '<div class="lapseToolsBody" id="lapseToolsBody">' +
+            '  <div class="lapseToolsLoading">Reading what is playing...</div>' +
+            '</div>';
+
+        document.body.appendChild(panel);
+        document.addEventListener('keydown', panelKeyHandler, true);
+        watchForPlaybackEnding();
+
+        panel.querySelector('#lapseToolsClose').addEventListener('click', closePlayerPanel);
+
+        loadPanel();
+    }
+
+    function loadPanel() {
+        lapseGet('Lapse/Player/Context').then(function (context) {
+            panelContext = context;
+
+            if (!context || !context.Playing) {
+                setPanelBody('<div class="lapseToolsNote">Nothing is playing that LAPSE can work on. ' +
+                    'Start a film or an episode and open this again.</div>');
+                return;
+            }
+
+            panelDelay = readCurrentDelay();
+            renderPanel();
+        }).catch(function (err) {
+            setPanelBody('<div class="lapseToolsNote">Could not read what is playing: ' +
+                escapeHtml(err.message) + '</div>');
+        });
+    }
+
+    function setPanelBody(html) {
+        var body = document.getElementById('lapseToolsBody');
+        if (body) {
+            body.innerHTML = html;
+        }
+    }
+
+    function formatDelay(seconds) {
+        var value = (Math.round(seconds * 1000) / 1000).toFixed(3);
+        return (seconds > 0 ? '+' : '') + value + 's';
+    }
+
+    function renderPanel() {
+        var context = panelContext;
+        var playing = context.PlayingPath;
+        var reachable = !!playbackManager();
+
+        setPanelBody(
+            '<div class="lapseToolsItem">' + escapeHtml(context.ItemName || '') + '</div>' +
+            delaySectionHtml(playing, reachable) +
+            syncSectionHtml(context, playing) +
+            tracksSectionHtml(context, playing) +
+            appearanceSectionHtml());
+
+        wireDelaySection();
+        wireSyncSection();
+        wireTracksSection();
+        wireAppearanceSection();
+    }
+
+    function delaySectionHtml(playing, reachable) {
+        var note = reachable
+            ? 'Moves the subtitles while the film keeps playing, so you can see when it lines up.'
+            : 'The player would not let LAPSE in, so this falls back to moving the cues directly. ' +
+              'That works for plain text subtitles and not for ASS tracks.';
+
+        return '<div class="lapseToolsSection">' +
+            '  <div class="lapseToolsLabel">Delay</div>' +
+            '  <div class="lapseToolsNudge">' +
+            '    <button type="button" data-nudge="-1">-1s</button>' +
+            '    <button type="button" data-nudge="-0.1">-100</button>' +
+            '    <button type="button" data-nudge="-0.025">-25</button>' +
+            '    <span class="lapseToolsValue" id="lapseDelayValue">' + formatDelay(panelDelay) + '</span>' +
+            '    <button type="button" data-nudge="0.025">+25</button>' +
+            '    <button type="button" data-nudge="0.1">+100</button>' +
+            '    <button type="button" data-nudge="1">+1s</button>' +
+            '  </div>' +
+            '  <input type="range" class="lapseToolsSlider" id="lapseDelaySlider" min="-10" max="10" step="0.025" value="' + panelDelay + '" />' +
+            '  <div class="lapseToolsHint">' + note + ' Positive means the subtitles show up later.</div>' +
+            '  <div class="lapseToolsButtons">' +
+            '    <button type="button" class="lapseToolsButton" id="lapseDelayReset">Reset</button>' +
+            '    <button type="button" class="lapseToolsButton lapseToolsButton-primary" id="lapseDelaySave"' +
+            (playing ? '' : ' disabled') + '>Save to file</button>' +
+            '  </div>' +
+            '  <div class="lapseToolsHint">' +
+            (playing
+                ? 'Saving writes the delay into ' + escapeHtml(baseName(playing)) +
+                  ' so it is still right next time. Where it lands follows your File output setting.'
+                : 'The subtitle on screen is not a file LAPSE can edit, so it can only be moved for this session. ' +
+                  'A track still inside the video or a burnt-in one cannot be saved.') +
+            '  </div>' +
+            '  <div class="lapseToolsResult" id="lapseDelayResult"></div>' +
+            '</div>';
+    }
+
+    function wireDelaySection() {
+        var slider = document.getElementById('lapseDelaySlider');
+        var value = document.getElementById('lapseDelayValue');
+
+        function setDelay(next) {
+            panelDelay = Math.max(-10, Math.min(10, Math.round(next * 1000) / 1000));
+            slider.value = panelDelay;
+            value.textContent = formatDelay(panelDelay);
+            applyDelay(panelDelay);
+        }
+
+        slider.addEventListener('input', function () {
+            setDelay(parseFloat(slider.value) || 0);
+        });
+
+        document.querySelectorAll('#' + PANEL_ID + ' [data-nudge]').forEach(function (button) {
+            button.addEventListener('click', function () {
+                setDelay(panelDelay + parseFloat(button.getAttribute('data-nudge')));
+            });
+        });
+
+        document.getElementById('lapseDelayReset').addEventListener('click', function () {
+            setDelay(0);
+        });
+
+        var save = document.getElementById('lapseDelaySave');
+        if (save && !save.disabled) {
+            save.addEventListener('click', saveDelayToFile);
+        }
+    }
+
+    function saveDelayToFile() {
+        var result = document.getElementById('lapseDelayResult');
+
+        if (!panelDelay) {
+            result.textContent = 'The delay is zero, so there is nothing to save.';
+            return;
+        }
+
+        var offsetMs = delayToShiftMs(panelDelay);
+        result.textContent = 'Writing ' + offsetMs + 'ms into the file...';
+
+        lapsePost('Lapse/Shift', {
+            ItemId: panelContext.ItemId,
+            SubtitlePath: panelContext.PlayingPath,
+            OffsetMs: offsetMs
+        }).then(function (shift) {
+            // The file now carries the delay, so the live one has to come off or the
+            // subtitle would be moved twice over.
+            panelDelay = 0;
+            applyDelay(0);
+
+            var slider = document.getElementById('lapseDelaySlider');
+            var value = document.getElementById('lapseDelayValue');
+            if (slider) { slider.value = 0; }
+            if (value) { value.textContent = formatDelay(0); }
+
+            result.textContent = 'Saved. ' + (shift && shift.Shifted ? shift.Shifted + ' timings moved. ' : '') +
+                'The live delay is back to zero because the file carries it now.';
+        }).catch(function (err) {
+            result.textContent = 'Could not save it: ' + err.message;
+        });
+    }
+
+    function syncSectionHtml(context, playing) {
+        if (!context.CanSync) {
+            return '<div class="lapseToolsSection">' +
+                '  <div class="lapseToolsLabel">Sync</div>' +
+                '  <div class="lapseToolsHint">No engine is installed, so there is nothing to sync with. ' +
+                'An admin can install one from the LAPSE dashboard.</div>' +
+                '</div>';
+        }
+
+        return '<div class="lapseToolsSection">' +
+            '  <div class="lapseToolsLabel">Sync</div>' +
+            '  <div class="lapseToolsHint">Lines the subtitle up against the speech in the audio. ' +
+            'Takes a moment, and the film keeps playing while it runs.</div>' +
+            '  <div class="lapseToolsButtons">' +
+            '    <button type="button" class="lapseToolsButton lapseToolsButton-primary" id="lapseToolsSync"' +
+            (playing ? '' : ' disabled') + '>Sync now</button>' +
+            '    <button type="button" class="lapseToolsButton" id="lapseToolsAdvanced">Advanced</button>' +
+            '  </div>' +
+            (playing ? '' : '<div class="lapseToolsHint">The subtitle on screen is not a file, so there is nothing to sync.</div>') +
+            '  <div class="lapseToolsResult" id="lapseSyncResult"></div>' +
+            '</div>';
+    }
+
+    function wireSyncSection() {
+        var sync = document.getElementById('lapseToolsSync');
+        var advanced = document.getElementById('lapseToolsAdvanced');
+
+        if (sync && !sync.disabled) {
+            sync.addEventListener('click', function () {
+                var result = document.getElementById('lapseSyncResult');
+                result.textContent = 'Syncing...';
+                sync.disabled = true;
+
+                lapsePost('Lapse/Sync', {
+                    ItemId: panelContext.ItemId,
+                    SubtitlePath: panelContext.PlayingPath
+                }).then(function (outcome) {
+                    result.textContent = describeSyncOutcome(outcome);
+                    sync.disabled = false;
+                    loadPanel();
+                }).catch(function (err) {
+                    result.textContent = 'Sync failed: ' + err.message;
+                    sync.disabled = false;
+                });
+            });
+        }
+
+        if (advanced) {
+            advanced.addEventListener('click', function () {
+                closePlayerPanel();
+                openAdvancedDialog({ id: panelContext.ItemId, name: panelContext.ItemName, type: 'Movie' });
+            });
+        }
+    }
+
+    function tracksSectionHtml(context, playing) {
+        var subtitles = context.Subtitles || [];
+
+        var rows = subtitles.map(function (s) {
+            var isPlaying = playing && s.Path === playing;
+            var switchable = s.StreamIndex !== null && s.StreamIndex !== undefined;
+
+            return '<div class="lapseToolsTrack' + (isPlaying ? ' lapseToolsTrack-on' : '') + '">' +
+                '  <div class="lapseToolsTrackName">' + escapeHtml(s.DisplayName || baseName(s.Path)) +
+                (isPlaying ? ' <span class="lapseToolsTag">playing</span>' : '') + '</div>' +
+                (switchable
+                    ? '  <button type="button" class="lapseToolsButton lapseToolsButton-small lapseTrackPick"' +
+                      ' data-index="' + s.StreamIndex + '"' + (isPlaying ? ' disabled' : '') + '>Use</button>'
+                    : '  <span class="lapseToolsTag lapseToolsTag-quiet">not loaded</span>') +
+                '</div>';
+        }).join('');
+
+        var anyMissing = subtitles.some(function (s) {
+            return s.StreamIndex === null || s.StreamIndex === undefined;
+        });
+
+        return '<div class="lapseToolsSection">' +
+            '  <div class="lapseToolsLabel">Subtitles on this item</div>' +
+            (rows || '<div class="lapseToolsHint">LAPSE cannot see any subtitle files for this item.</div>') +
+            (anyMissing
+                ? '<div class="lapseToolsHint">"Not loaded" means the file is on disk but the player has not ' +
+                  'been told about it yet, usually because it was written after the last scan. Picking it up ' +
+                  'takes a moment, and then it appears in the normal subtitle list.</div>' +
+                  '<div class="lapseToolsButtons"><button type="button" class="lapseToolsButton" id="lapseTrackRescan">' +
+                  'Pick up new files</button></div>'
+                : '') +
+            (context.CanFetch
+                ? '<div class="lapseToolsButtons"><button type="button" class="lapseToolsButton" id="lapseTrackFetch">' +
+                  'Fetch one from OpenSubtitles</button></div>'
+                : '') +
+            '  <div class="lapseToolsResult" id="lapseTrackResult"></div>' +
+            '</div>';
+    }
+
+    function wireTracksSection() {
+        document.querySelectorAll('#' + PANEL_ID + ' .lapseTrackPick').forEach(function (button) {
+            button.addEventListener('click', function () {
+                var result = document.getElementById('lapseTrackResult');
+                var manager = playbackManager();
+                var player = currentPlayer();
+
+                if (!manager || !player || typeof manager.setSubtitleStreamIndex !== 'function') {
+                    result.textContent = 'LAPSE cannot switch the track from here. Use the normal subtitle list instead.';
+                    return;
+                }
+
+                try {
+                    manager.setSubtitleStreamIndex(parseInt(button.getAttribute('data-index'), 10), player);
+
+                    // Switching tracks clears the player's offset, so the panel has to
+                    // stop claiming a delay that is no longer applied.
+                    panelDelay = 0;
+                    fallbackDelaySeconds = 0;
+                    result.textContent = 'Switched. The delay is back to zero for the new track.';
+                    setTimeout(loadPanel, 400);
+                } catch (err) {
+                    result.textContent = 'Could not switch to it: ' + err;
+                }
+            });
+        });
+
+        var rescan = document.getElementById('lapseTrackRescan');
+        if (rescan) {
+            rescan.addEventListener('click', function () {
+                var result = document.getElementById('lapseTrackResult');
+                result.textContent = 'Asking Jellyfin to look again...';
+
+                lapsePost('Lapse/Items/' + panelContext.ItemId + '/Rescan').then(function () {
+                    result.textContent = 'Asked. Give it a few seconds, then reopen this panel.';
+                }).catch(function (err) {
+                    result.textContent = 'Could not ask for a rescan: ' + err.message;
+                });
+            });
+        }
+
+        var fetch = document.getElementById('lapseTrackFetch');
+        if (fetch) {
+            fetch.addEventListener('click', function () {
+                var result = document.getElementById('lapseTrackResult');
+                result.textContent = 'Looking for one...';
+                fetch.disabled = true;
+
+                lapsePost('Lapse/Items/' + panelContext.ItemId + '/FetchSubtitle').then(function (outcome) {
+                    result.textContent = (outcome && outcome.Message) || 'Done.';
+                    fetch.disabled = false;
+                    setTimeout(loadPanel, 400);
+                }).catch(function (err) {
+                    result.textContent = 'Could not fetch one: ' + err.message;
+                    fetch.disabled = false;
+                });
+            });
+        }
+    }
+
+    function appearanceSectionHtml() {
+        var a = appearanceSettings || {};
+
+        return '<div class="lapseToolsSection">' +
+            '  <div class="lapseToolsLabel">Appearance</div>' +
+            '  <label class="lapseToolsCheck">' +
+            '    <input type="checkbox" id="lapseLookEnabled"' + (a.Enabled ? ' checked' : '') + ' />' +
+            '    <span>Let LAPSE style the subtitles</span>' +
+            '  </label>' +
+            '  <div class="lapseToolsRow"><span>Size</span>' +
+            '    <input type="range" id="lapseLookSize" min="16" max="120" step="1" value="' + (a.FontSizePx || 48) + '" />' +
+            '    <span class="lapseToolsValue" id="lapseLookSizeValue">' + (a.FontSizePx || 48) + '</span></div>' +
+            '  <div class="lapseToolsRow"><span>Height</span>' +
+            '    <input type="range" id="lapseLookPosition" min="0" max="85" step="1" value="' + (a.VerticalPositionPercent || 0) + '" />' +
+            '    <span class="lapseToolsValue" id="lapseLookPositionValue">' + (a.VerticalPositionPercent || 0) + '%</span></div>' +
+            '  <div class="lapseToolsHint">Height lifts the subtitles off the bottom of the picture. ' +
+            'It does not move an ASS track, which carries its own positioning.</div>' +
+            '  <div class="lapseToolsRow"><span>Text</span>' +
+            '    <input type="color" id="lapseLookColor" value="' + (a.TextColor || '#FFFFFF') + '" /></div>' +
+            '  <label class="lapseToolsCheck">' +
+            '    <input type="checkbox" id="lapseLookBackground"' + (a.BackgroundEnabled ? ' checked' : '') + ' />' +
+            '    <span>Box behind the text</span>' +
+            '  </label>' +
+            '  <div class="lapseToolsHint">Saved against your account, so it follows you to the TV and the ' +
+            'phone and changes nothing for anyone else.</div>' +
+            '  <div class="lapseToolsButtons">' +
+            '    <button type="button" class="lapseToolsButton" id="lapseLookReset">Back to the default</button>' +
+            '    <button type="button" class="lapseToolsButton lapseToolsButton-primary" id="lapseLookSave">Save</button>' +
+            '  </div>' +
+            '  <div class="lapseToolsButtons">' +
+            '    <button type="button" class="lapseToolsButton" id="lapseLookMore">Font and spacing</button>' +
+            '  </div>' +
+            '  <div class="lapseToolsResult" id="lapseLookResult"></div>' +
+            '</div>';
+    }
+
+    function wireAppearanceSection() {
+        var size = document.getElementById('lapseLookSize');
+        var position = document.getElementById('lapseLookPosition');
+
+        // Everything previews straight away. The whole reason this is in the player is so
+        // you can see the change on the picture rather than imagining it.
+        function preview() {
+            appearanceSettings = collectPanelAppearance();
+            applySubtitleAppearance();
+        }
+
+        size.addEventListener('input', function () {
+            document.getElementById('lapseLookSizeValue').textContent = size.value;
+            preview();
+        });
+
+        position.addEventListener('input', function () {
+            document.getElementById('lapseLookPositionValue').textContent = position.value + '%';
+            preview();
+        });
+
+        document.getElementById('lapseLookColor').addEventListener('input', preview);
+        document.getElementById('lapseLookEnabled').addEventListener('change', preview);
+        document.getElementById('lapseLookBackground').addEventListener('change', preview);
+
+        document.getElementById('lapseLookSave').addEventListener('click', function () {
+            saveMyAppearance(collectPanelAppearance(), 'Subtitle look saved against your account.');
+            document.getElementById('lapseLookResult').textContent = 'Saved.';
+        });
+
+        // The font picker and letter spacing live in the older, roomier dialog. They are
+        // set once and left alone, which is not what this panel is for, so they get a way
+        // in rather than a place on it.
+        document.getElementById('lapseLookMore').addEventListener('click', function () {
+            closePlayerPanel();
+            openSubtitleSettingsDialog();
+        });
+
+        document.getElementById('lapseLookReset').addEventListener('click', function () {
+            var result = document.getElementById('lapseLookResult');
+            result.textContent = 'Putting it back...';
+
+            lapsePost('Lapse/Appearance/Mine/Reset').then(function (appearance) {
+                appearanceSettings = appearance;
+                applySubtitleAppearance();
+                renderPanel();
+            }).catch(function (err) {
+                result.textContent = 'Could not reset it: ' + err.message;
+            });
+        });
+    }
+
+    function collectPanelAppearance() {
+        var current = appearanceSettings || {};
+
+        return {
+            Enabled: document.getElementById('lapseLookEnabled').checked,
+            FontSizePx: parseInt(document.getElementById('lapseLookSize').value, 10) || 48,
+            VerticalPositionPercent: parseInt(document.getElementById('lapseLookPosition').value, 10) || 0,
+            TextColor: document.getElementById('lapseLookColor').value.toUpperCase(),
+            BackgroundEnabled: document.getElementById('lapseLookBackground').checked,
+
+            // Not on the panel: too fiddly for a remote, and already in the dashboard.
+            BackgroundColor: current.BackgroundColor || '#00000080',
+            FontFamily: current.FontFamily || null,
+            LetterSpacingPx: current.LetterSpacingPx || 0
+        };
+    }
+
     function addSubtitleSettingsButton(sheet) {
         var scroller = sheet.querySelector('.actionSheetScroller') || sheet;
 
-        scroller.appendChild(makeMenuButton('lapse-subtitle-settings', 'Subtitle settings', 'text_format', function () {
-            openSubtitleSettingsDialog();
-        }));
+        // First in the list on purpose. Somebody who opened this menu because the
+        // subtitles are wrong should not have to read past every track to find the thing
+        // that fixes them.
+        var entry = makeMenuButton('lapse-player-panel', 'Subtitle tools', 'tune', function () {
+            openPlayerPanel();
+        });
 
-        log('added the subtitle settings entry to the player menu');
+        if (scroller.firstChild) {
+            scroller.insertBefore(entry, scroller.firstChild);
+        } else {
+            scroller.appendChild(entry);
+        }
+
+        log('added the subtitle tools entry to the player menu');
 
         addKeepCandidateButton(sheet, scroller);
     }

@@ -279,3 +279,262 @@
 .actionSheet:has(.lapseSyncButton) {
     max-width: min(32em, 92vw);
 }
+
+/* --- the in-player subtitle panel ---
+
+   Sits over the right edge of the picture while the film keeps playing, because the whole
+   point is to watch the subtitles move as you change them. It deliberately does not cover
+   the frame or take a backdrop: a dialog you have to close to see what it did would put
+   you right back where you started. */
+
+.lapseTools {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+
+    /* Jellyfin's own video container sits at 1000, so a tie would leave the panel behind
+       the picture depending on document order. Above that, and below the plugin's own
+       toast at 10001, so a message about what just happened still lands on top. */
+    z-index: 9000;
+    width: min(23em, 92vw);
+    display: flex;
+    flex-direction: column;
+    background: rgba(18, 18, 20, .93);
+    color: #fff;
+    font-size: 14px;
+    box-shadow: -8px 0 28px rgba(0, 0, 0, .45);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+}
+
+.lapseToolsHead {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: .9em 1em;
+    border-bottom: 1px solid rgba(255, 255, 255, .12);
+    flex: 0 0 auto;
+}
+
+.lapseToolsTitleText {
+    font-weight: 600;
+    letter-spacing: .02em;
+}
+
+.lapseToolsClose {
+    background: none;
+    border: 0;
+    color: #fff;
+    font-size: 1.7em;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0 .2em;
+    opacity: .75;
+}
+
+.lapseToolsClose:hover {
+    opacity: 1;
+}
+
+.lapseToolsBody {
+    overflow-y: auto;
+    padding: .2em 1em 1.4em;
+    flex: 1 1 auto;
+}
+
+.lapseToolsItem {
+    opacity: .65;
+    font-size: .85em;
+    padding: .7em 0 .2em;
+    overflow-wrap: anywhere;
+}
+
+.lapseToolsSection {
+    padding: .9em 0;
+    border-top: 1px solid rgba(255, 255, 255, .1);
+}
+
+.lapseToolsLabel {
+    text-transform: uppercase;
+    font-size: .72em;
+    letter-spacing: .09em;
+    opacity: .6;
+    margin-bottom: .6em;
+}
+
+.lapseToolsHint {
+    font-size: .78em;
+    opacity: .6;
+    line-height: 1.45;
+    margin: .5em 0 0;
+}
+
+.lapseToolsResult {
+    font-size: .78em;
+    line-height: 1.45;
+    margin-top: .6em;
+    color: #8fd0ff;
+    min-height: 1em;
+    overflow-wrap: anywhere;
+}
+
+.lapseToolsNote,
+.lapseToolsLoading {
+    font-size: .85em;
+    opacity: .75;
+    line-height: 1.5;
+    padding: 1.2em 0;
+}
+
+/* The delay row: big enough to hit on a touchscreen, tight enough to fit seven controls. */
+.lapseToolsNudge {
+    display: flex;
+    align-items: center;
+    gap: .25em;
+    margin-bottom: .5em;
+}
+
+.lapseToolsNudge button {
+    flex: 1 1 auto;
+    background: rgba(255, 255, 255, .1);
+    border: 0;
+    border-radius: .3em;
+    color: #fff;
+    padding: .45em .1em;
+    font-size: .78em;
+    cursor: pointer;
+}
+
+.lapseToolsNudge button:hover {
+    background: rgba(255, 255, 255, .2);
+}
+
+.lapseToolsValue {
+    font-variant-numeric: tabular-nums;
+    min-width: 4.6em;
+    text-align: center;
+    font-size: .88em;
+    opacity: .95;
+}
+
+.lapseToolsSlider,
+.lapseToolsRow input[type="range"] {
+    width: 100%;
+    accent-color: #00a4dc;
+}
+
+.lapseToolsButtons {
+    display: flex;
+    gap: .5em;
+    margin-top: .7em;
+    flex-wrap: wrap;
+}
+
+.lapseToolsButton {
+    flex: 1 1 auto;
+    background: rgba(255, 255, 255, .12);
+    border: 0;
+    border-radius: .3em;
+    color: #fff;
+    padding: .6em .7em;
+    font-size: .84em;
+    cursor: pointer;
+}
+
+.lapseToolsButton:hover:not(:disabled) {
+    background: rgba(255, 255, 255, .22);
+}
+
+.lapseToolsButton:disabled {
+    opacity: .4;
+    cursor: default;
+}
+
+.lapseToolsButton-primary {
+    background: #00a4dc;
+}
+
+.lapseToolsButton-primary:hover:not(:disabled) {
+    background: #33b8e5;
+}
+
+.lapseToolsButton-small {
+    flex: 0 0 auto;
+    padding: .35em .7em;
+    font-size: .78em;
+}
+
+.lapseToolsTrack {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: .6em;
+    padding: .45em 0;
+}
+
+.lapseToolsTrack-on .lapseToolsTrackName {
+    opacity: 1;
+}
+
+.lapseToolsTrackName {
+    font-size: .84em;
+    opacity: .8;
+    overflow-wrap: anywhere;
+}
+
+.lapseToolsTag {
+    font-size: .7em;
+    background: rgba(0, 164, 220, .3);
+    border-radius: .25em;
+    padding: .1em .45em;
+    white-space: nowrap;
+}
+
+.lapseToolsTag-quiet {
+    background: rgba(255, 255, 255, .12);
+    opacity: .7;
+}
+
+.lapseToolsRow {
+    display: flex;
+    align-items: center;
+    gap: .7em;
+    margin: .55em 0;
+    font-size: .84em;
+}
+
+.lapseToolsRow > span:first-child {
+    flex: 0 0 3.6em;
+    opacity: .75;
+}
+
+.lapseToolsRow input[type="color"] {
+    width: 2.4em;
+    height: 1.7em;
+    border: 0;
+    background: none;
+    padding: 0;
+    cursor: pointer;
+}
+
+.lapseToolsCheck {
+    display: flex;
+    align-items: center;
+    gap: .55em;
+    font-size: .84em;
+    margin: .5em 0;
+    cursor: pointer;
+}
+
+/* On a phone the panel takes the bottom half instead of a side strip, so it never covers
+   more of the picture than it has to. */
+@media (max-width: 40em) {
+    .lapseTools {
+        top: auto;
+        left: 0;
+        width: auto;
+        max-height: 62vh;
+        box-shadow: 0 -8px 28px rgba(0, 0, 0, .45);
+    }
+}
