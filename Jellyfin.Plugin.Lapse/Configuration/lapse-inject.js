@@ -527,10 +527,39 @@
             '<div class="listItemBodyText actionSheetItemText">' + escapeHtml(label) + '</div>' +
             '</div>';
 
-        // no stopPropagation here on purpose: let the sheet's own click handler close
-        // the dialog like normal, it just won't recognize our data-id and will no-op
-        button.addEventListener('click', onClick);
+        // The sheet this lives in is normally driven by Jellyfin's own actionsheet.show(),
+        // which resolves with whatever "id" the clicked .listItem carries and then acts on
+        // it - for the subtitle track picker specifically, that means feeding it straight
+        // into setSubtitleStreamIndex(). A click on one of these buttons was never meant to
+        // reach that handler at all, but without stopping it here it bubbles up to the
+        // sheet's own delegated click listener anyway, which reads our data-id, gets
+        // something that is not a track index, and Jellyfin's own code turns the subtitle
+        // off rather than doing nothing with it - "No available track, cannot apply
+        // offset" was Jellyfin's own log line for exactly that, confirmed live: opening
+        // this menu was quietly switching subtitles off on the way in, which is why
+        // nothing after it - live delay included - ever had a track left to move.
+        button.addEventListener('click', function (e) {
+            e.stopPropagation();
+
+            // Before onClick, not after: several of these open their own overlay that
+            // listens for Escape to close itself (the player panel included). Dispatching
+            // the sheet's close-Escape afterwards would land on that new listener instead
+            // of the sheet, closing the thing this click just opened straight back down.
+            closeActionSheet(button);
+            onClick(e);
+        });
         return button;
+    }
+
+    // Closing it ourselves now that the click is stopped before it reaches the sheet's own
+    // handler, which is what used to close it. Escape is what a person would press to back
+    // out of the same menu, and Jellyfin already listens for that globally, so this reaches
+    // the same "cancelled" path a real cancellation takes rather than a bespoke close.
+    function closeActionSheet(withinButton) {
+        var sheet = withinButton.closest('.actionSheet');
+        if (sheet && document.body.contains(sheet)) {
+            document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        }
     }
 
     function addMenuButtons(sheet, context) {
@@ -1283,6 +1312,21 @@
         return fallbackDelaySeconds;
     }
 
+    // Jellyfin's own player debounces setSubtitleOffset by 100ms - confirmed in the
+    // shipped source of both 10.11.11 and 12.0, where it is defined as
+    // "(0, debounce)(this._setSubtitleOffset, 100)" - and confirmed live: dragging
+    // Jellyfin's own native slider and reading getPlayerSubtitleOffset() back
+    // immediately shows the value from before the drag, same as it did here. This was
+    // read straight back in the same synchronous call to guard against a bridge that
+    // found a decoy manager wired to nothing, but that guard was racing the debounce and
+    // losing every time, which is why the slider used to change its own number without
+    // moving anything: it detected its own (correct) call as having failed and fell back
+    // to the text-track path, which has no cues to move for a subtitle rendered any other
+    // way. The verification now runs after the debounce window instead of inside it, and
+    // only logs - it does not retroactively fall back, since the primary call has already
+    // been made by the time it could get an answer either way.
+    var DEBOUNCE_SETTLE_MS = 150;
+
     function applyDelay(delaySeconds) {
         var manager = playbackManager();
 
@@ -1296,17 +1340,24 @@
 
                 manager.setSubtitleOffset(delayToJellyfinOffset(delaySeconds));
 
-                // The call can go through without throwing and still not move anything -
-                // that is exactly what was happening before this was rewritten to stop
-                // passing a player. Reading the offset straight back and comparing it
-                // catches that silently, rather than reporting success on a slider that
-                // visibly isn't doing anything.
-                var confirmed = parseFloat(manager.getPlayerSubtitleOffset());
-                if (!isNaN(confirmed) && Math.abs(confirmed - delayToJellyfinOffset(delaySeconds)) < 0.01) {
-                    return true;
-                }
+                // Purely a diagnostic: logged, never acted on. Verifying synchronously and
+                // falling back on a mismatch used to be here, and it was wrong to do -
+                // it was racing the 100ms debounce and losing every time, reporting the
+                // player as broken when it had simply not caught up yet.
+                var wanted = delayToJellyfinOffset(delaySeconds);
+                setTimeout(function () {
+                    try {
+                        var confirmed = parseFloat(manager.getPlayerSubtitleOffset());
+                        if (isNaN(confirmed) || Math.abs(confirmed - wanted) >= 0.01) {
+                            log('the player did not settle on the offset it was given - got ' +
+                                confirmed + ', wanted ' + wanted);
+                        }
+                    } catch (err) {
+                        log('could not confirm the subtitle offset after the fact: ' + err);
+                    }
+                }, DEBOUNCE_SETTLE_MS);
 
-                log('the player accepted the offset but did not reflect it back, falling back');
+                return true;
             } catch (err) {
                 log('the player refused the subtitle offset: ' + err);
             }
@@ -1516,7 +1567,7 @@
             '    <button type="button" data-nudge="0.1">+100</button>' +
             '    <button type="button" data-nudge="1">+1s</button>' +
             '  </div>' +
-            '  <input type="range" class="lapseToolsSlider" id="lapseDelaySlider" min="-10" max="10" step="0.025" value="' + panelDelay + '" />' +
+            '  <input type="range" class="lapseToolsSlider" id="lapseDelaySlider" min="-30" max="30" step="0.025" value="' + panelDelay + '" />' +
             '  <div class="lapseToolsHint">' + note + ' Positive means the subtitles show up later.</div>' +
             '  <div class="lapseToolsButtons">' +
             '    <button type="button" class="lapseToolsButton" id="lapseDelayReset">Reset</button>' +
@@ -1539,7 +1590,9 @@
         var value = document.getElementById('lapseDelayValue');
 
         function setDelay(next) {
-            panelDelay = Math.max(-10, Math.min(10, Math.round(next * 1000) / 1000));
+            // Matches Jellyfin's own native Subtitle Offset slider range, so a delay set
+            // there and read back here doesn't get clamped to something smaller.
+            panelDelay = Math.max(-30, Math.min(30, Math.round(next * 1000) / 1000));
             slider.value = panelDelay;
             value.textContent = formatDelay(panelDelay);
             applyDelay(panelDelay);
@@ -1905,7 +1958,35 @@
             }
 
             var margin = 8;
-            var available = window.innerHeight - margin * 2;
+
+            // The "Subtitles" sheet from the CC button lands wherever jellyfin-web put it
+            // - which was measured to be the vertical middle of the window, not the top,
+            // since positionTo centres a sheet near the button that opened it rather than
+            // anchoring it to a corner. A budget worked out from the window's own height
+            // (as if the sheet started at the top) is wrong on a sheet like that: it is
+            // generous enough that the content never hits the cap and the scrolling this
+            // whole function exists for never engages, while the sheet still runs off the
+            // bottom because there was never really that much room below where it sat.
+            // The budget has to come from THIS sheet's own top, read fresh, not assumed.
+            var box = sheet.getBoundingClientRect();
+            var budget = window.innerHeight - box.top - margin;
+
+            // Sitting low enough that there is barely room for anything is worth pulling
+            // up first, so the list isn't squeezed into a sliver when there's headroom
+            // above to use instead.
+            var minBudget = 220;
+            if (budget < minBudget) {
+                var top = parseFloat(sheet.style.top);
+                if (!isNaN(top)) {
+                    var shift = Math.min(top - margin, minBudget - budget);
+                    if (shift > 0) {
+                        sheet.style.top = (top - shift) + 'px';
+                        box = sheet.getBoundingClientRect();
+                        budget = window.innerHeight - box.top - margin;
+                        log('moved the action sheet up ' + Math.round(shift) + 'px to make room');
+                    }
+                }
+            }
 
             var scroller = sheet.querySelector('.actionSheetScroller');
 
@@ -1913,28 +1994,14 @@
                 // Capping the sheet alone does nothing if the scroller inside keeps
                 // growing regardless of its parent - the header and buttons would be
                 // pushed off screen instead of the list scrolling. Both need a limit.
-                sheet.style.maxHeight = available + 'px';
+                var chrome = box.height - scroller.getBoundingClientRect().height;
+                sheet.style.maxHeight = budget + 'px';
                 sheet.style.overflowY = 'hidden';
-
-                var chrome = sheet.getBoundingClientRect().height - scroller.getBoundingClientRect().height;
-                scroller.style.maxHeight = Math.max(80, available - chrome) + 'px';
+                scroller.style.maxHeight = Math.max(80, budget - chrome) + 'px';
                 scroller.style.overflowY = 'auto';
             } else {
-                sheet.style.maxHeight = available + 'px';
+                sheet.style.maxHeight = budget + 'px';
                 sheet.style.overflowY = 'auto';
-            }
-
-            var box = sheet.getBoundingClientRect();
-            var overflow = box.bottom - (window.innerHeight - margin);
-
-            if (overflow <= 0) {
-                return;
-            }
-
-            var top = parseFloat(sheet.style.top);
-            if (!isNaN(top)) {
-                sheet.style.top = Math.max(margin, top - overflow) + 'px';
-                log('moved the action sheet up ' + Math.round(overflow) + 'px to keep it on screen');
             }
         });
     }
