@@ -228,6 +228,8 @@ public class SubtitleExtractor
             CreateNoWindow = true
         };
 
+        ProcessOutput.ReadAsUtf8(startInfo);
+
         // Copy the track through rather than re-encoding it: the text is already in the
         // shape we want, and a copy keeps whatever styling an ass track carries.
         startInfo.ArgumentList.Add("-nostdin");

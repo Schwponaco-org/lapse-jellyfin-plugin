@@ -280,6 +280,8 @@ public class SubtitleRemuxer
             CreateNoWindow = true
         };
 
+        ProcessOutput.ReadAsUtf8(startInfo);
+
         startInfo.ArgumentList.Add("-nostdin");
         startInfo.ArgumentList.Add("-y");
         startInfo.ArgumentList.Add("-i");
