@@ -923,6 +923,24 @@ public class EngineRunner
 
         var existing = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
         startInfo.Environment["PATH"] = ffmpegDirectory + Path.PathSeparator + existing;
+
+        // alass looks these up before it falls back to the PATH above, and its Windows
+        // release expects them to be set: the zip ships its own ffmpeg and a .bat that
+        // points at it. We install the binary on its own and use Jellyfin's ffmpeg
+        // instead, which is current, so say where that is rather than leaving alass to
+        // look for a copy that was never unpacked.
+        SetIfPresent(startInfo, "ALASS_FFMPEG_PATH", ffmpegDirectory, "ffmpeg");
+        SetIfPresent(startInfo, "ALASS_FFPROBE_PATH", ffmpegDirectory, "ffprobe");
+    }
+
+    private static void SetIfPresent(ProcessStartInfo startInfo, string variable, string folder, string toolName)
+    {
+        var path = Path.Combine(folder, OperatingSystem.IsWindows() ? toolName + ".exe" : toolName);
+
+        if (File.Exists(path))
+        {
+            startInfo.Environment[variable] = path;
+        }
     }
 
     private static void TryKill(Process process)
