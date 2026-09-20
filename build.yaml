@@ -1,7 +1,7 @@
 ---
 name: "LAPSE"
 guid: "486090e1-ca92-46e1-8549-9f6bb914a1d0"
-version: "2.0.0.0"
+version: "2.0.1.0"
 targetAbi: "10.11.0.0"
 framework: "net9.0"
 overview: "Sync subtitles to audio (or subtitle to subtitle) using the LAPSE engine. Open Settings after installing to set it up."
@@ -21,37 +21,33 @@ owner: "rs-jensen"
 artifacts:
 - "Jellyfin.Plugin.Lapse.dll"
 changelog: >
-  A big one. LAPSE now has a subtitle panel in the video player itself -
-  open "Subtitle tools" from the CC menu while something is playing and
-  you get a delay slider that drives Jellyfin's own live offset (so it
-  works with libass/ASS, plain text tracks, everything), a Save to file
-  button that bakes the delay in for good, a one-press Sync without
-  leaving the film, quick track switching, a rescan for subtitles LAPSE
-  can see but Jellyfin hasn't picked up, OpenSubtitles fetching, and
-  appearance settings with a live preview. Web client only for now.
+  v2.0.0's in-player subtitle panel shipped working, but almost nobody could
+  tell. The injected script had no cache busting, so a browser that had
+  already loaded the client kept running whatever it cached before the panel
+  existed - fixed by putting the plugin's own version in the script and
+  stylesheet URLs, so an update actually reaches people from here on.
 
-  Multi engine sync (experimental): when LAPSE isn't sure a sync actually
-  worked, it can now run alass and ffsubsync over the same subtitle too
-  and write every engine's answer as its own subtitle track, so instead
-  of one questionable file you get all of them to compare in the player
-  and a Keep this subtitle button in the new panel once you've found the
-  one that's actually right. Marked experimental because it's new and
-  leaves extra files sitting next to the video until you act on them; off
-  by default and needs turning on under Settings.
+  For anyone who did get the new script: the "Subtitles" sheet from the CC
+  button could run its last track off the bottom of the screen (worse with
+  multi engine sync's extra candidate tracks), and the delay slider never
+  seemed to move anything. The real cause of the second one: the panel's own
+  "Subtitle tools" button didn't stop its click from bubbling into Jellyfin's
+  own subtitle-track-picker handler, which read the click as a track
+  selection it didn't recognise and quietly turned subtitles off - confirmed
+  directly in Jellyfin's own console output every time the button was
+  pressed. By the time the slider ran, there was nothing left selected to
+  move. Every button this menu system adds now stops that from happening.
+  Also fixed along the way: the sheet-fitting logic assumed a sheet starts
+  near the top of the window, which is wrong for the kind jellyfin-web
+  centres near the button that opened it; a slider verification step that
+  was racing Jellyfin's own 100ms offset debounce and losing on every call;
+  and admin-saved subtitle appearance settings silently dropping the font
+  and letter spacing on every save.
 
-  LAPSE also shows up in the dashboard's own sidebar now, under Plugins,
-  instead of being three clicks deep under Dashboard > Plugins > My
-  Plugins.
+  Verified live this time, not just against decompiled source: a real
+  Jellyfin 10.11.11 server, this plugin actually built and installed into
+  it, driven end to end with a real browser.
 
-  Two bugs fixed: alass wouldn't install on Windows (the zip layout
-  tripped up how the plugin picked the binary out of it), and a server
-  running a non-UTF-8 code page - Chinese Windows installs, mainly -
-  could read a finished sync back as garbled JSON and report it as
-  failed even though the file had been written correctly. Engine output
-  is read as UTF-8 explicitly now, whatever the server's locale is.
-
-  Also: the OpenDyslexic button can uninstall the font again once it's
-  installed, instead of just sitting there.
-
-  Checked against Jellyfin 12.0 as well as 10.11 - still one artifact for
-  both, still targeting 10.11.0.0, nothing here needed the newer ABI.
+  If you installed v2.0.0 and the panel never seemed to do anything, this is
+  that fix - it needs a hard refresh of the web client once, since that is
+  exactly the cache this release stops happening again.
