@@ -294,6 +294,14 @@ public class EngineInfo
     public string? CapabilitySource { get; set; }
 
     /// <summary>
+    /// Gets or sets which voice detector the installed LAPSE binary is actually running:
+    /// "silero" for the accurate ONNX model, "libfvad" for the weaker fallback it falls
+    /// back to when the onnxruntime library or model sidecar isn't next to it, or null
+    /// when this isn't LAPSE or the binary couldn't be asked.
+    /// </summary>
+    public string? VadBackend { get; set; }
+
+    /// <summary>
     /// Gets or sets a value indicating whether the installed binary takes --output.
     /// </summary>
     public bool SupportsOutputFlag { get; set; }

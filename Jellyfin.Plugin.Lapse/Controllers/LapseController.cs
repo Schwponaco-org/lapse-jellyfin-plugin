@@ -1110,6 +1110,10 @@ public class LapseController : ControllerBase
                 ? await _runner.GetRuntimeInfoAsync(engine, cancellationToken).ConfigureAwait(false)
                 : EngineRuntimeInfo.Unknown;
 
+            var vadBackend = installed
+                ? await _runner.GetVadBackendAsync(engine, cancellationToken).ConfigureAwait(false)
+                : null;
+
             var status = await _updater.CheckAsync(engine, force: false, cancellationToken).ConfigureAwait(false);
             var values = EngineRunner.ResolveParameters(engine);
 
@@ -1153,6 +1157,7 @@ public class LapseController : ControllerBase
                 ReportedVersion = runtime.Version,
                 DiscoveredFlags = runtime.Probed ? runtime.Flags : null,
                 CapabilitySource = runtime.Source,
+                VadBackend = vadBackend,
                 SupportsOutputFlag = runtime.SupportsOutputFlag,
                 SupportsNoBackupFlag = runtime.SupportsNoBackupFlag
             };

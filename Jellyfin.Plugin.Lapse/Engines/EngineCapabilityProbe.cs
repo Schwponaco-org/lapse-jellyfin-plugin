@@ -48,9 +48,11 @@ public partial class EngineCapabilityProbe
     private static readonly string[] CapabilitiesArguments = { "--capabilities" };
     private static readonly string[] VersionArguments = { "--version" };
     private static readonly string[] FormatsArguments = { "--formats" };
+    private static readonly string[] VadArguments = { "--vad" };
 
     private readonly ILogger<EngineCapabilityProbe> _logger;
     private readonly ConcurrentDictionary<string, EngineRuntimeInfo> _cache = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, string?> _vadCache = new(StringComparer.Ordinal);
 
     /// <summary>
     /// Initializes a new instance of the <see cref="EngineCapabilityProbe"/> class.
@@ -68,6 +70,7 @@ public partial class EngineCapabilityProbe
     public void Invalidate()
     {
         _cache.Clear();
+        _vadCache.Clear();
     }
 
     /// <summary>
@@ -96,6 +99,54 @@ public partial class EngineCapabilityProbe
         var probed = await RunProbeAsync(binaryPath, cancellationToken).ConfigureAwait(false);
         _cache[key] = probed;
         return probed;
+    }
+
+    /// <summary>
+    /// Asks a LAPSE binary which voice detector it's actually running, via its own
+    /// <c>lapse --vad</c> self-test. That prints "silero" and exits 0 when the accurate
+    /// ONNX model loaded, or "libfvad" and exits 1 when the onnxruntime library or model
+    /// sidecar wasn't found beside the binary and it fell back to the weaker built-in
+    /// detector - a degradation that otherwise syncs worse with no visible error anywhere.
+    /// Only LAPSE understands this flag, so callers should only ask it of that engine.
+    /// </summary>
+    /// <param name="binaryPath">Full path to the LAPSE binary.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>"silero", "libfvad", or null if the binary couldn't be asked.</returns>
+    public async Task<string?> ProbeVadBackendAsync(string binaryPath, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(binaryPath) || !File.Exists(binaryPath))
+        {
+            return null;
+        }
+
+        var info = new FileInfo(binaryPath);
+        var key = $"{binaryPath}|{info.LastWriteTimeUtc.Ticks}|{info.Length}";
+
+        if (_vadCache.TryGetValue(key, out var cached))
+        {
+            return cached;
+        }
+
+        var (stdout, _, _, started) = await RunAsync(binaryPath, VadArguments, cancellationToken).ConfigureAwait(false);
+        var backend = started ? ParseVadBackend(stdout) : null;
+        _vadCache[key] = backend;
+        return backend;
+    }
+
+    private static string? ParseVadBackend(string stdout)
+    {
+        var text = stdout.Trim();
+        if (string.Equals(text, "silero", StringComparison.OrdinalIgnoreCase))
+        {
+            return "silero";
+        }
+
+        if (string.Equals(text, "libfvad", StringComparison.OrdinalIgnoreCase))
+        {
+            return "libfvad";
+        }
+
+        return null;
     }
 
     private async Task<EngineRuntimeInfo> RunProbeAsync(string binaryPath, CancellationToken cancellationToken)
