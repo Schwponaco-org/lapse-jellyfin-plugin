@@ -20,10 +20,37 @@
     var ignoreSearchPending = false;
     var ignoreSearchFetched = false;
 
-    // Said wherever a result was refused for lack of confidence. The way to overrule the
-    // engine is a checkbox two panels away, and nobody finds it by looking.
+    // Fallback text for the rare case a low-confidence result can't be turned into a
+    // one-click prompt (no engine id to act on). Normally confirmForceRetry below offers
+    // the checkbox directly instead of just describing where it lives.
     var FORCE_HINT = 'If you are sure the subtitle belongs to this video, turn on ' +
-        '"Sync even when the engine is unsure" under Settings, Engines - Advanced, and run it again.';
+        '"Sync even when the engine is unsure" under Settings, Engines, and run it again.';
+
+    // The one way to get a low-confidence result written instead of skipped: turn on the
+    // engine's own "sync even when unsure" and run it again. Offered right where the skip
+    // happens, rather than leaving FORCE_HINT to describe where to go looking for it.
+    function confirmForceRetry(message, engineId, view, retry) {
+        if (!engineId) {
+            Dashboard.alert(message + '\n\n' + FORCE_HINT);
+            return;
+        }
+
+        if (!window.confirm(message + '\n\nTurn on "Sync even when the engine is unsure" and try again?')) {
+            return;
+        }
+
+        lapsePost('Lapse/Engines/' + engineId + '/Parameter', { Key: 'force', Value: 'true' }).then(function () {
+            if (view) {
+                refreshEngines(view);
+            }
+
+            if (retry) {
+                retry();
+            }
+        }).catch(function (err) {
+            Dashboard.alert('Could not turn it on: ' + err.message);
+        });
+    }
 
     var OUTPUT_MODES = [
         {
@@ -718,6 +745,18 @@
             'will be less accurate than it should be. Reinstall to fetch them.</div>';
     }
 
+    // "Sync even when the engine is unsure" used to live only inside the collapsed
+    // Advanced panel, which meant nobody found it without being told where to look.
+    // It stays off by default, just no longer buried.
+    function forceControl(engine) {
+        if (!engine.Installed) {
+            return '';
+        }
+
+        var parameter = (engine.Parameters || []).filter(function (p) { return p.Key === 'force'; })[0];
+        return parameter ? '<div class="lapseForceControl">' + parameterControl(parameter) + '</div>' : '';
+    }
+
     function engineUpdateNote(engine) {
         if (!engine.Installed) {
             return engine.LatestVersion ? ('Latest release ' + engine.LatestVersion) : '';
@@ -847,7 +886,7 @@
             '  </div>' +
             '  <div class="lapseModeNotes">' + modeNotes + '</div>' +
             penaltyField +
-            engine.Parameters.map(parameterControl).join('') +
+            engine.Parameters.filter(function (p) { return p.Key !== 'force'; }).map(parameterControl).join('') +
             '  <div class="inputContainer">' +
             '    <label class="inputLabel inputLabelUnfocused">Binary path override</label>' +
             '    <div class="lapsePathRow">' +
@@ -1040,6 +1079,7 @@
                 whyLink +
                 problem +
                 vadNotice(engine) +
+                forceControl(engine) +
                 '  <div class="lapseEngineActions">' + actions + '</div>' +
                 engineAdvancedHtml(engine) +
                 '</div>';
@@ -1772,20 +1812,28 @@
         });
     }
 
-    // Mode is deliberately left out: the server fills it in from whatever that engine's
-    // default sync mode is set to, so this button and the one in the item context menu
-    // both do the same thing.
-    function runSync(view, itemId, name, subtitlePath) {
+    // Shared by the quick Sync button and the advanced dialog, so that both get the same
+    // retry-after-turning-on-force offer instead of it being wired up twice.
+    function attemptSync(view, name, body) {
         Dashboard.showLoadingMsg();
-        lapsePost('Lapse/Sync', { ItemId: itemId, SubtitlePath: subtitlePath }).then(function (result) {
+        lapsePost('Lapse/Sync', body).then(function (result) {
             Dashboard.hideLoadingMsg();
-            showSyncResultAlert(name, result);
+            showSyncResultAlert(name, result, view, function () {
+                attemptSync(view, name, body);
+            });
             refreshItemList(view);
             refreshOverview(view);
         }).catch(function (err) {
             Dashboard.hideLoadingMsg();
             Dashboard.alert('Sync failed for ' + name + ': ' + err.message);
         });
+    }
+
+    // Mode is deliberately left out: the server fills it in from whatever that engine's
+    // default sync mode is set to, so this button and the one in the item context menu
+    // both do the same thing.
+    function runSync(view, itemId, name, subtitlePath) {
+        attemptSync(view, name, { ItemId: itemId, SubtitlePath: subtitlePath });
     }
 
     function subtitleOptionsHtml(subtitles) {
@@ -1862,7 +1910,7 @@
         return parts.join(', ') || 'done';
     }
 
-    function showSyncResultAlert(name, result) {
+    function showSyncResultAlert(name, result, view, retry) {
         if (!result.Success) {
             Dashboard.alert(name + ': sync failed - ' + result.Error);
             return;
@@ -1876,9 +1924,11 @@
         }
 
         if (result.Skipped) {
-            Dashboard.alert(name + ': left the original alone (' + describeResult(result) + ').\n\n' +
+            confirmForceRetry(
+                name + ': left the original alone (' + describeResult(result) + ').\n\n' +
                 'The engine was not confident enough, and File output is set to keep the original ' +
-                'when that happens.\n\n' + FORCE_HINT);
+                'when that happens.',
+                result.EngineId, view, retry);
             return;
         }
 
@@ -2125,24 +2175,16 @@
         });
 
         overlay.querySelector('#lapseAdvSync').addEventListener('click', function () {
-            Dashboard.showLoadingMsg();
-            lapsePost('Lapse/Sync', {
+            var body = {
                 ItemId: itemId,
                 EngineId: currentEngine().Id,
                 Mode: modeSelect.value,
                 Penalty: currentPenalty(),
                 SubtitlePath: selectedSubtitlePath(),
                 OutputFormat: overlay.querySelector('#lapseAdvFormat').value || null
-            }).then(function (result) {
-                Dashboard.hideLoadingMsg();
-                overlay.remove();
-                showSyncResultAlert(name, result);
-                refreshItemList(view);
-                refreshOverview(view);
-            }).catch(function (err) {
-                Dashboard.hideLoadingMsg();
-                Dashboard.alert('Sync failed for ' + name + ': ' + err.message);
-            });
+            };
+            overlay.remove();
+            attemptSync(view, name, body);
         });
 
         var syncAllButton = overlay.querySelector('#lapseAdvSyncAll');
@@ -2544,6 +2586,10 @@
             body.Placement = view.querySelector('#lapseSubToSubPlacement').value;
         }
 
+        attemptSubToSubSync(view, body);
+    }
+
+    function attemptSubToSubSync(view, body) {
         Dashboard.showLoadingMsg();
         lapsePost('Lapse/SyncSubtitles', body).then(function (result) {
             Dashboard.hideLoadingMsg();
@@ -2554,8 +2600,11 @@
                     'would have moved it ' + (result.OffsetMs || 0) + 'ms, which is inside the tolerance ' +
                     'set under File output.');
             } else if (result.Skipped) {
-                Dashboard.alert('Left the input alone (' + describeResult(result) +
-                    '), which is under the confidence threshold.\n\n' + FORCE_HINT);
+                confirmForceRetry(
+                    'Left the input alone (' + describeResult(result) + '), which is under the confidence threshold.',
+                    result.EngineId, view, function () {
+                        attemptSubToSubSync(view, body);
+                    });
             } else {
                 Dashboard.alert('Synced! (' + describeResult(result) + ')\nWrote ' + result.OutputPath);
             }
