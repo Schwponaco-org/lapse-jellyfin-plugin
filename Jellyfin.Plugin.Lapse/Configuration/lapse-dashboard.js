@@ -704,6 +704,20 @@
         return '<span class="lapseVersionBadge lapseVersionBadge-unknown">version unknown</span>';
     }
 
+    // LAPSE quietly falls back to a weaker built-in voice detector when the Silero model
+    // files that ship alongside the binary went missing, and syncs worse from then on with
+    // nothing in the normal output to say so. This is the one place that tells on it.
+    function vadNotice(engine) {
+        if (engine.Id !== 'lapse' || !engine.Installed || engine.VadBackend !== 'libfvad') {
+            return '';
+        }
+
+        return '<div class="lapseEngineNotice">Running on libfvad, the weaker fallback voice ' +
+            'detector, instead of Silero. The onnxruntime library and silero_vad.onnx that ship ' +
+            'in the same release archive were not found next to the binary, so audio-based sync ' +
+            'will be less accurate than it should be. Reinstall to fetch them.</div>';
+    }
+
     function engineUpdateNote(engine) {
         if (!engine.Installed) {
             return engine.LatestVersion ? ('Latest release ' + engine.LatestVersion) : '';
@@ -1025,6 +1039,7 @@
                 '  </div>' +
                 whyLink +
                 problem +
+                vadNotice(engine) +
                 '  <div class="lapseEngineActions">' + actions + '</div>' +
                 engineAdvancedHtml(engine) +
                 '</div>';

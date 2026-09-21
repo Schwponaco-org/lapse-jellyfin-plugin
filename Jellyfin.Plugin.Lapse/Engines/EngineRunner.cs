@@ -100,6 +100,24 @@ public class EngineRunner
     }
 
     /// <summary>
+    /// Asks LAPSE which voice detector it's running: "silero" or the weaker "libfvad"
+    /// fallback. Only LAPSE has this self-test, so every other engine gets null back
+    /// without a process even being started.
+    /// </summary>
+    /// <param name="engine">The engine.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>"silero", "libfvad", or null.</returns>
+    public Task<string?> GetVadBackendAsync(IEngine engine, CancellationToken cancellationToken = default)
+    {
+        if (!string.Equals(engine.Descriptor.Id, "lapse", StringComparison.OrdinalIgnoreCase))
+        {
+            return Task.FromResult<string?>(null);
+        }
+
+        return _probe.ProbeVadBackendAsync(ResolvePath(engine), cancellationToken);
+    }
+
+    /// <summary>
     /// Gets whether there's a build of this engine for the machine the server runs on.
     /// </summary>
     /// <param name="engine">The engine.</param>
