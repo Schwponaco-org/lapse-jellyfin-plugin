@@ -12,6 +12,7 @@ using System.Net.Mime;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Jellyfin.Plugin.Lapse.Configuration;
 using Jellyfin.Plugin.Lapse.Data;
 using Jellyfin.Plugin.Lapse.Engines;
 using Jellyfin.Plugin.Lapse.Services;
@@ -1399,6 +1400,47 @@ public class LapseController : ControllerBase
         }
 
         Plugin.Instance!.Configuration.DefaultEngineId = engine.Descriptor.Id;
+        Plugin.Instance!.SaveConfiguration();
+        return Ok();
+    }
+
+    /// <summary>
+    /// Sets one advanced parameter on one engine, without touching anything else about it.
+    /// Exists for prompts that offer to flip a single switch in place - "sync even when
+    /// unsure" from the low-confidence warning - rather than sending the whole settings
+    /// page just to change one value.
+    /// </summary>
+    /// <param name="engineId">Which engine.</param>
+    /// <param name="request">The parameter key and value to save.</param>
+    /// <returns>Ok.</returns>
+    [HttpPost("Lapse/Engines/{engineId}/Parameter")]
+    [Authorize(Policy = Policies.RequiresElevation)]
+    public ActionResult SetEngineParameter([FromRoute] string engineId, [FromBody] EngineParameterRequest request)
+    {
+        if (request is null || string.IsNullOrWhiteSpace(request.Key))
+        {
+            return BadRequest("A parameter key is required");
+        }
+
+        var engine = _registry.Find(engineId);
+        if (engine is null)
+        {
+            return NotFound($"No engine called '{engineId}'");
+        }
+
+        var settings = Plugin.Instance!.Configuration.GetEngineSettings(engine.Descriptor.Id);
+        var existing = settings.Parameters.FirstOrDefault(
+            p => string.Equals(p.Key, request.Key, StringComparison.OrdinalIgnoreCase));
+
+        if (existing is not null)
+        {
+            existing.Value = request.Value;
+        }
+        else
+        {
+            settings.Parameters.Add(new EngineParameterSetting { Key = request.Key, Value = request.Value });
+        }
+
         Plugin.Instance!.SaveConfiguration();
         return Ok();
     }
