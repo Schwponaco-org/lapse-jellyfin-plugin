@@ -135,6 +135,23 @@ public class ArrWebhookService
     /// <returns>Task.</returns>
     public async Task SyncWhenScannedAsync(IReadOnlyList<string> paths, CancellationToken cancellationToken = default)
     {
+        // This runs detached from the request that started it, so nobody is waiting to
+        // see an exception. Log it rather than let it vanish.
+        try
+        {
+            await SyncEachAsync(paths, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Could not queue the files Radarr/Sonarr reported");
+        }
+    }
+
+    private async Task SyncEachAsync(IReadOnlyList<string> paths, CancellationToken cancellationToken)
+    {
         foreach (var path in paths)
         {
             var item = await WaitForItemAsync(path, cancellationToken).ConfigureAwait(false);

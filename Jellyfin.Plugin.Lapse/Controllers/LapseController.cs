@@ -214,6 +214,22 @@ public class LapseController : ControllerBase
         return string.IsNullOrEmpty(name) ? null : _userManager.GetUserByName(name);
     }
 
+    // Looks an item up on the caller's behalf. An administrator sees everything; anyone
+    // else only gets items they could open in Jellyfin itself, so an item id from a
+    // library they have no access to, or above their parental rating, answers the same
+    // as one that doesn't exist.
+    private BaseItem? GetVisibleItem(Guid itemId)
+    {
+        var item = _libraryManager.GetItemById(itemId);
+        if (item is null || User.IsInRole(AdministratorRole))
+        {
+            return item;
+        }
+
+        var user = GetCallingUser();
+        return user is not null && item.IsVisibleStandalone(user) ? item : null;
+    }
+
     // ---------------------------------------------------------------- status and items
 
     /// <summary>
@@ -221,6 +237,7 @@ public class LapseController : ControllerBase
     /// </summary>
     /// <returns>One entry per item.</returns>
     [HttpGet("Lapse/Status")]
+    [Authorize(Policy = Policies.RequiresElevation)]
     public ActionResult<List<ItemStatusEntry>> GetStatus()
     {
         var config = Plugin.Instance!.Configuration;
@@ -280,6 +297,7 @@ public class LapseController : ControllerBase
     /// </summary>
     /// <returns>The overview.</returns>
     [HttpGet("Lapse/Overview")]
+    [Authorize(Policy = Policies.RequiresElevation)]
     public ActionResult<DashboardOverview> GetOverview()
     {
         var config = Plugin.Instance!.Configuration;
@@ -305,7 +323,7 @@ public class LapseController : ControllerBase
 
         foreach (var entry in config.History.AsEnumerable().Reverse().Take(15))
         {
-            var item = _libraryManager.GetItemById(entry.ItemId);
+            var item = GetVisibleItem(entry.ItemId);
 
             overview.Recent.Add(new RecentActivityEntry
             {
@@ -392,7 +410,7 @@ public class LapseController : ControllerBase
     [HttpGet("Lapse/Movies/{itemId}/Subtitles")]
     public ActionResult<List<SubtitleOption>> GetItemSubtitles([FromRoute] Guid itemId)
     {
-        var item = _libraryManager.GetItemById(itemId);
+        var item = GetVisibleItem(itemId);
         if (item is null)
         {
             return NotFound("Item not found");
@@ -454,7 +472,7 @@ public class LapseController : ControllerBase
             return BadRequest("A sync request body is required");
         }
 
-        var item = _libraryManager.GetItemById(request.ItemId);
+        var item = GetVisibleItem(request.ItemId);
         if (item is null || string.IsNullOrEmpty(item.Path))
         {
             return NotFound("Item not found, or it has no video file");
@@ -633,7 +651,7 @@ public class LapseController : ControllerBase
             return BadRequest("A request body is required");
         }
 
-        var item = _libraryManager.GetItemById(request.ItemId);
+        var item = GetVisibleItem(request.ItemId);
         if (item is null)
         {
             return NotFound("Item not found");
@@ -821,7 +839,7 @@ public class LapseController : ControllerBase
     [HttpGet("Lapse/Series/{itemId}/ReferenceOptions")]
     public ActionResult<List<ReferenceOption>> GetSeriesReferenceOptions([FromRoute] Guid itemId)
     {
-        var item = _libraryManager.GetItemById(itemId);
+        var item = GetVisibleItem(itemId);
         if (item is null)
         {
             return NotFound("Item not found");
@@ -855,7 +873,7 @@ public class LapseController : ControllerBase
             return BadRequest("A request body is required");
         }
 
-        var item = _libraryManager.GetItemById(request.ItemId);
+        var item = GetVisibleItem(request.ItemId);
         if (item is null)
         {
             return NotFound("Item not found");
@@ -906,7 +924,7 @@ public class LapseController : ControllerBase
     [HttpGet("Lapse/Series/{itemId}/Seasons")]
     public ActionResult<List<FolderEntry>> GetSeasons([FromRoute] Guid itemId)
     {
-        var item = _libraryManager.GetItemById(itemId);
+        var item = GetVisibleItem(itemId);
         if (item is null)
         {
             return NotFound("Item not found");
@@ -984,6 +1002,7 @@ public class LapseController : ControllerBase
     /// </summary>
     /// <returns>List of libraries.</returns>
     [HttpGet("Lapse/Libraries")]
+    [Authorize(Policy = Policies.RequiresElevation)]
     public ActionResult<List<LibraryEntry>> GetLibraries()
     {
         return _libraryService.GetLibraries();
@@ -1060,6 +1079,7 @@ public class LapseController : ControllerBase
     /// </summary>
     /// <returns>List of folders.</returns>
     [HttpGet("Lapse/Folders")]
+    [Authorize(Policy = Policies.RequiresElevation)]
     public ActionResult<List<FolderEntry>> GetFolders()
     {
         var config = Plugin.Instance!.Configuration;
@@ -1473,6 +1493,7 @@ public class LapseController : ControllerBase
     /// </summary>
     /// <returns>The settings.</returns>
     [HttpGet("Lapse/Settings")]
+    [Authorize(Policy = Policies.RequiresElevation)]
     public ActionResult<PluginSettings> GetSettings()
     {
         var config = Plugin.Instance!.Configuration;
@@ -1680,6 +1701,7 @@ public class LapseController : ControllerBase
     /// </summary>
     /// <returns>The injection status.</returns>
     [HttpGet("Lapse/Diagnostics")]
+    [Authorize(Policy = Policies.RequiresElevation)]
     public ActionResult<object> GetDiagnostics()
     {
         var method = WebClientInjection.Evaluate();
@@ -1710,6 +1732,7 @@ public class LapseController : ControllerBase
     /// </summary>
     /// <returns>The rules, newest first.</returns>
     [HttpGet("Lapse/Ignore")]
+    [Authorize(Policy = Policies.RequiresElevation)]
     public ActionResult<List<IgnoreRule>> GetIgnoreRules()
     {
         return Plugin.Instance!.Configuration.IgnoreRules
@@ -1735,7 +1758,7 @@ public class LapseController : ControllerBase
 
         if (rule.ItemId.HasValue)
         {
-            var item = _libraryManager.GetItemById(rule.ItemId.Value);
+            var item = GetVisibleItem(rule.ItemId.Value);
             if (item is null)
             {
                 return NotFound("Item not found");
@@ -1832,7 +1855,10 @@ public class LapseController : ControllerBase
             return NotFound();
         }
 
-        if (!string.Equals(token, config.ArrWebhookToken, StringComparison.Ordinal))
+        if (token is null
+            || !System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(
+                System.Text.Encoding.UTF8.GetBytes(token),
+                System.Text.Encoding.UTF8.GetBytes(config.ArrWebhookToken)))
         {
             return Unauthorized();
         }
@@ -2054,7 +2080,7 @@ public class LapseController : ControllerBase
             return BadRequest("A request body is required");
         }
 
-        var item = _libraryManager.GetItemById(request.ItemId);
+        var item = GetVisibleItem(request.ItemId);
         if (item is null)
         {
             return NotFound("Item not found");
@@ -2171,7 +2197,7 @@ public class LapseController : ControllerBase
         }
 
         var (shiftPath, shiftError) = await ResolveToFileAsync(
-            _libraryManager.GetItemById(request.ItemId)!,
+            GetVisibleItem(request.ItemId)!,
             match,
             cancellationToken).ConfigureAwait(false);
 
@@ -2222,7 +2248,7 @@ public class LapseController : ControllerBase
         }
 
         var itemId = session.NowPlayingItem.Id;
-        var item = _libraryManager.GetItemById(itemId);
+        var item = GetVisibleItem(itemId);
 
         if (item is null)
         {
@@ -2286,7 +2312,7 @@ public class LapseController : ControllerBase
             return denied;
         }
 
-        var item = _libraryManager.GetItemById(itemId);
+        var item = GetVisibleItem(itemId);
         if (item is null)
         {
             return NotFound("Item not found");
@@ -2316,7 +2342,7 @@ public class LapseController : ControllerBase
             return BadRequest("Fetching from OpenSubtitles is switched off.");
         }
 
-        var item = _libraryManager.GetItemById(itemId);
+        var item = GetVisibleItem(itemId);
         if (item is null)
         {
             return NotFound("Item not found");
@@ -2367,7 +2393,7 @@ public class LapseController : ControllerBase
     [HttpGet("Lapse/Items/{itemId}/Candidates")]
     public ActionResult<object> GetItemCandidates([FromRoute] Guid itemId)
     {
-        var item = _libraryManager.GetItemById(itemId);
+        var item = GetVisibleItem(itemId);
 
         return new
         {
@@ -2406,7 +2432,7 @@ public class LapseController : ControllerBase
         var itemId = session.NowPlayingItem.Id;
         var sets = MultiEngineSyncService.GetPendingFor(itemId);
 
-        var item = _libraryManager.GetItemById(itemId);
+        var item = GetVisibleItem(itemId);
         var playingPath = item is null ? null : ResolvePlayingSubtitlePath(item);
         var match = MultiEngineSyncService.MatchPlaying(itemId, playingPath);
 
@@ -2448,7 +2474,7 @@ public class LapseController : ControllerBase
 
         if (string.IsNullOrWhiteSpace(path))
         {
-            var item = _libraryManager.GetItemById(request.ItemId);
+            var item = GetVisibleItem(request.ItemId);
             if (item is null)
             {
                 return NotFound("Item not found");
@@ -2602,7 +2628,7 @@ public class LapseController : ControllerBase
             return BadRequest("At least one subtitle is required");
         }
 
-        var item = _libraryManager.GetItemById(request.ItemId);
+        var item = GetVisibleItem(request.ItemId);
         if (item is null)
         {
             return NotFound("Item not found");
@@ -2681,7 +2707,7 @@ public class LapseController : ControllerBase
             return BadRequest("A request body is required");
         }
 
-        var item = _libraryManager.GetItemById(request.ItemId);
+        var item = GetVisibleItem(request.ItemId);
         if (item is null)
         {
             return NotFound("Item not found");
@@ -2776,7 +2802,7 @@ public class LapseController : ControllerBase
             return Forbid();
         }
 
-        var item = _libraryManager.GetItemById(request.ItemId);
+        var item = GetVisibleItem(request.ItemId);
         if (item is null || string.IsNullOrEmpty(item.Path))
         {
             return NotFound("Item not found, or it has no video file");
@@ -2841,7 +2867,7 @@ public class LapseController : ControllerBase
         }
 
         var (sourcePath, sourceError) = await ResolveToFileAsync(
-            _libraryManager.GetItemById(request.ItemId)!,
+            GetVisibleItem(request.ItemId)!,
             match,
             cancellationToken).ConfigureAwait(false);
 
@@ -2906,7 +2932,7 @@ public class LapseController : ControllerBase
             // the exercise, so unless told otherwise it carries straight on.
             if (request.SyncAfter ?? config.ConversionSyncAfter)
             {
-                var item = _libraryManager.GetItemById(request.ItemId);
+                var item = GetVisibleItem(request.ItemId);
 
                 if (item is not null && !string.IsNullOrEmpty(item.Path))
                 {
@@ -2969,7 +2995,7 @@ public class LapseController : ControllerBase
             return BadRequest("Nothing to do");
         }
 
-        var item = _libraryManager.GetItemById(request.ItemId);
+        var item = GetVisibleItem(request.ItemId);
         if (item is null || string.IsNullOrEmpty(item.Path))
         {
             return NotFound("Item not found, or it has no video file");
@@ -3253,7 +3279,7 @@ public class LapseController : ControllerBase
             return null;
         }
 
-        var item = _libraryManager.GetItemById(itemId);
+        var item = GetVisibleItem(itemId);
         if (item is null)
         {
             return null;

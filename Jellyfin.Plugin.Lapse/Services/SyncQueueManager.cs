@@ -224,7 +224,10 @@ public class SyncQueueManager : IDisposable
             if (_pending.Count == 0 && !_items.Any(i => i.Status == QueueItemStatus.Running))
             {
                 // nothing is running, so this is the start of a fresh job - don't inherit
-                // the reference track or the name of whatever ran last
+                // the reference track or the name of whatever ran last, or its items,
+                // which would otherwise pile up for as long as the server runs
+                _items.Clear();
+                _queuedIds.Clear();
                 _referenceKey = null;
                 _jobName = null;
                 _unitName = "item";
@@ -475,6 +478,15 @@ public class SyncQueueManager : IDisposable
 
                 itemId = _pending.Dequeue();
                 _queuedIds.Remove(itemId);
+
+                // Marked here, under the same lock, so there is no moment where the item
+                // has left the queue but isn't running yet. Anything enqueued in that gap
+                // would take the queue for idle and start a fresh job over the top of it.
+                var entry = _items.FirstOrDefault(i => i.ItemId == itemId);
+                if (entry is not null)
+                {
+                    entry.Status = QueueItemStatus.Running;
+                }
             }
 
             await ProcessOneAsync(itemId, CancellationToken.None).ConfigureAwait(false);
@@ -529,6 +541,15 @@ public class SyncQueueManager : IDisposable
             SaveRecord(itemId, MovieSyncStatus.Pending, "Stopped before this item finished");
             return false;
         }
+        catch (Exception ex)
+        {
+            // Anything else getting out would kill the worker with this item still
+            // marked as running, which the queue reads as busy until the server restarts.
+            _logger.LogError(ex, "Syncing item {ItemId} failed unexpectedly", itemId);
+            SetItemStatus(itemId, QueueItemStatus.Failed);
+            TrySaveRecord(itemId, MovieSyncStatus.Failed, ex.Message);
+            return false;
+        }
         finally
         {
             _runGate.Release();
@@ -536,6 +557,18 @@ public class SyncQueueManager : IDisposable
     }
 
     // The token every item in the current job runs under.
+    private void TrySaveRecord(Guid itemId, MovieSyncStatus status, string error)
+    {
+        try
+        {
+            SaveRecord(itemId, status, error);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Could not record the result for item {ItemId}", itemId);
+        }
+    }
+
     private CancellationToken JobToken
     {
         get
@@ -956,44 +989,47 @@ public class SyncQueueManager : IDisposable
             return;
         }
 
-        var records = plugin.Configuration.MovieRecords;
-        var record = records.FirstOrDefault(r => r.ItemId == itemId);
-        if (record is null)
+        lock (Plugin.ConfigurationLock)
         {
-            record = new MovieSyncRecord { ItemId = itemId };
-            records.Add(record);
-        }
-
-        if (syncedPaths is not null)
-        {
-            foreach (var path in syncedPaths)
+            var records = plugin.Configuration.MovieRecords;
+            var record = records.FirstOrDefault(r => r.ItemId == itemId);
+            if (record is null)
             {
-                var existing = record.SyncedSubtitles
-                    .FirstOrDefault(s => string.Equals(s.Path, path, StringComparison.Ordinal));
+                record = new MovieSyncRecord { ItemId = itemId };
+                records.Add(record);
+            }
 
-                if (existing is null)
+            if (syncedPaths is not null)
+            {
+                foreach (var path in syncedPaths)
                 {
-                    record.SyncedSubtitles.Add(new SubtitleSyncRecord { Path = path, LastSyncUtc = DateTime.UtcNow });
-                }
-                else
-                {
-                    existing.LastSyncUtc = DateTime.UtcNow;
+                    var existing = record.SyncedSubtitles
+                        .FirstOrDefault(s => string.Equals(s.Path, path, StringComparison.Ordinal));
+
+                    if (existing is null)
+                    {
+                        record.SyncedSubtitles.Add(new SubtitleSyncRecord { Path = path, LastSyncUtc = DateTime.UtcNow });
+                    }
+                    else
+                    {
+                        existing.LastSyncUtc = DateTime.UtcNow;
+                    }
                 }
             }
+
+            record.Status = status;
+            record.LastSyncUtc = DateTime.UtcNow;
+            record.LastError = error;
+            record.Mode = result?.Mode;
+            record.Penalty = result?.Penalty;
+            record.OffsetMs = result?.OffsetMs;
+            record.Slope = result?.Slope;
+            record.Intercept = result?.Intercept;
+
+            AddHistory(plugin, itemId, status, error, result);
+
+            plugin.SaveConfiguration();
         }
-
-        record.Status = status;
-        record.LastSyncUtc = DateTime.UtcNow;
-        record.LastError = error;
-        record.Mode = result?.Mode;
-        record.Penalty = result?.Penalty;
-        record.OffsetMs = result?.OffsetMs;
-        record.Slope = result?.Slope;
-        record.Intercept = result?.Intercept;
-
-        AddHistory(plugin, itemId, status, error, result);
-
-        plugin.SaveConfiguration();
     }
 
     // One line per file the plugin actually wrote, so it can be put back. A run that

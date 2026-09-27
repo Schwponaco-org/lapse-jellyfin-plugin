@@ -349,6 +349,10 @@ public class EngineRunner
         bool skipConfidencePolicy = false,
         CancellationToken cancellationToken = default)
     {
+        // Every run on a subtitle shares one work file beside it, and reads the file the
+        // run before it may still be writing, so runs on the same file take turns.
+        using var fileLock = await SubtitleFileLock.AcquireAsync(subtitlePath, cancellationToken).ConfigureAwait(false);
+
         var enginePath = ResolvePath(engine);
         if (!File.Exists(enginePath))
         {
@@ -595,6 +599,20 @@ public class EngineRunner
             result.InputPath = subtitlePath;
             result.ConvertedFrom = convertedInput is null ? null : SubtitleFormats.GetName(subtitlePath);
             return result;
+        }
+        catch (System.ComponentModel.Win32Exception ex)
+        {
+            // The binary is there but the OS won't run it: no execute bit, the wrong
+            // architecture, a noexec mount.
+            _logger.LogWarning(ex, "Could not start {Engine} at {Path}", engine.Descriptor.DisplayName, enginePath);
+
+            return new SyncResult
+            {
+                Success = false,
+                Mode = mode,
+                EngineId = engine.Descriptor.Id,
+                Error = $"{engine.Descriptor.DisplayName} could not be started: {ex.Message}"
+            };
         }
         catch (Exception ex) when (ex is NotSupportedException or InvalidDataException or TimeoutException or IOException)
         {

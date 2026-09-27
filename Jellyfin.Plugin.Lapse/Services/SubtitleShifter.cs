@@ -232,6 +232,10 @@ public partial class SubtitleShifter
             throw new FileNotFoundException("Subtitle file not found", subtitlePath);
         }
 
+        // Held from the read to the write, so a second shift of the same file lands on
+        // top of this one instead of on the same starting point, or on a half written file.
+        using var fileLock = await SubtitleFileLock.AcquireAsync(subtitlePath, cancellationToken).ConfigureAwait(false);
+
         var offset = TimeSpan.FromSeconds(offsetSeconds);
         var lines = await SubtitleEncoding.ReadAllLinesAsync(subtitlePath, cancellationToken).ConfigureAwait(false);
         var isAss = IsAss(subtitlePath);
@@ -281,7 +285,7 @@ public partial class SubtitleShifter
         var destination = EngineRunner.ResolveDestination(subtitlePath, mode);
         var backup = EngineRunner.TakeBackup(destination, mode);
 
-        await File.WriteAllLinesAsync(destination, lines, SubtitleEncoding.Utf8NoBom, cancellationToken).ConfigureAwait(false);
+        await SubtitleFileLock.WriteAllLinesAsync(destination, lines, cancellationToken).ConfigureAwait(false);
 
         return new ShiftResult
         {
