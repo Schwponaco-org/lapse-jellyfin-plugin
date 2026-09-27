@@ -1,7 +1,7 @@
 ---
 name: "LAPSE"
 guid: "486090e1-ca92-46e1-8549-9f6bb914a1d0"
-version: "2.0.1.0"
+version: "2.0.2.0"
 targetAbi: "10.11.0.0"
 framework: "net9.0"
 overview: "Sync subtitles to audio (or subtitle to subtitle) using the LAPSE engine. Open Settings after installing to set it up."
@@ -21,33 +21,34 @@ owner: "rs-jensen"
 artifacts:
 - "Jellyfin.Plugin.Lapse.dll"
 changelog: >
-  v2.0.0's in-player subtitle panel shipped working, but almost nobody could
-  tell. The injected script had no cache busting, so a browser that had
-  already loaded the client kept running whatever it cached before the panel
-  existed - fixed by putting the plugin's own version in the script and
-  stylesheet URLs, so an update actually reaches people from here on.
+  Mostly a security and reliability release, and worth taking if other
+  users on your server can sign in.
 
-  For anyone who did get the new script: the "Subtitles" sheet from the CC
-  button could run its last track off the bottom of the screen (worse with
-  multi engine sync's extra candidate tracks), and the delay slider never
-  seemed to move anything. The real cause of the second one: the panel's own
-  "Subtitle tools" button didn't stop its click from bubbling into Jellyfin's
-  own subtitle-track-picker handler, which read the click as a track
-  selection it didn't recognise and quietly turned subtitles off - confirmed
-  directly in Jellyfin's own console output every time the button was
-  pressed. By the time the slider ran, there was nothing left selected to
-  move. Every button this menu system adds now stops that from happening.
-  Also fixed along the way: the sheet-fitting logic assumed a sheet starts
-  near the top of the window, which is wrong for the kind jellyfin-web
-  centres near the button that opened it; a slider verification step that
-  was racing Jellyfin's own 100ms offset debounce and losing on every call;
-  and admin-saved subtitle appearance settings silently dropping the font
-  and letter spacing on every save.
+  The settings endpoint was readable by any signed-in user, not just
+  admins, and it included your DeepL, Google and OpenSubtitles keys, the
+  OpenSubtitles password and the Radarr/Sonarr webhook token. That and the
+  other dashboard-only endpoints need an admin now. If you've had
+  non-admin accounts on the server, it's worth rotating those keys.
 
-  Verified live this time, not just against decompiled source: a real
-  Jellyfin 10.11.11 server, this plugin actually built and installed into
-  it, driven end to end with a real browser.
+  If you'd opened subtitle access up to other users, they could also edit
+  subtitles on items in libraries they don't have access to, or above
+  their parental rating. They now only see what Jellyfin itself lets them
+  see.
 
-  If you installed v2.0.0 and the panel never seemed to do anything, this is
-  that fix - it needs a hard refresh of the web client once, since that is
-  exactly the cache this release stops happening again.
+  Two edits to the same subtitle at once - a quick double press on the
+  delay buttons, or a shift while the queue was syncing that file - could
+  leave an empty subtitle behind. Writes now go through a temporary file
+  and take turns per file, so that can't happen anymore.
+
+  Also fixed: an error in auto-sync or the per-library schedule could
+  take the whole Jellyfin server down with it; one unexpected error could
+  jam the sync queue until a restart; and servers where an old version
+  had patched index.html on disk (the official Docker image among them)
+  never picked up the cache busting from 2.0.1, so browsers kept running
+  an old copy of the script. That one needs a hard refresh once.
+
+  New since 2.0.1: the engine card warns you when LAPSE has fallen back
+  to its weaker built-in voice detector because the Silero model or
+  onnxruntime is missing. And "Sync even when the engine is unsure" now
+  sits on the engine card itself, and a skipped low-confidence sync
+  offers to turn it on and try again right there.
