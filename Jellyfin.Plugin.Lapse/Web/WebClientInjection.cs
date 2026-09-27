@@ -56,6 +56,11 @@ public static class WebClientInjection
     /// </summary>
     public const string Marker = "lapse-inject.js";
 
+    // Exactly what the old on-disk patching wrote into index.html. It has no version on
+    // it, so a server still carrying it would go on serving whatever copy of the script
+    // each browser cached first, however many times the plugin is updated.
+    private const string LegacyTag = "<script src=\"configurationpage?name=lapse-inject.js\"></script>";
+
     /// <summary>
     /// Gets or sets how the script is currently reaching the web client.
     /// </summary>
@@ -129,10 +134,14 @@ public static class WebClientInjection
     /// </summary>
     /// <param name="html">The page markup.</param>
     /// <param name="webBasePath">The request path the web client is served under.</param>
-    /// <returns>The markup with the tags in it, or the original when there was no head
-    /// to put them in or they were already there.</returns>
+    /// <returns>The markup with the tags in it, or null when there was no head to put
+    /// them in or they were already there.</returns>
     public static string? Inject(string html, string webBasePath)
     {
+        // A page an older version patched on disk gets its unversioned tag swapped for
+        // the current ones rather than being taken as already done.
+        html = html.Replace(LegacyTag, string.Empty, StringComparison.Ordinal);
+
         if (html.Contains(Marker, StringComparison.Ordinal))
         {
             return null;

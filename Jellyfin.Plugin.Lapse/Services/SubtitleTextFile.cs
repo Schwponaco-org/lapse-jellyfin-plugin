@@ -122,7 +122,7 @@ public class SubtitleTextFile
 
         output.AddRange(body);
 
-        await File.WriteAllLinesAsync(path, output, SubtitleEncoding.Utf8NoBom, cancellationToken).ConfigureAwait(false);
+        await SubtitleFileLock.WriteAllLinesAsync(path, output, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>

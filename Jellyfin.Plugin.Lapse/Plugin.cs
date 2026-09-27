@@ -60,6 +60,23 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
     /// </summary>
     public static Plugin? Instance { get; private set; }
 
+    /// <summary>
+    /// Gets the lock held while the configuration is written out. The sync records and
+    /// history are lists that the queue worker and request threads both add to, and
+    /// serializing one while another thread adds to it throws, so anything that edits
+    /// those lists takes this first.
+    /// </summary>
+    public static object ConfigurationLock { get; } = new();
+
+    /// <inheritdoc />
+    public override void SaveConfiguration(PluginConfiguration config)
+    {
+        lock (ConfigurationLock)
+        {
+            base.SaveConfiguration(config);
+        }
+    }
+
     /// <inheritdoc />
     public IEnumerable<PluginPageInfo> GetPages()
     {

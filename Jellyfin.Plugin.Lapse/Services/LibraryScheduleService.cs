@@ -32,6 +32,7 @@ public sealed class LibraryScheduleService : IHostedService, IDisposable
     private readonly SyncQueueManager _queueManager;
     private readonly ILogger<LibraryScheduleService> _logger;
     private readonly Timer _timer;
+    private int _running;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="LibraryScheduleService"/> class.
@@ -71,6 +72,30 @@ public sealed class LibraryScheduleService : IHostedService, IDisposable
     }
 
     private void OnTick(object? state)
+    {
+        // Walking a big library can outlast the tick interval. A second tick piling in
+        // on top would read and save the same configuration at the same time.
+        if (Interlocked.Exchange(ref _running, 1) == 1)
+        {
+            return;
+        }
+
+        // A timer callback that throws takes the whole server down with it.
+        try
+        {
+            QueueDueLibraries();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Checking the per-library sync schedules failed");
+        }
+        finally
+        {
+            Volatile.Write(ref _running, 0);
+        }
+    }
+
+    private void QueueDueLibraries()
     {
         var plugin = Plugin.Instance;
         if (plugin is null)

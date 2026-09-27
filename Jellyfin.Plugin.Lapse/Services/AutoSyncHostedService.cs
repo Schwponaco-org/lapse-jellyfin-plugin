@@ -97,6 +97,20 @@ public sealed class AutoSyncHostedService : IHostedService, IDisposable
 
     private void OnTimerElapsed(object? state)
     {
+        // A timer callback that throws takes the whole server down with it, so nothing
+        // gets out of here.
+        try
+        {
+            QueuePending();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Auto-sync could not queue the newly added items");
+        }
+    }
+
+    private void QueuePending()
+    {
         List<Guid> itemIds;
         lock (_lock)
         {
