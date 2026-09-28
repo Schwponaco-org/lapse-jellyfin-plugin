@@ -145,7 +145,7 @@ public class SeriesSyncService
             // once the run itself filters it back out.
             foreach (var subtitle in _subtitleLocator.GetExternalSubtitles(episode))
             {
-                if (subtitle.IsEmbedded || !subtitle.Supported)
+                if (subtitle.IsEmbedded || !subtitle.Supported || SubtitleExtractor.IsUntouchedExtraction(episode, subtitle.Path))
                 {
                     continue;
                 }

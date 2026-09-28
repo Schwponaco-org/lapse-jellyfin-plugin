@@ -40,8 +40,11 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddSingleton<SubtitleLocator>();
         serviceCollection.AddSingleton<SubtitleShifter>();
         serviceCollection.AddSingleton<SubtitleConverter>();
+        serviceCollection.AddSingleton<SubtitleLanguages>();
+        serviceCollection.AddSingleton<EmbeddedSubtitleProbe>();
         serviceCollection.AddSingleton<SubtitleExtractor>();
         serviceCollection.AddSingleton<SubtitleRemuxer>();
+        serviceCollection.AddSingleton<EmbeddedSubtitleExtractionService>();
         serviceCollection.AddSingleton<FontInstaller>();
         serviceCollection.AddSingleton<ReadableSubtitleService>();
         serviceCollection.AddSingleton<MultiEngineSyncService>();
@@ -70,5 +73,6 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
 
         serviceCollection.AddSingleton<IScheduledTask, LibrarySyncTask>();
         serviceCollection.AddSingleton<IScheduledTask, EngineUpdateTask>();
+        serviceCollection.AddSingleton<IScheduledTask, ExtractSubtitlesTask>();
     }
 }

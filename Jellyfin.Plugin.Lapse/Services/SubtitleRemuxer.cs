@@ -136,6 +136,44 @@ public class SubtitleRemuxer
             return result;
         }
 
+        // The rebuild drops streams by number, and Jellyfin's numbers aren't the file's:
+        // it counts the subtitle files beside the video ahead of the ones inside it. Each
+        // track is found in the file itself before anything is dropped, and if any of
+        // them can't be found for certain - the file was replaced since the last scan, or
+        // there's no ffprobe to ask - nothing is. Extracting alone is safe either way,
+        // since each extraction finds its own track, so only the rebuild waits on this.
+        var fileIndexes = new Dictionary<MediaStream, int>();
+
+        if (removeFromVideo)
+        {
+            foreach (var track in tracks)
+            {
+                try
+                {
+                    var match = await _extractor.FindInFileAsync(item, track.Index, cancellationToken).ConfigureAwait(false);
+
+                    if (!match.Verified)
+                    {
+                        result.Error = "LAPSE couldn't read the video file to check which of its streams are which, so nothing was removed.";
+                        return result;
+                    }
+
+                    if (!match.JellyfinAgrees)
+                    {
+                        result.Error = "The subtitle tracks in this video don't match what Jellyfin has on record for it, so nothing was removed. Refresh the item's metadata in Jellyfin and try again.";
+                        return result;
+                    }
+
+                    fileIndexes[track] = match.Track.Index;
+                }
+                catch (InvalidDataException)
+                {
+                    result.Error = "The subtitle tracks in this video don't match what Jellyfin has on record for it, so nothing was removed. Refresh the item's metadata in Jellyfin and try again.";
+                    return result;
+                }
+            }
+        }
+
         // Everything that can be saved gets saved first. A track that won't come out is
         // left in the video rather than being dropped with it.
         var removable = new List<MediaStream>();
@@ -197,7 +235,7 @@ public class SubtitleRemuxer
 
         try
         {
-            await RunFfmpegAsync(videoPath, destination, removable, cancellationToken).ConfigureAwait(false);
+            await RunFfmpegAsync(videoPath, destination, removable.Select(t => fileIndexes[t]).ToList(), cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is NotSupportedException or InvalidDataException or TimeoutException)
         {
@@ -264,11 +302,11 @@ public class SubtitleRemuxer
     [System.Diagnostics.CodeAnalysis.SuppressMessage(
         "Security",
         "CA3003:Review code for file path injection vulnerabilities",
-        Justification = "The video path is Jellyfin's own resolved path for an item the caller already looked up, the destination is derived from it, and the stream indexes come off the item's own media streams. Nothing from the request reaches any of it.")]
+        Justification = "The video path is Jellyfin's own resolved path for an item the caller already looked up, the destination is derived from it, and the stream indexes were read from the file itself. Nothing from the request reaches any of it.")]
     private async Task RunFfmpegAsync(
         string videoPath,
         string destination,
-        List<MediaStream> removable,
+        List<int> removableIndexes,
         CancellationToken cancellationToken)
     {
         var startInfo = new ProcessStartInfo
@@ -293,10 +331,10 @@ public class SubtitleRemuxer
         startInfo.ArgumentList.Add("-map");
         startInfo.ArgumentList.Add("0");
 
-        foreach (var track in removable)
+        foreach (var index in removableIndexes)
         {
             startInfo.ArgumentList.Add("-map");
-            startInfo.ArgumentList.Add("-0:" + track.Index.ToString(CultureInfo.InvariantCulture));
+            startInfo.ArgumentList.Add("-0:" + index.ToString(CultureInfo.InvariantCulture));
         }
 
         // Straight copy. No stream is decoded, so this runs at disk speed and the video

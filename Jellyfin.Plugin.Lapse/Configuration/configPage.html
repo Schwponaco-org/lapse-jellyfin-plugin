@@ -942,6 +942,90 @@
                             </button>
                         </div>
 
+                        <h3 class="lapseSubHeading">
+                            Extract embedded subtitles to files
+                            <span class="lapseChip lapseChip-experimental">Experimental</span>
+                        </h3>
+                        <div class="fieldDescription lapseTightNote">
+                            Writes the embedded subtitle tracks you pick out as files beside each video, so
+                            Jellyfin shows them as ordinary external subtitles. Only the languages and kinds
+                            you ask for are written, and the video itself is never changed. Files are named
+                            like <code>Movie.eng.forced.stream8.srt</code>, and a track that's already been
+                            written is passed over on the next run.
+                        </div>
+                        <label class="emby-checkbox-label lapseStackedCheck">
+                            <input id="lapseExtractEnabled" type="checkbox" is="emby-checkbox" />
+                            <span>Extract embedded subtitles on a schedule</span>
+                        </label>
+                        <div class="fieldDescription lapseTightNote">
+                            Runs as "Extract embedded subtitles" under Scheduled Tasks, every night at 02:00
+                            unless you change it there.
+                        </div>
+
+                        <div class="fieldDescription lapseTightNote"><strong>Libraries</strong></div>
+                        <div id="lapseExtractLibraries" class="lapseAccessUsers"></div>
+
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="lapseExtractLanguages">Languages</label>
+                            <input is="emby-input" id="lapseExtractLanguages" type="text" placeholder="en" />
+                            <div class="fieldDescription">
+                                Codes or names, separated by commas: <code>en, da</code>. A plain language takes
+                                its regional variants too, so <code>pt</code> includes pt-BR. Leave empty for every
+                                language, and add <code>und</code> for tracks with no language set.
+                            </div>
+                        </div>
+                        <div class="selectContainer">
+                            <label class="selectLabel" for="lapseExtractTrackFilter">Which tracks</label>
+                            <select is="emby-select" id="lapseExtractTrackFilter" class="emby-select-withcolor emby-select">
+                                <option value="All">Forced and full tracks</option>
+                                <option value="ForcedOnly">Forced tracks only</option>
+                                <option value="NotForced">Full tracks only, no forced</option>
+                            </select>
+                            <div class="fieldDescription">
+                                A track counts as forced when the file flags it as forced, or when its title
+                                says so ("English (Forced)"). "Non-forced" in a title doesn't count.
+                            </div>
+                        </div>
+                        <label class="emby-checkbox-label lapseStackedCheck">
+                            <input id="lapseExtractSkipExisting" type="checkbox" is="emby-checkbox" />
+                            <span>Skip a track when there's already a subtitle file in that language</span>
+                        </label>
+                        <div class="fieldDescription lapseTightNote">
+                            Forced and full count separately, so an English .srt already beside the video
+                            doesn't stop the forced English track from being written.
+                        </div>
+                        <label class="emby-checkbox-label lapseStackedCheck">
+                            <input id="lapseExtractPictures" type="checkbox" is="emby-checkbox" />
+                            <span>Also copy PGS picture subtitles out as .sup files</span>
+                        </label>
+                        <div class="fieldDescription lapseTightNote">
+                            Jellyfin can show these, but they're pictures, so nothing in LAPSE can sync or
+                            edit them, and most players need Jellyfin to burn them into the video.
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="lapseExtractPathFilter">Only paths containing</label>
+                            <input is="emby-input" id="lapseExtractPathFilter" type="text" />
+                            <div class="fieldDescription">
+                                For trying it out on one film or show before the whole library. Leave empty to
+                                go through everything.
+                            </div>
+                        </div>
+                        <div class="fieldDescription lapseTightNote">
+                            Extracted tracks are left out of automatic syncs until you sync one by hand: they
+                            came with the release and are usually right already. LAPSE reads the tracks from
+                            the file itself, so this also works on a library set to "Allow None" for embedded
+                            subtitles, which is how to stop Jellyfin listing every track twice.
+                        </div>
+                        <div class="lapseWebhookStatus" id="lapseExtractStatus"></div>
+                        <div class="lapseButtonRow">
+                            <button is="emby-button" type="button" id="btnRunExtract" class="raised lapseSmallButton">
+                                <span>Save and run now</span>
+                            </button>
+                            <button is="emby-button" type="button" id="btnRefreshExtract" class="raised lapseSmallButton">
+                                <span>Check progress</span>
+                            </button>
+                        </div>
+
                         <button is="emby-button" type="button" id="btnSaveLabs" class="raised button-submit lapseSmallButton">
                             <span>Save experimental settings</span>
                         </button>
