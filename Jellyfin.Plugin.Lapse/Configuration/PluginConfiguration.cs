@@ -463,6 +463,57 @@ public class PluginConfiguration : BasePluginConfiguration
     /// </summary>
     public string? ArrWebhookToken { get; set; }
 
+    // ------------------------------------------------------ scheduled subtitle extraction
+    //
+    // Experimental. Writes chosen embedded tracks out as files beside the video on a
+    // schedule, so a library can have, say, every forced English track as an external
+    // subtitle without Jellyfin extracting every track of every file into its cache.
+
+    /// <summary>
+    /// Gets or sets a value indicating whether the scheduled extraction does anything.
+    /// The task is always there; this is what lets it touch files. Off until turned on.
+    /// </summary>
+    public bool ExtractEmbeddedEnabled { get; set; }
+
+    /// <summary>
+    /// Gets or sets the libraries the scheduled extraction goes through, as Jellyfin
+    /// library ids. None picked means none gone through.
+    /// </summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Usage",
+        "CA2227:Collection properties should be read only",
+        Justification = "The XML config serializer needs to be able to assign the list when it loads the file.")]
+    public List<Guid> ExtractLibraryIds { get; set; } = new();
+
+    /// <summary>
+    /// Gets or sets the languages to extract, as typed: codes or names, separated by
+    /// commas or spaces. Empty takes every language.
+    /// </summary>
+    public string? ExtractLanguages { get; set; }
+
+    /// <summary>
+    /// Gets or sets which tracks to take by whether they're forced.
+    /// </summary>
+    public ExtractTrackFilter ExtractTrackFilter { get; set; } = ExtractTrackFilter.All;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether a track is left in the video when there's
+    /// already a subtitle file beside it in the same language, forced or not to match.
+    /// </summary>
+    public bool ExtractSkipExisting { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether PGS picture tracks are copied out as .sup
+    /// files as well. Jellyfin can show those, but nothing else in LAPSE can edit them.
+    /// </summary>
+    public bool ExtractPictureSubtitles { get; set; }
+
+    /// <summary>
+    /// Gets or sets a piece of path the video has to contain to be looked at, for trying
+    /// the extraction out on one film or show before letting it loose on a library.
+    /// </summary>
+    public string? ExtractPathFilter { get; set; }
+
     /// <summary>
     /// Finds the settings for one engine, creating an entry if there isn't one yet.
     /// </summary>

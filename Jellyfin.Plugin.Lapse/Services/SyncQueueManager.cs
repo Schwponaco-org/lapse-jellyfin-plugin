@@ -609,9 +609,11 @@ public class SyncQueueManager : IDisposable
         // subtitles that are already files. An embedded track came with the release and is
         // usually right already, so quietly rewriting every one of them across a whole
         // library on a schedule risks doing more harm than the drift it might fix. Syncing
-        // one is still there, it just has to be a deliberate press on that one item.
+        // one is still there, it just has to be a deliberate press on that one item. The
+        // same goes for an embedded track that was only extracted to a file and never
+        // synced: it's the same track, just beside the video instead of inside it.
         var subtitles = _subtitleLocator.GetExternalSubtitles(item)
-            .FindAll(s => !s.IsEmbedded && s.Supported);
+            .FindAll(s => !s.IsEmbedded && s.Supported && !SubtitleExtractor.IsUntouchedExtraction(item, s.Path));
 
         if (subtitles.Count == 0)
         {

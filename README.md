@@ -46,6 +46,7 @@ Elsewhere in the dashboard:
 - **Multi engine sync** (experimental) - when LAPSE is not sure about a sync, run the other engines over the same subtitle and keep every answer as its own subtitle track until you pick the right one. See below.
 - **Undo** - every recent sync can be reversed with one press, whether that means restoring a backup or deleting the file the run added.
 - **Fetching from OpenSubtitles** (experimental) - if an item has no subtitle at all, LAPSE can fetch one before syncing, using your own OpenSubtitles account.
+- **Scheduled subtitle extraction** (experimental) - writes the embedded tracks you pick (say, only forced English) out as files beside every video in a library, every night. See below.
 
 ### Subtitle formats
 
@@ -121,6 +122,31 @@ PGS (`.sup`) and VobSub (`.idx`) subtitles are pictures of text, not text. They 
 ### Bulk runs
 
 Bulk, scheduled and webhook runs can do this too, but it is off by default and worth leaving off. Every subtitle LAPSE is unsure about leaves two or three extra files behind, and every one of them is waiting on you to watch something and decide. A run over a large library can leave you with more files to go through than you will ever get to. It works better on the films and episodes you actually noticed a problem with.
+
+## Scheduled subtitle extraction (experimental)
+
+Jellyfin can already pull subtitles out of a video, but it takes every track in every file and keeps them in its cache. If all you ever want is the forced English track, that's a lot of work on files you'll never look at. This does the picking for you: only the languages and kinds of track you ask for, written next to the video where Jellyfin shows them as ordinary external subtitles. The video itself is never touched.
+
+Turn it on under **Settings > Experimental > Extract embedded subtitles to files**, tick the libraries it should go through, and choose:
+
+- **Languages** - `en`, `eng` and `English` all mean the same thing, and a plain language takes its regional variants too, so `pt` includes pt-BR. Leave it empty for every language. `und` picks up tracks with no language set.
+- **Which tracks** - forced and full, forced only, or full only. A track counts as forced when the file flags it, or when its title says so ("English (Forced)"). "Non-forced" in a title doesn't count.
+- **Skip a track when there's already a subtitle file in that language** - on by default. Forced and full count separately, so an existing `Movie.en.srt` doesn't stop the forced English track from being written.
+- **PGS as .sup** - off by default. Jellyfin can show those, but they're pictures, so nothing else in LAPSE can do anything with them.
+- **Only paths containing** - for trying it on one film or show before letting it loose on a whole library.
+
+It runs as **Extract embedded subtitles** under Scheduled Tasks, nightly at 02:00, and **Save and run now** starts it straight away.
+
+Files are named `Movie.eng.forced.stream8.srt`: the language, `forced` and `sdh` where they apply, and the stream's number in the file, so Jellyfin reads the language and flags off the name and two English tracks never land on the same file. The next run recognises what it already wrote and leaves it alone, reading no more than a file's header to check, so a nightly run over a big library is cheap. If a video is replaced by an upgrade under the same name, its old extracted files are refreshed.
+
+Subtitles extracted by hand with older versions are called `Movie.eng.track8.srt`. Those are left exactly as they are and never reused: the number in them is Jellyfin's, which is off from the file's whenever there was already a subtitle file beside the video, so an old name can hold a different track than it says.
+
+A few things worth knowing:
+
+- Every track gets its own output, so an empty placeholder track (some releases have one for forced subtitles) is simply skipped rather than taking the others down with it.
+- Tracks are read from the file itself, not from Jellyfin's database, so this also works on a library set to **Allow None** for embedded subtitles. That's the way to stop Jellyfin listing every track twice, once inside the video and once as the extracted file.
+- Extracted tracks are left out of automatic syncs and aren't counted in the sync status until you sync one by hand. They came with the release and are usually right already, and a nightly run syncing hundreds of three-line forced tracks is a good way to end up with a folder full of doubtful results.
+- A video whose name is already close to the 255 byte limit can't have the language and track number added, and is reported instead of written.
 
 ## License
 

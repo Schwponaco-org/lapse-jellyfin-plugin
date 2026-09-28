@@ -1369,6 +1369,7 @@
             renderLibraries(view);
             renderLibraryFilter(view);
             renderShowLibraries(view);
+            renderExtractLibraries(view, true);
         });
     }
 
@@ -2965,6 +2966,14 @@
         view.querySelector('#lapseArrWebhookEnabled').checked = !!currentSettings.ArrWebhookEnabled;
         renderWebhookUrl(view);
 
+        view.querySelector('#lapseExtractEnabled').checked = !!currentSettings.ExtractEmbeddedEnabled;
+        view.querySelector('#lapseExtractLanguages').value = currentSettings.ExtractLanguages || '';
+        view.querySelector('#lapseExtractTrackFilter').value = currentSettings.ExtractTrackFilter || 'All';
+        view.querySelector('#lapseExtractSkipExisting').checked = currentSettings.ExtractSkipExisting !== false;
+        view.querySelector('#lapseExtractPictures').checked = !!currentSettings.ExtractPictureSubtitles;
+        view.querySelector('#lapseExtractPathFilter').value = currentSettings.ExtractPathFilter || '';
+        renderExtractLibraries(view, false);
+
         view.querySelector('#lapseMultiEngineEnabled').checked = !!currentSettings.MultiEngineEnabled;
         view.querySelector('#lapseMultiEngineUseAlass').checked = !!currentSettings.MultiEngineUseAlass;
         view.querySelector('#lapseMultiEngineUseFfsubsync').checked = !!currentSettings.MultiEngineUseFfsubsync;
@@ -2982,6 +2991,148 @@
         // the suggested name for a subtitle-to-subtitle output uses the sidecar suffix, so
         // it can only be right once the settings have actually arrived
         updateSubToSubOutput(view, false);
+    }
+
+    // --- scheduled extraction of embedded subtitles ---
+
+    // Called both when the settings arrive and when the library list does, whichever is
+    // second. keepTicks holds on to what's ticked on the page, so reloading the libraries
+    // after saving the libraries table doesn't throw away an unsaved choice here.
+    function renderExtractLibraries(view, keepTicks) {
+        var container = view.querySelector('#lapseExtractLibraries');
+        if (!container) {
+            return;
+        }
+
+        var picked = keepTicks && container.querySelector('.lapseExtractLibrary')
+            ? selectedExtractLibraryIds(view)
+            : ((currentSettings && currentSettings.ExtractLibraryIds) || []);
+
+        if (!allLibraries || !allLibraries.length) {
+            container.innerHTML = '<div class="fieldDescription">No libraries yet.</div>';
+            return;
+        }
+
+        container.innerHTML = allLibraries.map(function (library) {
+            var checked = picked.some(function (id) { return sameId(id, library.ItemId); });
+
+            return '' +
+                '<label class="emby-checkbox-label lapseStackedCheck">' +
+                '  <input type="checkbox" is="emby-checkbox" class="lapseExtractLibrary" data-id="' + escapeHtml(library.ItemId) + '"' +
+                (checked ? ' checked' : '') + ' />' +
+                '  <span>' + escapeHtml(library.Name) + '</span>' +
+                '</label>';
+        }).join('');
+    }
+
+    function selectedExtractLibraryIds(view) {
+        var ids = [];
+
+        view.querySelectorAll('.lapseExtractLibrary').forEach(function (input) {
+            if (input.checked) {
+                ids.push(input.getAttribute('data-id'));
+            }
+        });
+
+        return ids;
+    }
+
+    function describeExtractRun(status) {
+        var run = status && status.LastRun;
+        if (!run) {
+            return 'No extraction has run since the server started.';
+        }
+
+        if (run.Message && !run.Videos) {
+            return (status.Running ? 'Running: ' : 'Last run ' + timeAgo(run.FinishedUtc) + ': ') + run.Message;
+        }
+
+        var parts = [
+            run.Written + ' written',
+            run.AlreadyExtracted + ' already there',
+            run.CoveredByExisting + ' covered by an existing subtitle'
+        ];
+
+        if (run.Empty) {
+            parts.push(run.Empty + ' empty');
+        }
+
+        if (run.Unsupported) {
+            parts.push(run.Unsupported + ' picture based, left in the video');
+        }
+
+        if (run.Failed) {
+            parts.push(run.Failed + ' failed');
+        }
+
+        var videos = run.Videos + (run.Videos === 1 ? ' video' : ' videos');
+        var head = status.Running
+            ? 'Running, ' + videos + ' so far: '
+            : (run.Cancelled ? 'Stopped ' : 'Last run ') + timeAgo(run.FinishedUtc) + ', ' + videos + ': ';
+
+        var text = head + parts.join(', ') + '.';
+
+        if (run.Message) {
+            text += ' ' + run.Message;
+        }
+
+        if (run.Failures && run.Failures.length) {
+            text += ' First failures: ' + run.Failures.slice(0, 5).join('; ') + '. The server log has the rest.';
+        }
+
+        return text;
+    }
+
+    var extractPollTimer = null;
+    var lastExtractStart = null;
+
+    // waitFor is the start time of the run that was showing when a new one was asked
+    // for. Jellyfin's scheduler takes a moment to pick the task up, so until a newer run
+    // shows up the line says it's starting rather than repeating the old one.
+    function refreshExtractStatus(view, waitFor, triesLeft) {
+        return lapseGet('Lapse/Extraction').then(function (status) {
+            var line = view.querySelector('#lapseExtractStatus');
+            var run = status && status.LastRun;
+            var waiting = waitFor !== undefined && triesLeft > 0 &&
+                !(status && status.Running) && (!run || run.StartedUtc === waitFor);
+
+            if (line) {
+                line.textContent = waiting ? 'Starting the extraction...' : describeExtractRun(status);
+            }
+
+            if (!waiting && run) {
+                lastExtractStart = run.StartedUtc;
+            }
+
+            // Keep the line moving while a run is going or about to, and stop as soon as
+            // it isn't or the page has been left.
+            clearTimeout(extractPollTimer);
+            if (document.body.contains(view) && (waiting || (status && status.Running))) {
+                extractPollTimer = setTimeout(function () {
+                    refreshExtractStatus(view, waiting ? waitFor : undefined, waiting ? triesLeft - 1 : 0);
+                }, waiting ? 1000 : 3000);
+            }
+        }).catch(function () {
+            // The line just stays as it was; nothing else on the page depends on it.
+        });
+    }
+
+    function runExtraction(view) {
+        Dashboard.showLoadingMsg();
+
+        var previous = lastExtractStart;
+
+        lapsePost('Lapse/Settings', collectSettings(view)).then(function () {
+            return lapsePost('Lapse/Extraction/Run');
+        }).then(function () {
+            Dashboard.hideLoadingMsg();
+            return refreshSettings(view).then(function () {
+                return refreshExtractStatus(view, previous, 30);
+            });
+        }).catch(function (err) {
+            Dashboard.hideLoadingMsg();
+            Dashboard.alert('Could not start the extraction: ' + err.message);
+        });
     }
 
     function renderWebhookUrl(view) {
@@ -3403,6 +3554,13 @@
             OpenSubtitlesPassword: view.querySelector('#lapseOpenSubtitlesPassword').value || null,
             OpenSubtitlesLanguage: view.querySelector('#lapseOpenSubtitlesLanguage').value || 'en',
             ArrWebhookEnabled: view.querySelector('#lapseArrWebhookEnabled').checked,
+            ExtractEmbeddedEnabled: view.querySelector('#lapseExtractEnabled').checked,
+            ExtractLibraryIds: selectedExtractLibraryIds(view),
+            ExtractLanguages: view.querySelector('#lapseExtractLanguages').value.trim() || null,
+            ExtractTrackFilter: view.querySelector('#lapseExtractTrackFilter').value || 'All',
+            ExtractSkipExisting: view.querySelector('#lapseExtractSkipExisting').checked,
+            ExtractPictureSubtitles: view.querySelector('#lapseExtractPictures').checked,
+            ExtractPathFilter: view.querySelector('#lapseExtractPathFilter').value.trim() || null,
             MultiEngineEnabled: view.querySelector('#lapseMultiEngineEnabled').checked,
             MultiEngineUseAlass: view.querySelector('#lapseMultiEngineUseAlass').checked,
             MultiEngineUseFfsubsync: view.querySelector('#lapseMultiEngineUseFfsubsync').checked,
@@ -3541,7 +3699,8 @@
                 refreshFolders(view),
                 refreshQueue(view),
                 refreshPlatform(view),
-                refreshDiagnostics(view)
+                refreshDiagnostics(view),
+                refreshExtractStatus(view)
             ]);
         }).then(function () {
             Dashboard.hideLoadingMsg();
@@ -3757,6 +3916,12 @@
             }).catch(function (err) {
                 Dashboard.alert('Could not make a new URL: ' + err.message);
             });
+        });
+        view.querySelector('#btnRunExtract').addEventListener('click', function () {
+            runExtraction(view);
+        });
+        view.querySelector('#btnRefreshExtract').addEventListener('click', function () {
+            refreshExtractStatus(view);
         });
         view.querySelector('#btnRefreshArrStatus').addEventListener('click', function () {
             refreshDiagnostics(view).then(function () {

@@ -231,6 +231,47 @@ public class PluginSettings
     public string? ArrWebhookToken { get; set; }
 
     /// <summary>
+    /// Gets or sets a value indicating whether the scheduled extraction of embedded
+    /// subtitles is on.
+    /// </summary>
+    public bool ExtractEmbeddedEnabled { get; set; }
+
+    /// <summary>
+    /// Gets or sets the libraries the scheduled extraction goes through.
+    /// </summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Usage",
+        "CA2227:Collection properties should be read only",
+        Justification = "Bound from a request body; System.Text.Json skips collection properties it can't assign to, which would make the library picker silently save nothing.")]
+    public List<string> ExtractLibraryIds { get; set; } = new();
+
+    /// <summary>
+    /// Gets or sets the languages to extract, as typed.
+    /// </summary>
+    public string? ExtractLanguages { get; set; }
+
+    /// <summary>
+    /// Gets or sets which tracks to take by whether they're forced.
+    /// </summary>
+    public ExtractTrackFilter ExtractTrackFilter { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether a track already covered by a subtitle file
+    /// is left in the video.
+    /// </summary>
+    public bool ExtractSkipExisting { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether PGS tracks are copied out as .sup too.
+    /// </summary>
+    public bool ExtractPictureSubtitles { get; set; }
+
+    /// <summary>
+    /// Gets or sets the piece of path a video has to contain to be looked at.
+    /// </summary>
+    public string? ExtractPathFilter { get; set; }
+
+    /// <summary>
     /// Gets or sets a value indicating whether installed engines are kept up to date
     /// automatically.
     /// </summary>

@@ -17,6 +17,7 @@ using Jellyfin.Plugin.Lapse.Data;
 using Jellyfin.Plugin.Lapse.Engines;
 using Jellyfin.Plugin.Lapse.Services;
 using Jellyfin.Plugin.Lapse.Services.Translation;
+using Jellyfin.Plugin.Lapse.Tasks;
 using Jellyfin.Data;
 using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Database.Implementations.Enums;
@@ -26,6 +27,7 @@ using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Session;
 using MediaBrowser.Model.Entities;
+using MediaBrowser.Model.Tasks;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -70,6 +72,8 @@ public class LapseController : ControllerBase
     private readonly ReadableSubtitleService _readable;
     private readonly MultiEngineSyncService _multiEngine;
     private readonly ISessionManager _sessionManager;
+    private readonly EmbeddedSubtitleExtractionService _extraction;
+    private readonly ITaskManager _taskManager;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="LapseController"/> class.
@@ -98,6 +102,8 @@ public class LapseController : ControllerBase
     /// <param name="multiEngine">Collects the other engines' answers when LAPSE isn't sure.</param>
     /// <param name="sessionManager">Says which subtitle track someone is watching, so
     /// keeping the right one is a single press in the player.</param>
+    /// <param name="extraction">The scheduled extraction of embedded subtitles.</param>
+    /// <param name="taskManager">Starts that extraction when the dashboard asks.</param>
     public LapseController(
         ILibraryManager libraryManager,
         IUserManager userManager,
@@ -121,7 +127,9 @@ public class LapseController : ControllerBase
         SyncHistoryService historyService,
         ReadableSubtitleService readable,
         MultiEngineSyncService multiEngine,
-        ISessionManager sessionManager)
+        ISessionManager sessionManager,
+        EmbeddedSubtitleExtractionService extraction,
+        ITaskManager taskManager)
     {
         _libraryManager = libraryManager;
         _userManager = userManager;
@@ -146,6 +154,8 @@ public class LapseController : ControllerBase
         _readable = readable;
         _multiEngine = multiEngine;
         _sessionManager = sessionManager;
+        _extraction = extraction;
+        _taskManager = taskManager;
     }
 
     // The role name Jellyfin puts in the token for an administrator. Its own constant
@@ -253,10 +263,11 @@ public class LapseController : ControllerBase
             // admin asked for them. Nothing automatic syncs one, so counting them would
             // hold an item on "partly synced" no matter what was done to its files. A
             // track that does get synced by hand is written out as a file, and that file
-            // is counted here like any other.
+            // is counted here like any other. A track that was only extracted, and nobody
+            // has synced, is still the embedded track as far as this goes.
             if (!config.CountEmbeddedSubtitlesInStatus)
             {
-                subtitles = subtitles.FindAll(s => !s.IsEmbedded);
+                subtitles = subtitles.FindAll(s => !s.IsEmbedded && !SubtitleExtractor.IsUntouchedExtraction(item, s.Path));
             }
 
             // How many of the subtitles this item has right now have actually been
@@ -1536,6 +1547,13 @@ public class LapseController : ControllerBase
             MultiEngineInBulk = config.MultiEngineInBulk,
             ArrWebhookEnabled = config.ArrWebhookEnabled,
             ArrWebhookToken = config.ArrWebhookToken,
+            ExtractEmbeddedEnabled = config.ExtractEmbeddedEnabled,
+            ExtractLibraryIds = config.ExtractLibraryIds.Select(id => id.ToString("N", CultureInfo.InvariantCulture)).ToList(),
+            ExtractLanguages = config.ExtractLanguages,
+            ExtractTrackFilter = config.ExtractTrackFilter,
+            ExtractSkipExisting = config.ExtractSkipExisting,
+            ExtractPictureSubtitles = config.ExtractPictureSubtitles,
+            ExtractPathFilter = config.ExtractPathFilter,
             AutoUpdateEngines = config.AutoUpdateEngines,
             CountEmbeddedSubtitlesInStatus = config.CountEmbeddedSubtitlesInStatus,
             GoogleTranslateApiKey = config.GoogleTranslateApiKey,
@@ -1975,6 +1993,21 @@ public class LapseController : ControllerBase
         config.MultiEngineCandidateFormat = settings.MultiEngineCandidateFormat;
         config.MultiEngineInBulk = settings.MultiEngineInBulk;
         config.ArrWebhookEnabled = settings.ArrWebhookEnabled;
+
+        // Only ids that are still libraries, so a deleted library doesn't linger in the
+        // list and a stale form can't smuggle arbitrary ids in.
+        var libraryIds = _libraryService.GetLibraryIdSet();
+        config.ExtractEmbeddedEnabled = settings.ExtractEmbeddedEnabled;
+        config.ExtractLibraryIds = (settings.ExtractLibraryIds ?? new List<string>())
+            .Select(id => Guid.TryParse(id, out var parsed) ? parsed : Guid.Empty)
+            .Where(libraryIds.Contains)
+            .Distinct()
+            .ToList();
+        config.ExtractLanguages = Blank(settings.ExtractLanguages);
+        config.ExtractTrackFilter = Enum.IsDefined(settings.ExtractTrackFilter) ? settings.ExtractTrackFilter : ExtractTrackFilter.All;
+        config.ExtractSkipExisting = settings.ExtractSkipExisting;
+        config.ExtractPictureSubtitles = settings.ExtractPictureSubtitles;
+        config.ExtractPathFilter = Blank(settings.ExtractPathFilter);
         config.AutoUpdateEngines = settings.AutoUpdateEngines;
         config.CountEmbeddedSubtitlesInStatus = settings.CountEmbeddedSubtitlesInStatus;
         config.GoogleTranslateApiKey = Blank(settings.GoogleTranslateApiKey);
@@ -2813,6 +2846,40 @@ public class LapseController : ControllerBase
             .ConfigureAwait(false);
 
         return result;
+    }
+
+    /// <summary>
+    /// Says whether the scheduled extraction of embedded subtitles is running, and what
+    /// its last run since the server started did.
+    /// </summary>
+    /// <returns>The status.</returns>
+    [HttpGet("Lapse/Extraction")]
+    [Authorize(Policy = Policies.RequiresElevation)]
+    public ActionResult<ExtractionStatus> GetExtractionStatus()
+    {
+        return new ExtractionStatus
+        {
+            Running = _extraction.IsRunning,
+            LastRun = _extraction.LastRun?.Snapshot()
+        };
+    }
+
+    /// <summary>
+    /// Starts the scheduled extraction now, through Jellyfin's task scheduler so it shows
+    /// up in Scheduled Tasks and can be stopped from there like any other run.
+    /// </summary>
+    /// <returns>Ok, or why it can't start.</returns>
+    [HttpPost("Lapse/Extraction/Run")]
+    [Authorize(Policy = Policies.RequiresElevation)]
+    public ActionResult RunExtraction()
+    {
+        if (!Plugin.Instance!.Configuration.ExtractEmbeddedEnabled)
+        {
+            return BadRequest("Turn extraction on and save the settings first.");
+        }
+
+        _taskManager.QueueIfNotRunning<ExtractSubtitlesTask>();
+        return Ok();
     }
 
     /// <summary>
