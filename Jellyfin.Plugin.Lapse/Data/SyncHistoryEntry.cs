@@ -54,6 +54,13 @@ public class SyncHistoryEntry
     public string? OutputPath { get; set; }
 
     /// <summary>
+    /// Gets or sets the subtitle the run read. The same file as <see cref="OutputPath"/>
+    /// when it was overwritten; the original beside a new file otherwise. Entries from
+    /// before this was recorded have it null.
+    /// </summary>
+    public string? InputPath { get; set; }
+
+    /// <summary>
     /// Gets or sets the backup taken before writing, when the output mode asked for one.
     /// Null means there is nothing to put back - either the mode keeps no backup, or the
     /// run wrote a new file and left the original alone, in which case a revert is just
@@ -76,4 +83,11 @@ public class SyncHistoryEntry
     /// Gets or sets a value indicating whether this has already been undone.
     /// </summary>
     public bool Reverted { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether a later run wrote the same file. Undoing
+    /// this one would then restore a backup the later run has since replaced, or delete
+    /// the later run's file, so only the newest entry for a file can be undone.
+    /// </summary>
+    public bool Superseded { get; set; }
 }

@@ -64,6 +64,12 @@ public class EngineRuntimeInfo
     public bool SupportsNoBackupFlag => HasFlag("--no-backup");
 
     /// <summary>
+    /// Gets a value indicating whether the binary takes --batch, which keeps one process
+    /// running across many jobs fed to it on stdin. LAPSE 2.2.3 and later.
+    /// </summary>
+    public bool SupportsBatch => HasFlag("--batch");
+
+    /// <summary>
     /// Gets or sets the usage text the binary printed, trimmed to something sane. Kept
     /// because not everything worth knowing is a flag: LAPSE's auto mode is a positional
     /// argument, so the only way to tell a build that has it from one that doesn't is to

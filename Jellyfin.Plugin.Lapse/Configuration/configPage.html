@@ -231,8 +231,8 @@
                         <div id="lapseShowLibraries" class="lapseShowLibraries"></div>
 
                         <div class="fieldDescription lapseTightNote">
-                            There's also a "Sync subtitles" task under Scheduled Tasks that does the same thing
-                            on Jellyfin's own schedule.
+                            There's also a "Sync subtitles" task under Scheduled Tasks that syncs every library
+                            that's turned on. It has no schedule until you give it one there.
                         </div>
                     </section>
 
@@ -527,6 +527,17 @@
 
                         <h3 class="lapseSubHeading">What an automatic run does</h3>
                         <div id="lapseAutomationActions" class="lapseRadioGroup"></div>
+
+                        <label class="emby-checkbox-label lapseStackedCheck">
+                            <input id="lapseSkipSyncedInUnattendedRuns" type="checkbox" is="emby-checkbox" />
+                            <span>Leave subtitles that are already synced alone</span>
+                        </label>
+                        <div class="fieldDescription lapseTightNote">
+                            A subtitle that was synced and hasn't changed since gets skipped, so a nightly
+                            schedule only works on what's new. A subtitle replaced under the same name counts
+                            as new. Turn this off for one run if you've changed the engine settings and want
+                            everything done again. Sync All to Reference on a series always does every episode.
+                        </div>
 
                         <h3 class="lapseSubHeading">Automatic translation</h3>
                         <div class="lapseNoteStrip">
@@ -874,8 +885,10 @@
                             <span class="lapseChip lapseChip-experimental">Experimental</span>
                         </h3>
                         <div class="fieldDescription lapseTightNote">
-                            When a sync is asked for on an item that has no subtitle at all, go and get one
-                            first, then sync it. Items that already have a subtitle are untouched.
+                            When a sync is asked for on an item with nothing to sync, go and get a subtitle first,
+                            then sync it. It also adds Find Subtitles Online to each item's menu and to Subtitle tools
+                            in the player, where you can pick one yourself. Searches go by the video file's hash
+                            first, then by the IMDb or TMDb id Jellyfin has for it, then by title.
                         </div>
                         <label class="emby-checkbox-label lapseStackedCheck">
                             <input id="lapseOpenSubtitlesEnabled" type="checkbox" is="emby-checkbox" />
@@ -884,7 +897,8 @@
                         <div class="inputContainer">
                             <label class="inputLabel inputLabelUnfocused" for="lapseOpenSubtitlesLanguage">Preferred language</label>
                             <input is="emby-input" id="lapseOpenSubtitlesLanguage" type="text" placeholder="en" />
-                            <div class="fieldDescription">Two letter code, e.g. en, da, es, de.</div>
+                            <div class="fieldDescription">A code or a name, like en, da or Danish. List several in order
+                            if you'd take a second choice: da, en.</div>
                         </div>
                         <div class="inputContainer">
                             <label class="inputLabel inputLabelUnfocused" for="lapseOpenSubtitlesApiKey">API key</label>
@@ -907,6 +921,12 @@
                             Searching works with just the key. Downloading needs an account, and comes out
                             of that account's daily quota.
                         </div>
+                        <div class="lapseButtonRow">
+                            <button is="emby-button" type="button" id="btnTestOpenSubtitles" class="raised lapseSmallButton">
+                                <span>Test the connection</span>
+                            </button>
+                        </div>
+                        <div class="fieldDescription lapseTightNote" id="lapseOpenSubtitlesTestResult"></div>
 
                         <h3 class="lapseSubHeading">
                             Radarr and Sonarr

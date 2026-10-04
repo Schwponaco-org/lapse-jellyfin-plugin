@@ -1222,13 +1222,19 @@
 
 .lapseActivityName {
     flex: 1 1 auto;
-    min-width: 0;
+    min-width: 8em;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
 
+/* The detail gives way before the name does: a long line is cut short with the whole of
+   it in the tooltip, rather than pushing the item it's about off the row. */
 .lapseActivityDetail {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
     opacity: .6;
     font-size: .9em;
     white-space: nowrap;

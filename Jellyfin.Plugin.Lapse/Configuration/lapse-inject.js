@@ -23,6 +23,28 @@
         console.log('[lapse] ' + message);
     }
 
+    // What the signed in user may do. Asked once a minute at most, and only to decide
+    // which menu entries to show: the server checks every call again regardless.
+    var accessInfo = null;
+    var accessCheckedAt = 0;
+
+    function loadAccess() {
+        if (accessInfo && Date.now() - accessCheckedAt < 60000) {
+            return Promise.resolve(accessInfo);
+        }
+
+        return lapseGet('Lapse/Access').then(function (access) {
+            accessInfo = access || {};
+            accessCheckedAt = Date.now();
+            return accessInfo;
+        }).catch(function (err) {
+            // Can't tell, so show the entries and let the server say no, which is how
+            // this behaved before it could ask.
+            log('could not check what this user may do: ' + err);
+            return { CanEditSubtitles: true };
+        });
+    }
+
     function lapseFetch(path, options) {
         options = options || {};
         var headers = options.headers || {};
@@ -552,13 +574,16 @@
     }
 
     // Closing it ourselves now that the click is stopped before it reaches the sheet's own
-    // handler, which is what used to close it. Escape is what a person would press to back
-    // out of the same menu, and Jellyfin already listens for that globally, so this reaches
-    // the same "cancelled" path a real cancellation takes rather than a bespoke close.
+    // handler, which is what used to close it. This used to send an Escape key press, and
+    // jellyfin-web 10.11 ignores a synthetic one: the menu stayed open with the LAPSE dialog
+    // underneath its backdrop, so the first click anywhere only closed the menu. "_close"
+    // is the event jellyfin-web's own dialog helper fires on a dialog once it has finished
+    // closing, and its handler is the whole of the cleanup - backdrop, history entry, focus -
+    // the same path a cancelled menu takes, just without the slide-out.
     function closeActionSheet(withinButton) {
         var sheet = withinButton.closest('.actionSheet');
         if (sheet && document.body.contains(sheet)) {
-            document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+            sheet.dispatchEvent(new CustomEvent('_close', { bubbles: false, cancelable: false }));
         }
     }
 
@@ -606,6 +631,12 @@
             scroller.appendChild(makeMenuButton('lapse-readable-subtitles', 'Readable Subtitles', 'accessibility_new', function () {
                 openRestylePopup(context);
             }));
+
+            if (accessInfo && accessInfo.OpenSubtitlesEnabled) {
+                scroller.appendChild(makeMenuButton('lapse-find-subtitles', 'Find Subtitles Online', 'travel_explore', function () {
+                    openOnlineSubtitlePicker(context.id, context.name);
+                }));
+            }
 
             addChooseSubtitleButton(scroller, context.id);
         }
@@ -660,9 +691,17 @@
             return;
         }
 
-        resolveItemContext().then(function (context) {
+        Promise.all([resolveItemContext(), loadAccess()]).then(function (answers) {
+            var context = answers[0];
+            var access = answers[1];
+
             if (!context) {
                 log('could not figure out which item this menu belongs to, not adding the buttons');
+                return;
+            }
+
+            if (!access.CanEditSubtitles) {
+                log('this user can\'t edit subtitles, not adding the buttons');
                 return;
             }
 
@@ -910,11 +949,36 @@
                 (result.OffsetMs || 0) + 'ms, which is inside the tolerance set under File output.';
         }
 
+        if (result.CandidateCount > 0) {
+            return 'LAPSE was not sure, so the other engines had a go too. ' + result.CandidateCount +
+                ' answers are now extra subtitle tracks. Play the item, try them, and keep the one that lines up ' +
+                'from Subtitle tools in the player.';
+        }
+
+        if (result.Forced && (result.Skipped || result.Unconfirmed)) {
+            return 'This subtitle has too few lines for LAPSE to check its answer, so the original was left alone' +
+                (result.Unconfirmed && result.OutputPath ? ' and the forced guess went to ' + baseName(result.OutputPath) : '') +
+                '. A short track like this is best lined up against the full subtitle, with Sync Subtitles to Reference.';
+        }
+
+        if (result.Verdict === 'nothing' && (result.Skipped || result.Unconfirmed)) {
+            return 'LAPSE could not match this subtitle to the audio at all. That nearly always means it was made ' +
+                'for a different release or a different film, so the original was left alone' +
+                (result.Unconfirmed && result.OutputPath ? ' and its guess went to ' + baseName(result.OutputPath) : '') +
+                '. A subtitle made for this release is the fix.';
+        }
+
         if (result.Skipped) {
-            return 'Left the original alone - ' + describeResult(result) +
+            return 'Left the original alone: ' + describeResult(result) +
                 ', which is under the confidence threshold. Change what happens then under ' +
                 'File output in the LAPSE dashboard, or, if you are sure the subtitle belongs ' +
-                'to this video, turn on "Sync even when the engine is unsure" under Engines - Advanced.';
+                'to this video, turn on "Sync even when the engine is unsure" under Engines, Advanced.';
+        }
+
+        if (result.Unconfirmed) {
+            return 'LAPSE was not sure about this one (' + describeResult(result) + '), so the original was left ' +
+                'alone and its answer was written beside it as ' + baseName(result.OutputPath || '') +
+                '. Play it and see if it lines up.';
         }
 
         var converted = result.ConvertedFrom
@@ -1537,11 +1601,15 @@
         var playing = context.PlayingPath;
         var reachable = !!playbackManager();
 
+        // Someone without subtitle access can still move the subtitles for themselves and
+        // change how they look; writing to the files is what needs the permission.
+        var canEdit = context.CanEdit !== false;
+
         setPanelBody(
             '<div class="lapseToolsItem">' + escapeHtml(context.ItemName || '') + '</div>' +
-            delaySectionHtml(playing, reachable) +
-            syncSectionHtml(context, playing) +
-            tracksSectionHtml(context, playing) +
+            delaySectionHtml(canEdit ? playing : null, reachable, canEdit) +
+            (canEdit ? syncSectionHtml(context, playing) : '') +
+            tracksSectionHtml(context, playing, canEdit) +
             appearanceSectionHtml());
 
         wireDelaySection();
@@ -1550,7 +1618,7 @@
         wireAppearanceSection();
     }
 
-    function delaySectionHtml(playing, reachable) {
+    function delaySectionHtml(playing, reachable, canEdit) {
         var note = reachable
             ? 'Moves the subtitles while the film keeps playing, so you can see when it lines up.'
             : 'The player would not let LAPSE in, so this falls back to moving the cues directly. ' +
@@ -1575,7 +1643,10 @@
             (playing ? '' : ' disabled') + '>Save to file</button>' +
             '  </div>' +
             '  <div class="lapseToolsHint">' +
-            (playing
+            (!canEdit
+                ? 'This moves the subtitles for you while you watch. Saving the delay into the file needs ' +
+                  'subtitle access, which an admin can give you in the LAPSE settings.'
+                : playing
                 ? 'Saving writes the delay into ' + escapeHtml(baseName(playing)) +
                   ' so it is still right next time. Where it lands follows your File output setting.'
                 : 'The subtitle on screen is not a file LAPSE can edit, so it can only be moved for this session. ' +
@@ -1706,7 +1777,7 @@
         }
     }
 
-    function tracksSectionHtml(context, playing) {
+    function tracksSectionHtml(context, playing, canEdit) {
         var subtitles = context.Subtitles || [];
 
         var rows = subtitles.map(function (s) {
@@ -1730,16 +1801,16 @@
         return '<div class="lapseToolsSection">' +
             '  <div class="lapseToolsLabel">Subtitles on this item</div>' +
             (rows || '<div class="lapseToolsHint">LAPSE cannot see any subtitle files for this item.</div>') +
-            (anyMissing
+            (anyMissing && canEdit
                 ? '<div class="lapseToolsHint">"Not loaded" means the file is on disk but the player has not ' +
                   'been told about it yet, usually because it was written after the last scan. Picking it up ' +
                   'takes a moment, and then it appears in the normal subtitle list.</div>' +
                   '<div class="lapseToolsButtons"><button type="button" class="lapseToolsButton" id="lapseTrackRescan">' +
                   'Pick up new files</button></div>'
                 : '') +
-            (context.CanFetch
+            (context.CanFetch && canEdit
                 ? '<div class="lapseToolsButtons"><button type="button" class="lapseToolsButton" id="lapseTrackFetch">' +
-                  'Fetch one from OpenSubtitles</button></div>'
+                  'Find one online</button></div>'
                 : '') +
             '  <div class="lapseToolsResult" id="lapseTrackResult"></div>' +
             '</div>';
@@ -1790,20 +1861,136 @@
         var fetch = document.getElementById('lapseTrackFetch');
         if (fetch) {
             fetch.addEventListener('click', function () {
-                var result = document.getElementById('lapseTrackResult');
-                result.textContent = 'Looking for one...';
-                fetch.disabled = true;
+                openOnlineSubtitlePicker(panelContext.ItemId, panelContext.ItemName, function (outcome) {
+                    var result = document.getElementById('lapseTrackResult');
+                    if (result) {
+                        result.textContent = outcome;
+                    }
 
-                lapsePost('Lapse/Items/' + panelContext.ItemId + '/FetchSubtitle').then(function (outcome) {
-                    result.textContent = (outcome && outcome.Message) || 'Done.';
-                    fetch.disabled = false;
-                    setTimeout(loadPanel, 400);
-                }).catch(function (err) {
-                    result.textContent = 'Could not fetch one: ' + err.message;
-                    fetch.disabled = false;
+                    setTimeout(loadPanel, 1500);
                 });
             });
         }
+    }
+
+    // --- "Find Subtitles Online" ---
+
+    // Lists what OpenSubtitles has for the item and lets someone pick, rather than taking
+    // whatever came top. The list is radio rows, like the multi engine picker, because this
+    // gets used with a TV remote as much as with a mouse.
+    function openOnlineSubtitlePicker(itemId, name, done) {
+        var language = (accessInfo && accessInfo.OpenSubtitlesLanguage) || '';
+
+        var overlay = openOverlay(
+            '<h3>Find Subtitles Online</h3>' +
+            '<div class="fieldDescription">Searches OpenSubtitles for ' + escapeHtml(name || 'this item') +
+            ', by the file itself first and then by its title. Downloads come out of the account\'s daily allowance.</div>' +
+            '<div class="inputContainer">' +
+            '  <label class="inputLabel inputLabelUnfocused" for="lapseOsLanguage">Languages, most wanted first</label>' +
+            '  <input is="emby-input" id="lapseOsLanguage" type="text" value="' + escapeHtml(language) + '" placeholder="en" />' +
+            '</div>' +
+            '<div class="lapseDialogButtons">' +
+            '  <button is="emby-button" type="button" class="raised" id="lapseOsSearch"><span>Search</span></button>' +
+            '</div>' +
+            '<div id="lapseOsResults" class="fieldDescription">Searching...</div>' +
+            '<label class="emby-checkbox-label" id="lapseOsSyncRow" style="display:none">' +
+            '  <input id="lapseOsSync" type="checkbox" is="emby-checkbox" checked />' +
+            '  <span>Sync it to this video straight after</span>' +
+            '</label>' +
+            '<div class="lapseDialogButtons">' +
+            '  <button is="emby-button" type="button" class="raised" id="lapseOsCancel"><span>Close</span></button>' +
+            '  <button is="emby-button" type="button" class="raised button-submit" id="lapseOsGet" disabled><span>Download</span></button>' +
+            '</div>', true);
+
+        var results = overlay.querySelector('#lapseOsResults');
+        var getButton = overlay.querySelector('#lapseOsGet');
+        var found = [];
+
+        function search() {
+            var wanted = overlay.querySelector('#lapseOsLanguage').value.trim();
+            results.textContent = 'Searching...';
+            getButton.disabled = true;
+
+            lapseGet('Lapse/Items/' + itemId + '/OpenSubtitles' + (wanted ? '?language=' + encodeURIComponent(wanted) : ''))
+                .then(function (answer) {
+                    found = (answer && answer.Candidates) || [];
+
+                    if (answer && answer.Error) {
+                        results.textContent = answer.Error;
+                        return;
+                    }
+
+                    if (found.length === 0) {
+                        results.textContent = 'OpenSubtitles has nothing for this in ' + (wanted || 'that language') + '.';
+                        return;
+                    }
+
+                    results.innerHTML = '<div>Found by ' + escapeHtml(answer.SearchedBy || 'search') + '.</div>' +
+                        found.map(function (c, i) {
+                            var tags = [];
+                            if (c.HashMatch) { tags.push('made for this file'); }
+                            if (c.HearingImpaired) { tags.push('hearing impaired'); }
+                            if (c.ForeignPartsOnly) { tags.push('forced'); }
+                            if (c.Translated) { tags.push('machine translated'); }
+                            if (c.FromTrusted) { tags.push('trusted uploader'); }
+                            tags.push(c.DownloadCount + ' downloads');
+
+                            return '<label class="lapseCandidateRow">' +
+                                '<input type="radio" name="lapseOsPick" value="' + i + '"' + (i === 0 ? ' checked' : '') + ' />' +
+                                '<div><div>' + escapeHtml(c.Language.toUpperCase()) + ' &middot; ' +
+                                escapeHtml(c.Release || c.FileName || 'untitled') + '</div>' +
+                                '<div class="fieldDescription">' + escapeHtml((c.Title ? c.Title + ', ' : '') + tags.join(', ')) + '</div></div>' +
+                                '</label>';
+                        }).join('');
+
+                    overlay.querySelector('#lapseOsSyncRow').style.display = '';
+                    getButton.disabled = false;
+                }).catch(function (err) {
+                    results.textContent = 'Could not search: ' + err.message;
+                });
+        }
+
+        overlay.querySelector('#lapseOsSearch').addEventListener('click', search);
+        overlay.querySelector('#lapseOsCancel').addEventListener('click', function () {
+            overlay.remove();
+        });
+
+        getButton.addEventListener('click', function () {
+            var picked = overlay.querySelector('input[name="lapseOsPick"]:checked');
+            var candidate = picked ? found[parseInt(picked.value, 10)] : null;
+            if (!candidate) {
+                return;
+            }
+
+            var sync = overlay.querySelector('#lapseOsSync').checked;
+            overlay.remove();
+            showLapseToast(sync ? 'Downloading and syncing...' : 'Downloading...');
+
+            lapsePost('Lapse/Items/' + itemId + '/OpenSubtitles/Download', {
+                FileId: candidate.FileId,
+                Language: candidate.Language,
+                FileName: candidate.FileName,
+                HearingImpaired: candidate.HearingImpaired,
+                ForeignPartsOnly: candidate.ForeignPartsOnly,
+                Sync: sync
+            }).then(function (outcome) {
+                var message = (outcome && outcome.Message) || 'Done.';
+
+                if (outcome && outcome.Success && outcome.Sync) {
+                    message += ' ' + describeSyncOutcome(outcome.Sync);
+                }
+
+                showLapseToast(message);
+
+                if (done) {
+                    done(message);
+                }
+            }).catch(function (err) {
+                showLapseToast('Could not download it: ' + err.message);
+            });
+        });
+
+        search();
     }
 
     function appearanceSectionHtml() {

@@ -99,6 +99,21 @@ public class SyncResult
     public bool AlreadyInSync { get; set; }
 
     /// <summary>
+    /// Gets or sets a value indicating whether the result was written, but beside the
+    /// original rather than over it, because the engine wasn't sure of it. The file is
+    /// there to be looked at; until somebody has, the subtitle doesn't count as synced.
+    /// </summary>
+    public bool Unconfirmed { get; set; }
+
+    /// <summary>
+    /// Gets a value indicating whether this run leaves the subtitle synced: something was
+    /// written that the engine stood behind, or the file was already right. A failure, a
+    /// doubtful result left beside the original, and a doubtful result thrown away all
+    /// leave it where it was.
+    /// </summary>
+    public bool CountsAsSynced => Success && (AlreadyInSync || (!Skipped && !Unconfirmed));
+
+    /// <summary>
     /// Gets or sets the subtitle that was read. Recorded so the history can tell a run
     /// that replaced a file from one that added a new one next to it, which is the
     /// difference between undoing by restoring a backup and undoing by deleting.

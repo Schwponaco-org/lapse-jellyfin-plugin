@@ -148,6 +148,12 @@ public class PluginSettings
     public bool AutoTranslateSkipExisting { get; set; } = true;
 
     /// <summary>
+    /// Gets or sets a value indicating whether runs nobody is watching leave already synced
+    /// subtitles alone.
+    /// </summary>
+    public bool SkipSyncedInUnattendedRuns { get; set; } = true;
+
+    /// <summary>
     /// Gets or sets who besides admins may sync, shift, convert and translate.
     /// </summary>
     public SubtitleAccessMode SubtitleAccess { get; set; }

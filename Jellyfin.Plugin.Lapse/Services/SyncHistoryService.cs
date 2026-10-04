@@ -41,7 +41,7 @@ public class SyncHistoryService
     /// <returns>True if a revert would do something.</returns>
     public static bool CanRevert(SyncHistoryEntry entry)
     {
-        if (entry.Reverted || string.IsNullOrEmpty(entry.OutputPath))
+        if (entry.Reverted || entry.Superseded || string.IsNullOrEmpty(entry.OutputPath))
         {
             return false;
         }
@@ -65,6 +65,57 @@ public class SyncHistoryService
         Justification = "The paths are the plugin's own record of files it wrote itself, looked up by an opaque id. Nothing from the request reaches the filesystem.")]
     public string? Revert(Guid id)
     {
+        // The queue adds history and records from its own thread while this runs, and
+        // the configuration can't be written out while a list in it is being changed.
+        lock (Plugin.ConfigurationLock)
+        {
+            return RevertLocked(id);
+        }
+    }
+
+    /// <summary>
+    /// Adds an entry to the history, marks any earlier entry for the same file as
+    /// superseded, and trims the list to its limit. Callers hold
+    /// <see cref="Plugin.ConfigurationLock"/>.
+    /// </summary>
+    /// <param name="config">The configuration to add to.</param>
+    /// <param name="entry">The new entry.</param>
+    public static void Append(Configuration.PluginConfiguration config, SyncHistoryEntry entry)
+    {
+        foreach (var earlier in config.History)
+        {
+            if (earlier.Reverted || earlier.Superseded)
+            {
+                continue;
+            }
+
+            // Two runs that wrote the same file, or backed up to the same .bak, share the
+            // one thing an undo works on. Only the newest of them still has it intact.
+            if (SamePath(earlier.OutputPath, entry.OutputPath) || SamePath(earlier.BackupPath, entry.BackupPath))
+            {
+                earlier.Superseded = true;
+            }
+        }
+
+        config.History.Add(entry);
+
+        if (config.History.Count > Configuration.PluginConfiguration.MaxHistoryEntries)
+        {
+            config.History.RemoveRange(0, config.History.Count - Configuration.PluginConfiguration.MaxHistoryEntries);
+        }
+    }
+
+    private static bool SamePath(string? a, string? b)
+    {
+        return !string.IsNullOrEmpty(a) && string.Equals(a, b, StringComparison.Ordinal);
+    }
+
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Security",
+        "CA3003:Review code for file path injection vulnerabilities",
+        Justification = "The paths are the plugin's own record of files it wrote itself, looked up by an opaque id. Nothing from the request reaches the filesystem.")]
+    private string? RevertLocked(Guid id)
+    {
         var config = Plugin.Instance!.Configuration;
         var entry = config.History.FirstOrDefault(h => h.Id == id);
 
@@ -75,9 +126,9 @@ public class SyncHistoryService
 
         if (!CanRevert(entry))
         {
-            return entry.Reverted
-                ? "That one has already been put back."
-                : "There's nothing left to put back - the backup or the file it wrote has gone.";
+            return entry.Reverted ? "That one has already been put back."
+                : entry.Superseded ? "A later run wrote the same file, so undo that one instead."
+                : "There's nothing left to put back. The backup or the file it wrote has gone.";
         }
 
         var restored = entry.OutputPath;
@@ -116,7 +167,7 @@ public class SyncHistoryService
 
             return entry.WroteNewFile
                 ? $"Deleted {Path.GetFileName(entry.OutputPath)}."
-                : $"Put the original {Path.GetFileName(restored)} back.";
+                : $"Put {Path.GetFileName(restored)} back the way it was before that run.";
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -142,13 +193,15 @@ public class SyncHistoryService
 
     // The item's record still claims that subtitle is synced, which after a revert it
     // isn't. Dropping the claim puts the item back to unsynced in the status list rather
-    // than leaving it looking done when the file on disk says otherwise.
+    // than leaving it looking done when the file on disk says otherwise. The record is
+    // kept against the subtitle that was read, which for a run that wrote a new file
+    // beside it isn't the output, so both are cleared.
     private static void ForgetSyncedSubtitle(SyncHistoryEntry entry)
     {
         var record = Plugin.Instance!.Configuration.MovieRecords
             .FirstOrDefault(r => r.ItemId == entry.ItemId);
 
         record?.SyncedSubtitles.RemoveAll(s =>
-            string.Equals(s.Path, entry.OutputPath, StringComparison.Ordinal));
+            SamePath(s.Path, entry.OutputPath) || SamePath(s.Path, entry.InputPath));
     }
 }

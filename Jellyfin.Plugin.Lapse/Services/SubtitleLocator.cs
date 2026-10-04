@@ -39,8 +39,12 @@ public class SubtitleLocator
     // The dashboard's item list asks about every item in every enabled library, and a TV
     // library puts a whole season in one folder, so without this the same directory gets
     // enumerated once per episode. Short lived on purpose: long enough to cover one page
-    // load, short enough that a subtitle dropped in a folder still shows up promptly.
-    private readonly ConcurrentDictionary<string, (string[] Files, DateTime ReadUtc)> _folderCache = new(StringComparer.OrdinalIgnoreCase);
+    // load, short enough that a subtitle dropped in a folder still shows up promptly. The
+    // folder's own write time is kept too: adding, removing or renaming a file changes it,
+    // so a file LAPSE has just written shows up on the very next request instead of up to
+    // fifteen seconds later - which used to leave "Back to normal" with nothing to undo
+    // right after a readable copy was made.
+    private readonly ConcurrentDictionary<string, (string[] Files, DateTime ReadUtc, DateTime FolderWriteUtc)> _folderCache = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// Gets every external subtitle file for the given item.
@@ -277,8 +281,11 @@ public class SubtitleLocator
     private string[] ReadFolder(string folder)
     {
         var now = DateTime.UtcNow;
+        var folderWriteUtc = ReadFolderWriteTime(folder);
 
-        if (_folderCache.TryGetValue(folder, out var cached) && now - cached.ReadUtc < FolderCacheFor)
+        if (_folderCache.TryGetValue(folder, out var cached)
+            && now - cached.ReadUtc < FolderCacheFor
+            && cached.FolderWriteUtc == folderWriteUtc)
         {
             return cached.Files;
         }
@@ -293,9 +300,25 @@ public class SubtitleLocator
             files = Array.Empty<string>();
         }
 
-        _folderCache[folder] = (files, now);
+        _folderCache[folder] = (files, now, folderWriteUtc);
         Prune(now);
         return files;
+    }
+
+    [SuppressMessage(
+        "Security",
+        "CA3003:Review code for file path injection vulnerabilities",
+        Justification = "The folder is derived from Jellyfin's own resolved library path for an item.")]
+    private static DateTime ReadFolderWriteTime(string folder)
+    {
+        try
+        {
+            return Directory.GetLastWriteTimeUtc(folder);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return DateTime.MinValue;
+        }
     }
 
     // The cache is meant to live for one dashboard page load, but nothing ever came back

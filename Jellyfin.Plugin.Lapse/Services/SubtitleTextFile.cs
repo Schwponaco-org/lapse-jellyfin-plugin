@@ -150,7 +150,16 @@ public class SubtitleTextFile
             stem = stem[..lastDot];
         }
 
-        return Path.Combine(directory, $"{stem}.{targetLanguage}.translated{extension}");
+        // The language is typed by a person and ends up in a file name, so only the
+        // characters a language tag is made of get that far. "pt-BR" and "zh_Hant" come
+        // through; a slash can't take the file somewhere else.
+        var tag = new string(targetLanguage.Trim().Where(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_').ToArray());
+        if (tag.Length == 0)
+        {
+            tag = "xx";
+        }
+
+        return Path.Combine(directory, $"{stem}.{tag}.translated{extension}");
     }
 
     /// <summary>

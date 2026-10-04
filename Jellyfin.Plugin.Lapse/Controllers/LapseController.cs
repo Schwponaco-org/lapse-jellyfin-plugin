@@ -272,11 +272,11 @@ public class LapseController : ControllerBase
 
             // How many of the subtitles this item has right now have actually been
             // synced. Anything the record claims about a file that is no longer there
-            // doesn't count, so a replaced subtitle correctly drops back to unsynced.
+            // doesn't count, and neither does a file written since the sync - a subtitle
+            // Bazarr or a person replaced under the same name is a new subtitle.
             var syncedCount = record is null
                 ? 0
-                : subtitles.Count(s => record.SyncedSubtitles
-                    .Any(r => string.Equals(r.Path, s.Path, StringComparison.Ordinal)));
+                : subtitles.Count(s => SyncQueueManager.IsStillSynced(record, s.Path));
 
             result.Add(new ItemStatusEntry
             {
@@ -346,6 +346,7 @@ public class LapseController : ControllerBase
                 Detail = entry.Detail,
                 OutputPath = entry.OutputPath,
                 Reverted = entry.Reverted,
+                Superseded = entry.Superseded,
                 CanRevert = SyncHistoryService.CanRevert(entry)
             });
         }
@@ -492,30 +493,38 @@ public class LapseController : ControllerBase
         var subtitles = _subtitleLocator.GetExternalSubtitles(item);
         string? fetchError = null;
 
-        // Nothing to line up. If subtitle fetching is switched on, go and get one first
-        // rather than turning the sync away.
-        if (subtitles.Count == 0 && Plugin.Instance!.Configuration.OpenSubtitlesEnabled)
+        // Nothing that can be lined up. If subtitle fetching is switched on, go and get one
+        // first rather than turning the sync away. A film whose only subtitles are PGS
+        // tracks inside the video counts as having none: there's nothing in those to sync.
+        if (!subtitles.Exists(s => s.Supported) && Plugin.Instance!.Configuration.OpenSubtitlesEnabled)
         {
-            var fetched = await _openSubtitles.TryFetchAsync(item).ConfigureAwait(false);
+            var fetched = await _openSubtitles.TryFetchAsync(item, HttpContext.RequestAborted).ConfigureAwait(false);
 
             if (fetched.Path is { } fetchedPath)
             {
                 subtitles = _subtitleLocator.GetExternalSubtitles(item);
 
                 // Jellyfin may not have rescanned the folder yet, so the locator can still
-                // come back empty even though the file is right there. Use it directly.
-                if (subtitles.Count == 0)
+                // come back without it even though the file is right there. Use it directly.
+                if (!subtitles.Exists(s => string.Equals(s.Path, fetchedPath, StringComparison.Ordinal)))
                 {
-                    subtitles = new List<SubtitleOption>
+                    subtitles.Add(new SubtitleOption
                     {
-                        new()
-                        {
-                            Path = fetchedPath,
-                            DisplayName = Path.GetFileName(fetchedPath),
-                            Format = SubtitleFormats.GetName(fetchedPath)
-                        }
-                    };
+                        Path = fetchedPath,
+                        DisplayName = Path.GetFileName(fetchedPath),
+                        Format = SubtitleFormats.GetName(fetchedPath),
+                        Supported = true,
+                        TextBased = SubtitleFormats.IsTextBased(fetchedPath)
+                    });
                 }
+
+                // A sync with nothing picked means the one that was just fetched.
+                if (string.IsNullOrWhiteSpace(request.SubtitlePath))
+                {
+                    request.SubtitlePath = fetchedPath;
+                }
+
+                _multiEngine.RequestRefreshFor(item.Id);
             }
             else
             {
@@ -585,15 +594,16 @@ public class LapseController : ControllerBase
             return BadRequest($"{engine.Descriptor.DisplayName} doesn't support {mode} alignment");
         }
 
+        string? outputFormat = null;
         if (request.OutputFormat is not null
-            && !SubtitleFormats.TryNormalizeOutputFormat(request.OutputFormat, out _))
+            && !SubtitleFormats.TryNormalizeOutputFormat(request.OutputFormat, out outputFormat))
         {
             return BadRequest("The output format has to be srt, vtt, ass or ssa");
         }
 
         var penalty = EngineRunner.ResolvePenalty(engine, request.Penalty);
         var result = await _runner
-            .RunAsync(engine, item.Path, subtitlePath, mode, penalty, request.OutputMode, outputFormat: request.OutputFormat)
+            .RunAsync(engine, item.Path, subtitlePath, mode, penalty, request.OutputMode, outputFormat: outputFormat)
             .ConfigureAwait(false);
 
         // LAPSE wasn't sure, and multi engine sync is on: ask the other engines the same
@@ -610,16 +620,7 @@ public class LapseController : ControllerBase
             }
         }
 
-        SyncQueueManager.SaveRecord(
-            request.ItemId,
-            ResolveRecordStatus(result),
-            result.Success && result.Skipped ? SyncQueueManager.DescribeSkip(result) : result.Error,
-            result,
-
-            // Nothing was written for an already-in-sync subtitle, but the file on disk is
-            // correct, so it counts towards the item being synced just the same.
-            result.Success && (!result.Skipped || result.AlreadyInSync) ? new[] { subtitlePath } : null);
-
+        SaveSyncRecord(request.ItemId, result, subtitlePath);
         return result;
     }
 
@@ -632,10 +633,37 @@ public class LapseController : ControllerBase
             return MovieSyncStatus.Failed;
         }
 
-        // A subtitle that was left alone because it was already right is synced. Only the
-        // low-confidence kind of skip goes back to pending, since that one leaves a file
-        // nobody has checked.
-        return result.Skipped && !result.AlreadyInSync ? MovieSyncStatus.Pending : MovieSyncStatus.Synced;
+        // A subtitle that was left alone because it was already right is synced. The
+        // doubtful kinds - thrown away, or written beside the original for someone to
+        // check - go back to pending, since both leave a subtitle nobody has confirmed.
+        return result.CountsAsSynced ? MovieSyncStatus.Synced : MovieSyncStatus.Pending;
+    }
+
+    // One place for what every single-subtitle sync writes down afterwards, so the Sync
+    // button, Convert with sync after, and the pipeline can't disagree about what counts.
+    private static void SaveSyncRecord(Guid itemId, SyncResult result, string subtitlePath)
+    {
+        SyncQueueManager.SaveRecord(
+            itemId,
+            ResolveRecordStatus(result),
+            !result.Success ? result.Error : result.CountsAsSynced && !result.AlreadyInSync ? null : SyncQueueManager.DescribeSkip(result),
+            result,
+            result.CountsAsSynced ? SyncedPaths(result, subtitlePath) : null);
+    }
+
+    // The subtitle that was synced, and the new file the sync wrote beside it when it
+    // wrote one. That file is synced by definition; leaving it out made an item with one
+    // subtitle synced to a new file read as half done.
+    private static List<string> SyncedPaths(SyncResult result, string subtitlePath)
+    {
+        var paths = new List<string> { subtitlePath };
+
+        if (!string.IsNullOrEmpty(result.OutputPath) && !string.Equals(result.OutputPath, subtitlePath, StringComparison.Ordinal))
+        {
+            paths.Add(result.OutputPath);
+        }
+
+        return paths;
     }
 
     /// <summary>
@@ -724,6 +752,9 @@ public class LapseController : ControllerBase
         var penalty = EngineRunner.ResolvePenalty(engine, request.Penalty);
         var result = new MultiSubtitleSyncResult { ReferencePath = referencePath };
 
+        // Several runs against one reference in a row is what batch mode is for.
+        using var batch = _runner.CreateBatchSession();
+
         // Sequential on purpose: these engines are CPU heavy and running a handful of them
         // at once on a media server tends to make everything else stutter.
         foreach (var subtitle in others)
@@ -744,11 +775,11 @@ public class LapseController : ControllerBase
             else
             {
                 syncResult = await _runner
-                    .RunAsync(engine, referencePath, subtitlePath, mode, penalty, request.OutputMode, cancellationToken: cancellationToken)
+                    .RunAsync(engine, referencePath, subtitlePath, mode, penalty, request.OutputMode, batch: batch, cancellationToken: cancellationToken)
                     .ConfigureAwait(false);
             }
 
-            if (syncResult.Success)
+            if (syncResult.CountsAsSynced)
             {
                 result.SucceededCount++;
             }
@@ -762,17 +793,30 @@ public class LapseController : ControllerBase
         }
 
         // The reference itself is correct by definition - that's why it was picked - so it
-        // counts as synced alongside everything that was lined up against it.
+        // counts as synced alongside everything that was lined up against it. A track the
+        // engine wasn't sure about doesn't, whether its answer was thrown away or left
+        // beside it to be checked.
         var writtenPaths = result.Results
-            .Where(o => o.Result is { Success: true, Skipped: false } or { Success: true, AlreadyInSync: true })
-            .Select(o => o.Path)
+            .Where(o => o.Result?.CountsAsSynced == true)
+            .SelectMany(o => SyncedPaths(o.Result!, o.Path))
             .Append(referencePath)
             .ToList();
 
+        var failed = result.Results.Count(o => o.Result?.Success != true);
+        var doubted = result.Results.Count - failed - result.SucceededCount;
+
+        var status = failed > 0 ? MovieSyncStatus.Failed
+            : doubted > 0 ? MovieSyncStatus.Pending
+            : MovieSyncStatus.Synced;
+
+        var detail = failed > 0 ? $"{failed} of {result.Results.Count} subtitles failed to sync against the reference"
+            : doubted > 0 ? $"LAPSE wasn't sure about {doubted} of {result.Results.Count} subtitles, so those weren't counted as synced"
+            : null;
+
         SyncQueueManager.SaveRecord(
             request.ItemId,
-            result.SucceededCount == others.Count ? MovieSyncStatus.Synced : MovieSyncStatus.Failed,
-            result.SucceededCount == others.Count ? null : "Some subtitles failed to sync against the reference",
+            status,
+            detail,
             result.Results.LastOrDefault()?.Result,
             writtenPaths);
 
@@ -814,6 +858,13 @@ public class LapseController : ControllerBase
     [HttpGet("Lapse/Queue")]
     public ActionResult<QueueSnapshot> GetQueue()
     {
+        // The list names items from every library, so it goes to the people who can run
+        // jobs, not to everyone signed in.
+        if (CheckSubtitleAccess() is { } denied)
+        {
+            return denied;
+        }
+
         return _queueManager.GetSnapshot();
     }
 
@@ -922,7 +973,13 @@ public class LapseController : ControllerBase
     [HttpGet("Lapse/Libraries/{libraryId}/Series")]
     public ActionResult<List<FolderEntry>> GetSeriesInLibrary([FromRoute] Guid libraryId)
     {
+        if (CheckSubtitleAccess() is { } denied)
+        {
+            return denied;
+        }
+
         return _seriesSyncService.GetSeries(libraryId)
+            .Where(series => GetVisibleItem(series.Id) is not null)
             .Select(series => new FolderEntry { ItemId = series.Id, Name = series.Name ?? "Unknown" })
             .ToList();
     }
@@ -988,22 +1045,25 @@ public class LapseController : ControllerBase
             return BadRequest("A request body is required");
         }
 
-        var config = Plugin.Instance!.Configuration;
-
-        if (request.Skip)
+        lock (Plugin.ConfigurationLock)
         {
-            if (!config.SkippedItemIds.Contains(request.ItemId))
+            var config = Plugin.Instance!.Configuration;
+
+            if (request.Skip)
             {
-                config.SkippedItemIds.Add(request.ItemId);
+                if (!config.SkippedItemIds.Contains(request.ItemId))
+                {
+                    config.SkippedItemIds.Add(request.ItemId);
+                }
             }
-        }
-        else
-        {
-            config.SkippedItemIds.Remove(request.ItemId);
-        }
+            else
+            {
+                config.SkippedItemIds.Remove(request.ItemId);
+            }
 
-        Plugin.Instance!.SaveConfiguration();
-        return Ok();
+            Plugin.Instance!.SaveConfiguration();
+            return Ok();
+        }
     }
 
     // -------------------------------------------------------------------- libraries
@@ -1036,53 +1096,56 @@ public class LapseController : ControllerBase
             return BadRequest("No libraries were sent, so there was nothing to save");
         }
 
-        foreach (var entry in request.Libraries)
+        lock (Plugin.ConfigurationLock)
         {
-            var library = config.GetLibraryConfig(entry.ItemId);
-            var wasScheduled = library.ScheduleEnabled;
-            var oldFrequency = library.ScheduleFrequency;
-            var oldDay = library.ScheduleDay;
-            var oldTime = library.ScheduleTime;
-
-            library.Enabled = entry.Enabled;
-
-            // A disabled library can't be doing new-item or scheduled sync - those boxes
-            // are greyed out on the form for exactly that reason - so a disabled library
-            // is stored with both off rather than trusting whatever the form last had
-            // ticked before it was turned off. Otherwise turning the library back on
-            // later would silently bring back a setting nobody re-chose.
-            library.AutoSyncEnabled = entry.Enabled && entry.AutoSyncEnabled;
-
-            // New items and a schedule are one choice, not two: a library either picks
-            // things up as they arrive or sweeps the whole thing on a timer. The form
-            // only ever lets one be ticked, and this is what makes that true of the
-            // stored config as well rather than only of the page.
-            library.ScheduleEnabled = entry.Enabled && entry.ScheduleEnabled && !entry.AutoSyncEnabled;
-            library.ScheduleFrequency = Enum.TryParse<ScheduleFrequency>(entry.ScheduleFrequency, out var frequency)
-                ? frequency
-                : ScheduleFrequency.Daily;
-            library.ScheduleDay = Enum.TryParse<DayOfWeek>(entry.ScheduleDay, out var day) ? day : null;
-            library.ScheduleTime = string.IsNullOrWhiteSpace(entry.ScheduleTime) ? "03:00" : entry.ScheduleTime;
-
-            if (names.TryGetValue(entry.ItemId, out var name))
+            foreach (var entry in request.Libraries)
             {
-                library.Name = name;
+                var library = config.GetLibraryConfig(entry.ItemId);
+                var wasScheduled = library.ScheduleEnabled;
+                var oldFrequency = library.ScheduleFrequency;
+                var oldDay = library.ScheduleDay;
+                var oldTime = library.ScheduleTime;
+
+                library.Enabled = entry.Enabled;
+
+                // A disabled library can't be doing new-item or scheduled sync - those boxes
+                // are greyed out on the form for exactly that reason - so a disabled library
+                // is stored with both off rather than trusting whatever the form last had
+                // ticked before it was turned off. Otherwise turning the library back on
+                // later would silently bring back a setting nobody re-chose.
+                library.AutoSyncEnabled = entry.Enabled && entry.AutoSyncEnabled;
+
+                // New items and a schedule are one choice, not two: a library either picks
+                // things up as they arrive or sweeps the whole thing on a timer. The form
+                // only ever lets one be ticked, and this is what makes that true of the
+                // stored config as well rather than only of the page.
+                library.ScheduleEnabled = entry.Enabled && entry.ScheduleEnabled && !entry.AutoSyncEnabled;
+                library.ScheduleFrequency = Enum.TryParse<ScheduleFrequency>(entry.ScheduleFrequency, out var frequency)
+                    ? frequency
+                    : ScheduleFrequency.Daily;
+                library.ScheduleDay = Enum.TryParse<DayOfWeek>(entry.ScheduleDay, out var day) ? day : null;
+                library.ScheduleTime = string.IsNullOrWhiteSpace(entry.ScheduleTime) ? "03:00" : entry.ScheduleTime;
+
+                if (names.TryGetValue(entry.ItemId, out var name))
+                {
+                    library.Name = name;
+                }
+
+                // A schedule that was just turned on, or retimed, should be free to fire at
+                // its next slot rather than being held back by when the old one last ran.
+                var changed = library.ScheduleFrequency != oldFrequency
+                    || library.ScheduleDay != oldDay
+                    || !string.Equals(library.ScheduleTime, oldTime, StringComparison.Ordinal);
+
+                if ((!wasScheduled && library.ScheduleEnabled) || changed)
+                {
+                    library.LastScheduledRunUtc = null;
+                }
             }
 
-            // A schedule that was just turned on, or retimed, should be free to fire at
-            // its next slot rather than being held back by when the old one last ran.
-            var changed = library.ScheduleFrequency != oldFrequency
-                || library.ScheduleDay != oldDay
-                || !string.Equals(library.ScheduleTime, oldTime, StringComparison.Ordinal);
-
-            if ((!wasScheduled && library.ScheduleEnabled) || changed)
-            {
-                library.LastScheduledRunUtc = null;
-            }
+            Plugin.Instance!.SaveConfiguration();
+            return Ok();
         }
-
-        Plugin.Instance!.SaveConfiguration();
-        return Ok();
     }
 
     /// <summary>
@@ -1459,21 +1522,24 @@ public class LapseController : ControllerBase
             return NotFound($"No engine called '{engineId}'");
         }
 
-        var settings = Plugin.Instance!.Configuration.GetEngineSettings(engine.Descriptor.Id);
-        var existing = settings.Parameters.FirstOrDefault(
-            p => string.Equals(p.Key, request.Key, StringComparison.OrdinalIgnoreCase));
-
-        if (existing is not null)
+        lock (Plugin.ConfigurationLock)
         {
-            existing.Value = request.Value;
-        }
-        else
-        {
-            settings.Parameters.Add(new EngineParameterSetting { Key = request.Key, Value = request.Value });
-        }
+            var settings = Plugin.Instance!.Configuration.GetEngineSettings(engine.Descriptor.Id);
+            var existing = settings.Parameters.FirstOrDefault(
+                p => string.Equals(p.Key, request.Key, StringComparison.OrdinalIgnoreCase));
 
-        Plugin.Instance!.SaveConfiguration();
-        return Ok();
+            if (existing is not null)
+            {
+                existing.Value = request.Value;
+            }
+            else
+            {
+                settings.Parameters.Add(new EngineParameterSetting { Key = request.Key, Value = request.Value });
+            }
+
+            Plugin.Instance!.SaveConfiguration();
+            return Ok();
+        }
     }
 
     /// <summary>
@@ -1532,6 +1598,7 @@ public class LapseController : ControllerBase
             AutoTranslateEnabled = config.AutoTranslateEnabled,
             AutoTranslateLanguage = config.AutoTranslateLanguage,
             AutoTranslateSkipExisting = config.AutoTranslateSkipExisting,
+            SkipSyncedInUnattendedRuns = config.SkipSyncedInUnattendedRuns,
             SubtitleAccess = config.SubtitleAccess,
             SubtitleAccessUserIds = new List<string>(config.SubtitleAccessUserIds),
             OpenSubtitlesEnabled = config.OpenSubtitlesEnabled,
@@ -1607,6 +1674,27 @@ public class LapseController : ControllerBase
     }
 
     /// <summary>
+    /// Says what the caller may do, so the web client only shows the menu entries that
+    /// will work for them. Everything is still checked again on the way in; this only
+    /// saves a family member a menu full of entries that answer "admins only".
+    /// </summary>
+    /// <returns>What the caller can do.</returns>
+    [HttpGet("Lapse/Access")]
+    public ActionResult<object> GetAccess()
+    {
+        var config = Plugin.Instance!.Configuration;
+        var canEdit = CheckSubtitleAccess() is null;
+
+        return new
+        {
+            CanEditSubtitles = canEdit,
+            IsAdministrator = User.IsInRole(AdministratorRole),
+            OpenSubtitlesEnabled = canEdit && config.OpenSubtitlesEnabled,
+            OpenSubtitlesLanguage = canEdit ? config.OpenSubtitlesLanguage : null
+        };
+    }
+
+    /// <summary>
     /// Gets the subtitle appearance settings that apply to the caller: their own if they
     /// have set any, and the server-wide ones otherwise. Separate from the rest of the
     /// settings because the injected script needs these on every page load for any signed
@@ -1644,34 +1732,37 @@ public class LapseController : ControllerBase
             return Unauthorized();
         }
 
-        var config = Plugin.Instance!.Configuration;
-        var id = user.Id.ToString("N", CultureInfo.InvariantCulture);
-        var existing = config.UserSubtitleAppearances.Find(a => string.Equals(a.UserId, id, StringComparison.OrdinalIgnoreCase));
-
-        if (existing is null)
+        lock (Plugin.ConfigurationLock)
         {
-            existing = new UserSubtitleAppearance { UserId = id };
-            config.UserSubtitleAppearances.Add(existing);
+            var config = Plugin.Instance!.Configuration;
+            var id = user.Id.ToString("N", CultureInfo.InvariantCulture);
+            var existing = config.UserSubtitleAppearances.Find(a => string.Equals(a.UserId, id, StringComparison.OrdinalIgnoreCase));
+
+            if (existing is null)
+            {
+                existing = new UserSubtitleAppearance { UserId = id };
+                config.UserSubtitleAppearances.Add(existing);
+            }
+
+            existing.Appearance = new SubtitleAppearance
+            {
+                Enabled = appearance.Enabled,
+                FontSizePx = Math.Clamp(appearance.FontSizePx, 8, 200),
+                TextColor = NormalizeColor(appearance.TextColor, SubtitleAppearance.DefaultTextColor),
+                BackgroundColor = NormalizeColor(appearance.BackgroundColor, SubtitleAppearance.DefaultBackgroundColor),
+                BackgroundEnabled = appearance.BackgroundEnabled,
+                FontFamily = Blank(appearance.FontFamily),
+                LetterSpacingPx = Math.Clamp(appearance.LetterSpacingPx, 0, 20),
+
+                // Past about 85 the text would be off the top of the picture, and there is no
+                // way back from that without finding this setting again on a screen that is
+                // now showing subtitles nobody can read.
+                VerticalPositionPercent = Math.Clamp(appearance.VerticalPositionPercent, 0, 85)
+            };
+
+            Plugin.Instance!.SaveConfiguration();
+            return existing.Appearance;
         }
-
-        existing.Appearance = new SubtitleAppearance
-        {
-            Enabled = appearance.Enabled,
-            FontSizePx = Math.Clamp(appearance.FontSizePx, 8, 200),
-            TextColor = NormalizeColor(appearance.TextColor, SubtitleAppearance.DefaultTextColor),
-            BackgroundColor = NormalizeColor(appearance.BackgroundColor, SubtitleAppearance.DefaultBackgroundColor),
-            BackgroundEnabled = appearance.BackgroundEnabled,
-            FontFamily = Blank(appearance.FontFamily),
-            LetterSpacingPx = Math.Clamp(appearance.LetterSpacingPx, 0, 20),
-
-            // Past about 85 the text would be off the top of the picture, and there is no
-            // way back from that without finding this setting again on a screen that is
-            // now showing subtitles nobody can read.
-            VerticalPositionPercent = Math.Clamp(appearance.VerticalPositionPercent, 0, 85)
-        };
-
-        Plugin.Instance!.SaveConfiguration();
-        return existing.Appearance;
     }
 
     /// <summary>
@@ -1688,15 +1779,18 @@ public class LapseController : ControllerBase
             return Unauthorized();
         }
 
-        var config = Plugin.Instance!.Configuration;
-        var id = user.Id.ToString("N", CultureInfo.InvariantCulture);
-
-        if (config.UserSubtitleAppearances.RemoveAll(a => string.Equals(a.UserId, id, StringComparison.OrdinalIgnoreCase)) > 0)
+        lock (Plugin.ConfigurationLock)
         {
-            Plugin.Instance!.SaveConfiguration();
-        }
+            var config = Plugin.Instance!.Configuration;
+            var id = user.Id.ToString("N", CultureInfo.InvariantCulture);
 
-        return config.SubtitleAppearance;
+            if (config.UserSubtitleAppearances.RemoveAll(a => string.Equals(a.UserId, id, StringComparison.OrdinalIgnoreCase)) > 0)
+            {
+                Plugin.Instance!.SaveConfiguration();
+            }
+
+            return config.SubtitleAppearance;
+        }
     }
 
     private UserSubtitleAppearance? FindUserAppearance()
@@ -1772,48 +1866,51 @@ public class LapseController : ControllerBase
             return BadRequest("An ignore rule needs either an item or a path");
         }
 
-        var config = Plugin.Instance!.Configuration;
-
-        if (rule.ItemId.HasValue)
+        lock (Plugin.ConfigurationLock)
         {
-            var item = GetVisibleItem(rule.ItemId.Value);
-            if (item is null)
+            var config = Plugin.Instance!.Configuration;
+
+            if (rule.ItemId.HasValue)
             {
-                return NotFound("Item not found");
+                var item = GetVisibleItem(rule.ItemId.Value);
+                if (item is null)
+                {
+                    return NotFound("Item not found");
+                }
+
+                if (config.IgnoreRules.Any(r => r.ItemId == rule.ItemId))
+                {
+                    return Ok();
+                }
+
+                config.IgnoreRules.Add(new IgnoreRule
+                {
+                    ItemId = item.Id,
+                    DisplayName = SyncQueueManager.DescribeItem(item),
+                    Kind = item.GetBaseItemKind().ToString(),
+                    Path = null
+                });
+            }
+            else
+            {
+                var path = rule.Path!.Trim();
+
+                if (config.IgnoreRules.Any(r => string.Equals(r.Path, path, StringComparison.OrdinalIgnoreCase)))
+                {
+                    return Ok();
+                }
+
+                config.IgnoreRules.Add(new IgnoreRule
+                {
+                    Path = path,
+                    DisplayName = path,
+                    Kind = "Path"
+                });
             }
 
-            if (config.IgnoreRules.Any(r => r.ItemId == rule.ItemId))
-            {
-                return Ok();
-            }
-
-            config.IgnoreRules.Add(new IgnoreRule
-            {
-                ItemId = item.Id,
-                DisplayName = SyncQueueManager.DescribeItem(item),
-                Kind = item.GetBaseItemKind().ToString(),
-                Path = null
-            });
+            Plugin.Instance!.SaveConfiguration();
+            return Ok();
         }
-        else
-        {
-            var path = rule.Path!.Trim();
-
-            if (config.IgnoreRules.Any(r => string.Equals(r.Path, path, StringComparison.OrdinalIgnoreCase)))
-            {
-                return Ok();
-            }
-
-            config.IgnoreRules.Add(new IgnoreRule
-            {
-                Path = path,
-                DisplayName = path,
-                Kind = "Path"
-            });
-        }
-
-        Plugin.Instance!.SaveConfiguration();
-        return Ok();
     }
 
     /// <summary>
@@ -1831,21 +1928,24 @@ public class LapseController : ControllerBase
             return BadRequest("Say which item or path to take off the list");
         }
 
-        var config = Plugin.Instance!.Configuration;
-
-        var removed = config.IgnoreRules.RemoveAll(r =>
-            (itemId.HasValue && r.ItemId == itemId)
-            || (!string.IsNullOrWhiteSpace(path) && string.Equals(r.Path, path, StringComparison.OrdinalIgnoreCase)));
-
-        if (removed > 0)
+        lock (Plugin.ConfigurationLock)
         {
-            Plugin.Instance!.SaveConfiguration();
-        }
+            var config = Plugin.Instance!.Configuration;
 
-        // An item can be ignored because a rule on its series or its folder covers it, and
-        // there is nothing on its own id to take off. Saying so beats a button that looks
-        // like it did nothing.
-        return new IgnoreRemovalResult { Removed = removed };
+            var removed = config.IgnoreRules.RemoveAll(r =>
+                (itemId.HasValue && r.ItemId == itemId)
+                || (!string.IsNullOrWhiteSpace(path) && string.Equals(r.Path, path, StringComparison.OrdinalIgnoreCase)));
+
+            if (removed > 0)
+            {
+                Plugin.Instance!.SaveConfiguration();
+            }
+
+            // An item can be ignored because a rule on its series or its folder covers it, and
+            // there is nothing on its own id to take off. Saying so beats a button that looks
+            // like it did nothing.
+            return new IgnoreRemovalResult { Removed = removed };
+        }
     }
 
     // --------------------------------------------------------- radarr / sonarr webhook
@@ -1937,156 +2037,160 @@ public class LapseController : ControllerBase
     [Authorize(Policy = Policies.RequiresElevation)]
     public ActionResult SaveSettings([FromBody] PluginSettings settings)
     {
-        var config = Plugin.Instance!.Configuration;
-
-        config.OutputMode = settings.OutputMode;
-        config.SidecarSuffix = string.IsNullOrWhiteSpace(settings.SidecarSuffix) ? ".shifted" : settings.SidecarSuffix.Trim();
-        config.LowConfidenceAction = settings.LowConfidenceAction;
-        config.SkipAlreadyInSync = settings.SkipAlreadyInSync;
-
-        // A negative tolerance would mean nothing is ever close enough, and anything past
-        // a few seconds stops being "already fine" and starts being a sync nobody did.
-        config.AlreadyInSyncToleranceMs = Math.Clamp(settings.AlreadyInSyncToleranceMs, 0, 5000);
-
-        // The engine rejects anything at or below zero, and a runaway value would just mean
-        // nothing is ever confident enough to write.
-        config.ConfidenceSigma = Math.Clamp(settings.ConfidenceSigma, 0.5, 30);
-
-        config.SubToSubPlacement = settings.SubToSubPlacement;
-        config.SubToSubCustomFolder = Blank(settings.SubToSubCustomFolder);
-        config.ConversionFormat = SubtitleFormats.TryNormalizeOutputFormat(settings.ConversionFormat, out var conversionFormat)
-            ? conversionFormat
-            : "srt";
-        config.ConversionReplaceOriginal = settings.ConversionReplaceOriginal;
-        config.ConversionSyncAfter = settings.ConversionSyncAfter;
-        config.ConvertBeforeSync = settings.ConvertBeforeSync;
-        config.AutomationAction = settings.AutomationAction;
-        config.AutoTranslateEnabled = settings.AutoTranslateEnabled;
-        config.AutoTranslateLanguage = Blank(settings.AutoTranslateLanguage);
-        config.AutoTranslateSkipExisting = settings.AutoTranslateSkipExisting;
-
-        // Translating into nothing would run the whole library through a provider and
-        // write files named after an empty language tag, so it stays off until asked for.
-        if (string.IsNullOrEmpty(config.AutoTranslateLanguage))
+        lock (Plugin.ConfigurationLock)
         {
-            config.AutoTranslateEnabled = false;
-        }
+            var config = Plugin.Instance!.Configuration;
 
-        config.SubtitleAccess = settings.SubtitleAccess;
+            config.OutputMode = settings.OutputMode;
+            config.SidecarSuffix = string.IsNullOrWhiteSpace(settings.SidecarSuffix) ? ".shifted" : settings.SidecarSuffix.Trim();
+            config.LowConfidenceAction = settings.LowConfidenceAction;
+            config.SkipAlreadyInSync = settings.SkipAlreadyInSync;
 
-        // Keep only ids that are still real users, so deleting a user doesn't leave a
-        // stale grant sitting in the config waiting for a recycled id.
-        config.SubtitleAccessUserIds = settings.SubtitleAccessUserIds
-            .Where(id => Guid.TryParse(id, out var parsed) && _userManager.GetUserById(parsed) is not null)
-            .Select(id => Guid.Parse(id).ToString("N", CultureInfo.InvariantCulture))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-        config.OpenSubtitlesEnabled = settings.OpenSubtitlesEnabled;
-        config.OpenSubtitlesApiKey = Blank(settings.OpenSubtitlesApiKey);
-        config.OpenSubtitlesUsername = Blank(settings.OpenSubtitlesUsername);
-        config.OpenSubtitlesPassword = Blank(settings.OpenSubtitlesPassword);
-        config.OpenSubtitlesLanguage = Blank(settings.OpenSubtitlesLanguage) ?? "en";
-        config.MultiEngineEnabled = settings.MultiEngineEnabled;
-        config.MultiEngineUseAlass = settings.MultiEngineUseAlass;
-        config.MultiEngineUseFfsubsync = settings.MultiEngineUseFfsubsync;
-        config.MultiEngineTrigger = settings.MultiEngineTrigger;
-        config.MultiEngineCandidateFormat = settings.MultiEngineCandidateFormat;
-        config.MultiEngineInBulk = settings.MultiEngineInBulk;
-        config.ArrWebhookEnabled = settings.ArrWebhookEnabled;
+            // A negative tolerance would mean nothing is ever close enough, and anything past
+            // a few seconds stops being "already fine" and starts being a sync nobody did.
+            config.AlreadyInSyncToleranceMs = Math.Clamp(settings.AlreadyInSyncToleranceMs, 0, 5000);
 
-        // Only ids that are still libraries, so a deleted library doesn't linger in the
-        // list and a stale form can't smuggle arbitrary ids in.
-        var libraryIds = _libraryService.GetLibraryIdSet();
-        config.ExtractEmbeddedEnabled = settings.ExtractEmbeddedEnabled;
-        config.ExtractLibraryIds = (settings.ExtractLibraryIds ?? new List<string>())
-            .Select(id => Guid.TryParse(id, out var parsed) ? parsed : Guid.Empty)
-            .Where(libraryIds.Contains)
-            .Distinct()
-            .ToList();
-        config.ExtractLanguages = Blank(settings.ExtractLanguages);
-        config.ExtractTrackFilter = Enum.IsDefined(settings.ExtractTrackFilter) ? settings.ExtractTrackFilter : ExtractTrackFilter.All;
-        config.ExtractSkipExisting = settings.ExtractSkipExisting;
-        config.ExtractPictureSubtitles = settings.ExtractPictureSubtitles;
-        config.ExtractPathFilter = Blank(settings.ExtractPathFilter);
-        config.AutoUpdateEngines = settings.AutoUpdateEngines;
-        config.CountEmbeddedSubtitlesInStatus = settings.CountEmbeddedSubtitlesInStatus;
-        config.GoogleTranslateApiKey = Blank(settings.GoogleTranslateApiKey);
-        config.DeepLApiKey = Blank(settings.DeepLApiKey);
-        config.LingarrBaseUrl = Blank(settings.LingarrBaseUrl);
-        config.LingarrApiKey = Blank(settings.LingarrApiKey);
-        config.LibreTranslateBaseUrl = Blank(settings.LibreTranslateBaseUrl);
-        config.LibreTranslateApiKey = Blank(settings.LibreTranslateApiKey);
-        config.DefaultTranslationProvider = settings.DefaultTranslationProvider;
-        config.TranslationConfidenceThreshold = Math.Clamp(settings.TranslationConfidenceThreshold, 0, 100);
-        config.TranslationIncludeMetadataHeader = settings.TranslationIncludeMetadataHeader;
-        config.TranslationKeepLowConfidenceOriginal = settings.TranslationKeepLowConfidenceOriginal;
-        config.TranslationDefaultTargetLanguage = Blank(settings.TranslationDefaultTargetLanguage);
-        config.TranslationDefaultSourceLanguage = Blank(settings.TranslationDefaultSourceLanguage);
+            // The engine rejects anything at or below zero, and a runaway value would just mean
+            // nothing is ever confident enough to write.
+            config.ConfidenceSigma = Math.Clamp(settings.ConfidenceSigma, 0.5, 30);
 
-        config.SubtitleFontName = string.IsNullOrWhiteSpace(settings.SubtitleFontName)
-            ? SubtitleStyle.DyslexicFontName
-            : settings.SubtitleFontName.Trim();
-        config.SubtitleNonLatinFontName = Blank(settings.SubtitleNonLatinFontName);
-        config.ReadableAutomation = settings.ReadableAutomation;
-        config.SubtitleFontSize = Math.Clamp(settings.SubtitleFontSize, 8, 400);
-        config.SubtitleLetterSpacing = Math.Clamp(settings.SubtitleLetterSpacing, 0, 20);
-        config.SubtitleBold = settings.SubtitleBold;
-        config.SubtitleOutline = Math.Clamp(settings.SubtitleOutline, 0, 20);
-        config.SubtitleMarginV = Math.Clamp(settings.SubtitleMarginV, 0, 500);
+            config.SubToSubPlacement = settings.SubToSubPlacement;
+            config.SubToSubCustomFolder = Blank(settings.SubToSubCustomFolder);
+            config.ConversionFormat = SubtitleFormats.TryNormalizeOutputFormat(settings.ConversionFormat, out var conversionFormat)
+                ? conversionFormat
+                : "srt";
+            config.ConversionReplaceOriginal = settings.ConversionReplaceOriginal;
+            config.ConversionSyncAfter = settings.ConversionSyncAfter;
+            config.ConvertBeforeSync = settings.ConvertBeforeSync;
+            config.AutomationAction = settings.AutomationAction;
+            config.AutoTranslateEnabled = settings.AutoTranslateEnabled;
+            config.AutoTranslateLanguage = Blank(settings.AutoTranslateLanguage);
+            config.AutoTranslateSkipExisting = settings.AutoTranslateSkipExisting;
+            config.SkipSyncedInUnattendedRuns = settings.SkipSyncedInUnattendedRuns;
 
-        if (settings.SubtitleAppearance is not null)
-        {
-            var appearance = settings.SubtitleAppearance;
-            var previous = config.SubtitleAppearance ?? new SubtitleAppearance();
-
-            config.SubtitleAppearance = new SubtitleAppearance
+            // Translating into nothing would run the whole library through a provider and
+            // write files named after an empty language tag, so it stays off until asked for.
+            if (string.IsNullOrEmpty(config.AutoTranslateLanguage))
             {
-                Enabled = appearance.Enabled,
-                FontSizePx = Math.Clamp(appearance.FontSizePx, 8, 200),
-                TextColor = NormalizeColor(appearance.TextColor, SubtitleAppearance.DefaultTextColor),
-                BackgroundColor = NormalizeColor(appearance.BackgroundColor, SubtitleAppearance.DefaultBackgroundColor),
-                BackgroundEnabled = appearance.BackgroundEnabled,
-                VerticalPositionPercent = Math.Clamp(appearance.VerticalPositionPercent, 0, 85),
-
-                // The dashboard form has no box for either of these, so they arrive empty
-                // whatever was there before. Rebuilding the object from the form alone
-                // would quietly wipe a font somebody had set.
-                FontFamily = appearance.FontFamily ?? previous.FontFamily,
-                LetterSpacingPx = appearance.LetterSpacingPx > 0 ? appearance.LetterSpacingPx : previous.LetterSpacingPx
-            };
-        }
-
-        foreach (var entry in settings.Engines)
-        {
-            var engine = _registry.Find(entry.EngineId);
-            if (engine is null)
-            {
-                continue;
+                config.AutoTranslateEnabled = false;
             }
 
-            var engineSettings = config.GetEngineSettings(entry.EngineId);
-            engineSettings.PathOverride = Blank(entry.PathOverride);
-            engineSettings.Penalty = entry.Penalty;
+            config.SubtitleAccess = settings.SubtitleAccess;
 
-            if (Enum.TryParse<SyncMode>(entry.DefaultMode, ignoreCase: true, out var mode)
-                && engine.Descriptor.Modes.Exists(m => m.Mode == mode))
+            // Keep only ids that are still real users, so deleting a user doesn't leave a
+            // stale grant sitting in the config waiting for a recycled id.
+            config.SubtitleAccessUserIds = settings.SubtitleAccessUserIds
+                .Where(id => Guid.TryParse(id, out var parsed) && _userManager.GetUserById(parsed) is not null)
+                .Select(id => Guid.Parse(id).ToString("N", CultureInfo.InvariantCulture))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            config.OpenSubtitlesEnabled = settings.OpenSubtitlesEnabled;
+            config.OpenSubtitlesApiKey = Blank(settings.OpenSubtitlesApiKey);
+            config.OpenSubtitlesUsername = Blank(settings.OpenSubtitlesUsername);
+            config.OpenSubtitlesPassword = Blank(settings.OpenSubtitlesPassword);
+            config.OpenSubtitlesLanguage = Blank(settings.OpenSubtitlesLanguage) ?? "en";
+            config.MultiEngineEnabled = settings.MultiEngineEnabled;
+            config.MultiEngineUseAlass = settings.MultiEngineUseAlass;
+            config.MultiEngineUseFfsubsync = settings.MultiEngineUseFfsubsync;
+            config.MultiEngineTrigger = settings.MultiEngineTrigger;
+            config.MultiEngineCandidateFormat = settings.MultiEngineCandidateFormat;
+            config.MultiEngineInBulk = settings.MultiEngineInBulk;
+            config.ArrWebhookEnabled = settings.ArrWebhookEnabled;
+
+            // Only ids that are still libraries, so a deleted library doesn't linger in the
+            // list and a stale form can't smuggle arbitrary ids in.
+            var libraryIds = _libraryService.GetLibraryIdSet();
+            config.ExtractEmbeddedEnabled = settings.ExtractEmbeddedEnabled;
+            config.ExtractLibraryIds = (settings.ExtractLibraryIds ?? new List<string>())
+                .Select(id => Guid.TryParse(id, out var parsed) ? parsed : Guid.Empty)
+                .Where(libraryIds.Contains)
+                .Distinct()
+                .ToList();
+            config.ExtractLanguages = Blank(settings.ExtractLanguages);
+            config.ExtractTrackFilter = Enum.IsDefined(settings.ExtractTrackFilter) ? settings.ExtractTrackFilter : ExtractTrackFilter.All;
+            config.ExtractSkipExisting = settings.ExtractSkipExisting;
+            config.ExtractPictureSubtitles = settings.ExtractPictureSubtitles;
+            config.ExtractPathFilter = Blank(settings.ExtractPathFilter);
+            config.AutoUpdateEngines = settings.AutoUpdateEngines;
+            config.CountEmbeddedSubtitlesInStatus = settings.CountEmbeddedSubtitlesInStatus;
+            config.GoogleTranslateApiKey = Blank(settings.GoogleTranslateApiKey);
+            config.DeepLApiKey = Blank(settings.DeepLApiKey);
+            config.LingarrBaseUrl = Blank(settings.LingarrBaseUrl);
+            config.LingarrApiKey = Blank(settings.LingarrApiKey);
+            config.LibreTranslateBaseUrl = Blank(settings.LibreTranslateBaseUrl);
+            config.LibreTranslateApiKey = Blank(settings.LibreTranslateApiKey);
+            config.DefaultTranslationProvider = settings.DefaultTranslationProvider;
+            config.TranslationConfidenceThreshold = Math.Clamp(settings.TranslationConfidenceThreshold, 0, 100);
+            config.TranslationIncludeMetadataHeader = settings.TranslationIncludeMetadataHeader;
+            config.TranslationKeepLowConfidenceOriginal = settings.TranslationKeepLowConfidenceOriginal;
+            config.TranslationDefaultTargetLanguage = Blank(settings.TranslationDefaultTargetLanguage);
+            config.TranslationDefaultSourceLanguage = Blank(settings.TranslationDefaultSourceLanguage);
+
+            config.SubtitleFontName = string.IsNullOrWhiteSpace(settings.SubtitleFontName)
+                ? SubtitleStyle.DyslexicFontName
+                : settings.SubtitleFontName.Trim();
+            config.SubtitleNonLatinFontName = Blank(settings.SubtitleNonLatinFontName);
+            config.ReadableAutomation = settings.ReadableAutomation;
+            config.SubtitleFontSize = Math.Clamp(settings.SubtitleFontSize, 8, 400);
+            config.SubtitleLetterSpacing = Math.Clamp(settings.SubtitleLetterSpacing, 0, 20);
+            config.SubtitleBold = settings.SubtitleBold;
+            config.SubtitleOutline = Math.Clamp(settings.SubtitleOutline, 0, 20);
+            config.SubtitleMarginV = Math.Clamp(settings.SubtitleMarginV, 0, 500);
+
+            if (settings.SubtitleAppearance is not null)
             {
-                engineSettings.DefaultMode = mode.ToString();
+                var appearance = settings.SubtitleAppearance;
+                var previous = config.SubtitleAppearance ?? new SubtitleAppearance();
+
+                config.SubtitleAppearance = new SubtitleAppearance
+                {
+                    Enabled = appearance.Enabled,
+                    FontSizePx = Math.Clamp(appearance.FontSizePx, 8, 200),
+                    TextColor = NormalizeColor(appearance.TextColor, SubtitleAppearance.DefaultTextColor),
+                    BackgroundColor = NormalizeColor(appearance.BackgroundColor, SubtitleAppearance.DefaultBackgroundColor),
+                    BackgroundEnabled = appearance.BackgroundEnabled,
+                    VerticalPositionPercent = Math.Clamp(appearance.VerticalPositionPercent, 0, 85),
+
+                    // The dashboard form has no box for either of these, so they arrive empty
+                    // whatever was there before. Rebuilding the object from the form alone
+                    // would quietly wipe a font somebody had set.
+                    FontFamily = appearance.FontFamily ?? previous.FontFamily,
+                    LetterSpacingPx = appearance.LetterSpacingPx > 0 ? appearance.LetterSpacingPx : previous.LetterSpacingPx
+                };
             }
 
-            // Only take keys this engine actually has, so a stale form from an older
-            // version can't leave dead settings sitting in the config forever.
-            var known = new HashSet<string>(
-                engine.Descriptor.Parameters.Select(p => p.Key),
-                StringComparer.OrdinalIgnoreCase);
+            foreach (var entry in settings.Engines)
+            {
+                var engine = _registry.Find(entry.EngineId);
+                if (engine is null)
+                {
+                    continue;
+                }
 
-            engineSettings.SetParameters(entry.Parameters
-                .Where(p => known.Contains(p.Key))
-                .Select(p => new KeyValuePair<string, string?>(p.Key, p.Value?.Trim())));
+                var engineSettings = config.GetEngineSettings(entry.EngineId);
+                engineSettings.PathOverride = Blank(entry.PathOverride);
+                engineSettings.Penalty = entry.Penalty;
+
+                if (Enum.TryParse<SyncMode>(entry.DefaultMode, ignoreCase: true, out var mode)
+                    && engine.Descriptor.Modes.Exists(m => m.Mode == mode))
+                {
+                    engineSettings.DefaultMode = mode.ToString();
+                }
+
+                // Only take keys this engine actually has, so a stale form from an older
+                // version can't leave dead settings sitting in the config forever.
+                var known = new HashSet<string>(
+                    engine.Descriptor.Parameters.Select(p => p.Key),
+                    StringComparer.OrdinalIgnoreCase);
+
+                engineSettings.SetParameters(entry.Parameters
+                    .Where(p => known.Contains(p.Key))
+                    .Select(p => new KeyValuePair<string, string?>(p.Key, p.Value?.Trim())));
+            }
+
+            Plugin.Instance!.SaveConfiguration();
+            return Ok();
         }
-
-        Plugin.Instance!.SaveConfiguration();
-        return Ok();
     }
 
     // ------------------------------------------------------------------ translation
@@ -2241,9 +2345,14 @@ public class LapseController : ControllerBase
 
         try
         {
-            return await _subtitleShifter
+            var shifted = await _subtitleShifter
                 .ShiftAsync(shiftPath, request.ResolveOffsetSeconds(), request.OutputMode, cancellationToken)
                 .ConfigureAwait(false);
+
+            // Nudging a synced subtitle by hand leaves it synced, just more so. Without
+            // this the file being newer than its sync would read as a replaced subtitle.
+            SyncQueueManager.TouchSyncedSubtitle(request.ItemId, shifted.OutputPath);
+            return shifted;
         }
         catch (Exception ex) when (ex is NotSupportedException or FileNotFoundException or IOException)
         {
@@ -2266,14 +2375,7 @@ public class LapseController : ControllerBase
     [HttpGet("Lapse/Player/Context")]
     public ActionResult<object> GetPlayerContext()
     {
-        var user = GetCallingUser();
-
-        var playing = _sessionManager.Sessions
-            .Where(s => s.NowPlayingItem is not null)
-            .ToList();
-
-        var session = (user is not null ? playing.Find(s => s.UserId.Equals(user.Id)) : null)
-            ?? playing.FirstOrDefault();
+        var session = FindOwnPlayingSession();
 
         if (session?.NowPlayingItem is null)
         {
@@ -2324,6 +2426,7 @@ public class LapseController : ControllerBase
             // turned off. The panel uses this to say what it can and cannot act on.
             PlayingIsFile = playingPath is not null,
             Subtitles = tracks,
+            CanEdit = CheckSubtitleAccess() is null,
             CanSync = _registry.GetDefault() is { } engine && System.IO.File.Exists(_runner.ResolvePath(engine)),
             CanFetch = Plugin.Instance!.Configuration.OpenSubtitlesEnabled,
             OutputMode = Plugin.Instance!.Configuration.OutputMode.ToString(),
@@ -2395,8 +2498,141 @@ public class LapseController : ControllerBase
         return new
         {
             Success = true,
+            fetched.Path,
             Message = "Got " + Path.GetFileName(fetched.Path) + ". Give Jellyfin a few seconds to pick it up."
+                + DescribeRemaining(fetched.RemainingDownloads)
         };
+    }
+
+    /// <summary>
+    /// Searches OpenSubtitles for an item and lists what it has, best first, so someone can
+    /// pick one rather than taking whatever came top.
+    /// </summary>
+    /// <param name="itemId">The item.</param>
+    /// <param name="language">Languages to search instead of the configured ones.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The search result.</returns>
+    [HttpGet("Lapse/Items/{itemId}/OpenSubtitles")]
+    public async Task<ActionResult<OpenSubtitlesSearchResult>> SearchOpenSubtitles(
+        [FromRoute] Guid itemId,
+        [FromQuery] string? language,
+        CancellationToken cancellationToken)
+    {
+        if (CheckSubtitleAccess() is { } denied)
+        {
+            return denied;
+        }
+
+        if (!Plugin.Instance!.Configuration.OpenSubtitlesEnabled)
+        {
+            return BadRequest("Fetching from OpenSubtitles is switched off.");
+        }
+
+        var item = GetVisibleItem(itemId);
+        if (item is null)
+        {
+            return NotFound("Item not found");
+        }
+
+        return await _openSubtitles.SearchAsync(item, language, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Downloads one subtitle picked from a search, and syncs it straight after when asked.
+    /// </summary>
+    /// <param name="itemId">The item.</param>
+    /// <param name="request">Which subtitle.</param>
+    /// <returns>What happened.</returns>
+    [HttpPost("Lapse/Items/{itemId}/OpenSubtitles/Download")]
+    public async Task<ActionResult<object>> DownloadOpenSubtitle([FromRoute] Guid itemId, [FromBody] OpenSubtitlesDownloadRequest request)
+    {
+        if (CheckSubtitleAccess() is { } denied)
+        {
+            return denied;
+        }
+
+        if (request is null || request.FileId <= 0)
+        {
+            return BadRequest("Say which subtitle to download");
+        }
+
+        if (!Plugin.Instance!.Configuration.OpenSubtitlesEnabled)
+        {
+            return BadRequest("Fetching from OpenSubtitles is switched off.");
+        }
+
+        var item = GetVisibleItem(itemId);
+        if (item is null || string.IsNullOrEmpty(item.Path))
+        {
+            return NotFound("Item not found, or it has no video file");
+        }
+
+        var fetched = await _openSubtitles.DownloadAsync(
+            item,
+            new OpenSubtitlesCandidate
+            {
+                FileId = request.FileId,
+                Language = request.Language ?? string.Empty,
+                FileName = request.FileName,
+                HearingImpaired = request.HearingImpaired,
+                ForeignPartsOnly = request.ForeignPartsOnly
+            },
+            HttpContext.RequestAborted).ConfigureAwait(false);
+
+        if (fetched.Path is not { } path)
+        {
+            return new { Success = false, Message = fetched.Error ?? "Nothing was downloaded." };
+        }
+
+        SyncResult? sync = null;
+
+        // A subtitle from somewhere else is rarely timed for this exact file, which is the
+        // whole reason LAPSE exists, so syncing it there and then is offered.
+        if (request.Sync)
+        {
+            var engine = _registry.GetDefault();
+            if (System.IO.File.Exists(_runner.ResolvePath(engine)))
+            {
+                sync = await _runner
+                    .RunAsync(engine, item.Path, path, EngineRunner.ResolveDefaultMode(engine), EngineRunner.ResolvePenalty(engine, null))
+                    .ConfigureAwait(false);
+
+                SaveSyncRecord(item.Id, sync, path);
+            }
+        }
+
+        _multiEngine.RequestRefreshFor(itemId);
+
+        return new
+        {
+            Success = true,
+            Path = path,
+            Sync = sync,
+            Message = "Got " + Path.GetFileName(path) + "." + DescribeRemaining(fetched.RemainingDownloads)
+        };
+    }
+
+    /// <summary>
+    /// Tries the OpenSubtitles key and account, so the settings page can say whether they
+    /// work before anybody depends on them.
+    /// </summary>
+    /// <param name="request">Credentials to test instead of the saved ones, where filled in.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>How it went.</returns>
+    [HttpPost("Lapse/OpenSubtitles/Test")]
+    [Authorize(Policy = Policies.RequiresElevation)]
+    public async Task<ActionResult<OpenSubtitlesAccountStatus>> TestOpenSubtitles(
+        [FromBody] OpenSubtitlesTestRequest? request,
+        CancellationToken cancellationToken)
+    {
+        return await _openSubtitles.TestAsync(request, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static string DescribeRemaining(int? remaining)
+    {
+        return remaining is { } left
+            ? string.Create(CultureInfo.InvariantCulture, $" {left} OpenSubtitles download{(left == 1 ? string.Empty : "s")} left today.")
+            : string.Empty;
     }
 
     // ------------------------------------------------------------ multi engine sync
@@ -2426,12 +2662,18 @@ public class LapseController : ControllerBase
     [HttpGet("Lapse/Items/{itemId}/Candidates")]
     public ActionResult<object> GetItemCandidates([FromRoute] Guid itemId)
     {
+        // The sets carry file paths, so an item the caller can't open gets nothing back,
+        // the same as one that doesn't exist.
         var item = GetVisibleItem(itemId);
+        if (item is null)
+        {
+            return NotFound("Item not found");
+        }
 
         return new
         {
             Sets = MultiEngineSyncService.GetPendingFor(itemId),
-            PlayingPath = item is null ? null : ResolvePlayingSubtitlePath(item)
+            PlayingPath = ResolvePlayingSubtitlePath(item)
         };
     }
 
@@ -2448,14 +2690,7 @@ public class LapseController : ControllerBase
     [HttpGet("Lapse/Candidates/Playing")]
     public ActionResult<object> GetPlayingCandidate()
     {
-        var user = GetCallingUser();
-
-        var playing = _sessionManager.Sessions
-            .Where(s => s.NowPlayingItem is not null)
-            .ToList();
-
-        var session = (user is not null ? playing.Find(s => s.UserId.Equals(user.Id)) : null)
-            ?? playing.FirstOrDefault();
+        var session = FindOwnPlayingSession();
 
         if (session?.NowPlayingItem is null)
         {
@@ -2463,10 +2698,14 @@ public class LapseController : ControllerBase
         }
 
         var itemId = session.NowPlayingItem.Id;
-        var sets = MultiEngineSyncService.GetPendingFor(itemId);
-
         var item = GetVisibleItem(itemId);
-        var playingPath = item is null ? null : ResolvePlayingSubtitlePath(item);
+        if (item is null)
+        {
+            return new { Playing = false };
+        }
+
+        var sets = MultiEngineSyncService.GetPendingFor(itemId);
+        var playingPath = ResolvePlayingSubtitlePath(item);
         var match = MultiEngineSyncService.MatchPlaying(itemId, playingPath);
 
         return new
@@ -2552,6 +2791,23 @@ public class LapseController : ControllerBase
         return _multiEngine.Discard(request.ItemId, request.OriginalPath);
     }
 
+    // What the caller is watching, on whichever of their devices. Never another user's
+    // session: falling back to "whatever anyone is playing" used to hand the panel some
+    // other account's film, file paths and all.
+    private SessionInfo? FindOwnPlayingSession()
+    {
+        var user = GetCallingUser();
+        if (user is null)
+        {
+            return null;
+        }
+
+        return _sessionManager.Sessions
+            .Where(s => s.NowPlayingItem is not null && s.UserId.Equals(user.Id))
+            .OrderByDescending(s => s.LastActivityDate)
+            .FirstOrDefault();
+    }
+
     // Which subtitle file the caller has on screen right now. Read from the session rather
     // than from the page, so it doesn't depend on how a particular jellyfin-web version
     // marks the selected entry in its own menu.
@@ -2566,12 +2822,13 @@ public class LapseController : ControllerBase
             return null;
         }
 
-        // Their own session first. Falling back to any session playing this item covers
-        // the case where the press comes from a different device to the one playing it.
+        // Only the caller's own sessions. Any device they're signed in on counts, so a press
+        // on the phone still finds the film playing on the TV, but somebody else watching
+        // the same film is somebody else's choice of track.
         var user = GetCallingUser();
-        var session = (user is not null ? playing.Find(s => s.UserId.Equals(user.Id)) : null) ?? playing[0];
+        var session = user is null ? null : playing.Find(s => s.UserId.Equals(user.Id));
 
-        if (session.PlayState?.SubtitleStreamIndex is not { } index || index < 0)
+        if (session?.PlayState?.SubtitleStreamIndex is not { } index || index < 0)
         {
             return null;
         }
@@ -2949,17 +3206,7 @@ public class LapseController : ControllerBase
             return BadRequest($"That subtitle is already {target}.");
         }
 
-        var destination = Path.ChangeExtension(sourcePath, "." + target);
-
-        // Converting shouldn't be able to write over a subtitle that's already there -
-        // most obviously the file this one was converted from last time.
-        var attempt = 1;
-        while (System.IO.File.Exists(destination))
-        {
-            destination = Path.ChangeExtension(sourcePath, null)
-                + "." + attempt.ToString(CultureInfo.InvariantCulture) + "." + target;
-            attempt++;
-        }
+        var destination = UniqueConversionPath(sourcePath, target);
 
         try
         {
@@ -3016,13 +3263,7 @@ public class LapseController : ControllerBase
                         .ConfigureAwait(false);
 
                     result.SyncedAfter = true;
-
-                    SyncQueueManager.SaveRecord(
-                        request.ItemId,
-                        ResolveRecordStatus(result.Sync),
-                        result.Sync.Success && result.Sync.Skipped ? SyncQueueManager.DescribeSkip(result.Sync) : result.Sync.Error,
-                        result.Sync,
-                        result.Sync.Success && !result.Sync.Skipped ? new[] { destination } : null);
+                    SaveSyncRecord(request.ItemId, result.Sync, destination);
                 }
             }
 
@@ -3083,7 +3324,8 @@ public class LapseController : ControllerBase
             return BadRequest("That's a picture based subtitle (PGS or VobSub). There's no text in it to work with - it needs OCR first.");
         }
 
-        if (request.OutputFormat is not null && !SubtitleFormats.TryNormalizeOutputFormat(request.OutputFormat, out _))
+        string? outputFormat = null;
+        if (request.OutputFormat is not null && !SubtitleFormats.TryNormalizeOutputFormat(request.OutputFormat, out outputFormat))
         {
             return BadRequest("The output format has to be srt, vtt, ass or ssa");
         }
@@ -3118,19 +3360,14 @@ public class LapseController : ControllerBase
                     mode,
                     EngineRunner.ResolvePenalty(engine, request.Penalty),
                     request.OutputMode,
-                    outputFormat: request.OutputFormat,
+                    outputFormat: outputFormat,
                     cancellationToken: cancellationToken)
                 .ConfigureAwait(false);
 
             result.Sync = sync;
             result.ConvertedFrom = sync.ConvertedFrom;
 
-            SyncQueueManager.SaveRecord(
-                request.ItemId,
-                ResolveRecordStatus(sync),
-                sync.Success && sync.Skipped ? SyncQueueManager.DescribeSkip(sync) : sync.Error,
-                sync,
-                sync.Success && !sync.Skipped ? new[] { path } : null);
+            SaveSyncRecord(request.ItemId, sync, path);
 
             if (!sync.Success)
             {
@@ -3144,12 +3381,12 @@ public class LapseController : ControllerBase
                 result.SubtitlePath = sync.OutputPath;
             }
         }
-        else if (request.OutputFormat is not null
-            && !string.Equals(SubtitleFormats.GetName(path), request.OutputFormat, StringComparison.OrdinalIgnoreCase))
+        else if (outputFormat is not null
+            && !string.Equals(SubtitleFormats.GetName(path), outputFormat, StringComparison.OrdinalIgnoreCase))
         {
-            // No sync asked for, so the conversion is the whole job here.
-            SubtitleFormats.TryNormalizeOutputFormat(request.OutputFormat, out var target);
-            var destination = Path.ChangeExtension(path, "." + target);
+            // No sync asked for, so the conversion is the whole job here. Same rule as the
+            // Convert button: never over a subtitle that's already there.
+            var destination = UniqueConversionPath(path, outputFormat);
 
             try
             {
@@ -3205,9 +3442,9 @@ public class LapseController : ControllerBase
         // This feature is meant to point at any two files you like, so unlike the item
         // sync there's no library item to check them against. Still worth insisting both
         // are real subtitle files, so a typo can't turn this into "overwrite that file".
-        if (!SubtitleLocator.IsSubtitleFile(request.ReferencePath) || !SubtitleLocator.IsSubtitleFile(request.InputPath))
+        if (!SubtitleFormats.IsSubtitle(request.ReferencePath) || !SubtitleFormats.IsSubtitle(request.InputPath))
         {
-            return BadRequest("Both paths need to be subtitle files (.srt, .ass, .ssa or .vtt)");
+            return BadRequest("Both paths need to be subtitle files");
         }
 
         if (!System.IO.File.Exists(request.ReferencePath) || !System.IO.File.Exists(request.InputPath))
@@ -3231,9 +3468,9 @@ public class LapseController : ControllerBase
 
         if (outputPath is not null)
         {
-            if (!SubtitleLocator.IsSubtitleFile(outputPath))
+            if (!SubtitleFormats.IsSubtitle(outputPath))
             {
-                return BadRequest("The output file needs a subtitle extension (.srt, .ass, .ssa or .vtt)");
+                return BadRequest("The output file needs a subtitle extension");
             }
 
             if (string.Equals(outputPath, request.ReferencePath, StringComparison.Ordinal))
@@ -3250,8 +3487,16 @@ public class LapseController : ControllerBase
 
         var engine = _registry.Resolve(request.EngineId);
         var penalty = EngineRunner.ResolvePenalty(engine, null);
+
+        // LAPSE's auto mode handles a subtitle reference the same way it handles audio,
+        // drift and re-cuts included, so it gets its own default rather than the plain
+        // single offset the other engines are held to here.
+        var mode = string.Equals(engine.Descriptor.Id, "lapse", StringComparison.OrdinalIgnoreCase)
+            ? EngineRunner.ResolveDefaultMode(engine)
+            : SyncMode.Standard;
+
         var result = await _runner
-            .RunAsync(engine, request.ReferencePath, request.InputPath, SyncMode.Standard, penalty, request.OutputMode, outputPath)
+            .RunAsync(engine, request.ReferencePath, request.InputPath, mode, penalty, request.OutputMode, outputPath)
             .ConfigureAwait(false);
         return result;
     }
@@ -3298,6 +3543,25 @@ public class LapseController : ControllerBase
 
         var source = placement == SubToSubPlacement.InputFolder ? inputPath : referencePath;
         return Path.GetDirectoryName(source) ?? Path.GetDirectoryName(inputPath) ?? string.Empty;
+    }
+
+    // Converting shouldn't be able to write over a subtitle that's already there - most
+    // obviously the file this one was converted from last time.
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Security",
+        "CA3003:Review code for file path injection vulnerabilities",
+        Justification = "Derived from a subtitle path the library lists for the item.")]
+    private static string UniqueConversionPath(string sourcePath, string format)
+    {
+        var destination = Path.ChangeExtension(sourcePath, "." + format);
+
+        for (var attempt = 1; System.IO.File.Exists(destination); attempt++)
+        {
+            destination = Path.ChangeExtension(sourcePath, null)
+                + "." + attempt.ToString(CultureInfo.InvariantCulture) + "." + format;
+        }
+
+        return destination;
     }
 
     private static string? Blank(string? value)

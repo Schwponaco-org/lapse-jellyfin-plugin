@@ -3,8 +3,10 @@
 // Licensed under GPL v3 - see LICENSE for details
 
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -97,6 +99,17 @@ public class EngineRunner
     public Task<EngineRuntimeInfo> GetRuntimeInfoAsync(IEngine engine, CancellationToken cancellationToken = default)
     {
         return _probe.ProbeAsync(ResolvePath(engine), cancellationToken);
+    }
+
+    /// <summary>
+    /// Starts a batch session for a job that is about to sync many files in a row. Nothing
+    /// runs until the first file is handed to it, and an engine or build that can't take
+    /// jobs that way just runs each file on its own as before.
+    /// </summary>
+    /// <returns>The session. Dispose it when the job is done.</returns>
+    public EngineBatchSession CreateBatchSession()
+    {
+        return new EngineBatchSession(_logger);
     }
 
     /// <summary>
@@ -219,6 +232,51 @@ public class EngineRunner
         return ApplyFormat(Path.Combine(directory, stem + suffix + extension), outputFormat);
     }
 
+    /// <summary>
+    /// Says whether a subtitle is the sidecar a sync wrote for another subtitle in the
+    /// list: Movie.en.shifted.srt next to Movie.en.srt. An unattended run that synced both
+    /// would do the same work twice and write the same file over itself, and a doubtful
+    /// answer left beside the original would become an input of its own on the next run.
+    /// </summary>
+    /// <param name="path">The subtitle to check.</param>
+    /// <param name="all">Every subtitle the item has.</param>
+    /// <returns>True when it's another subtitle's sidecar and that subtitle is there too.</returns>
+    public static bool IsSidecarOfAnother(string path, IEnumerable<string> all)
+    {
+        var suffix = Plugin.Instance?.Configuration.SidecarSuffix;
+        if (string.IsNullOrWhiteSpace(suffix))
+        {
+            suffix = ".shifted";
+        }
+
+        if (!suffix.StartsWith('.'))
+        {
+            suffix = "." + suffix;
+        }
+
+        var stem = Path.GetFileNameWithoutExtension(path);
+        if (!stem.EndsWith(suffix, StringComparison.OrdinalIgnoreCase) || stem.Length == suffix.Length)
+        {
+            return false;
+        }
+
+        var originalStem = stem[..^suffix.Length];
+        var folder = Path.GetDirectoryName(path);
+
+        // By name without the extension: a subtitle converted on the way through comes
+        // out as Movie.en.shifted.srt from a Movie.en.sub.
+        foreach (var other in all)
+        {
+            if (string.Equals(Path.GetDirectoryName(other), folder, StringComparison.Ordinal)
+                && string.Equals(Path.GetFileNameWithoutExtension(other), originalStem, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static string ApplyFormat(string path, string? outputFormat)
     {
         if (string.IsNullOrEmpty(outputFormat)
@@ -249,7 +307,7 @@ public class EngineRunner
     /// <returns>The output mode.</returns>
     public static OutputMode ResolveOutputMode(OutputMode? requested)
     {
-        return requested ?? Plugin.Instance?.Configuration.OutputMode ?? OutputMode.OverwriteWithBackup;
+        return requested ?? Plugin.Instance?.Configuration.OutputMode ?? OutputMode.SidecarOnly;
     }
 
     /// <summary>
@@ -331,6 +389,9 @@ public class EngineRunner
     /// even when the engine wasn't confident, instead of applying the low-confidence
     /// setting. Multi engine sync uses this: it collects every engine's answer as a file to
     /// compare, and decides what happens to the original once somebody has picked one.</param>
+    /// <param name="batch">A warm LAPSE process to run this through instead of starting
+    /// one, for jobs that sync many files in a row. Ignored by the other engines and by
+    /// LAPSE builds without --batch.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The parsed result.</returns>
     [System.Diagnostics.CodeAnalysis.SuppressMessage(
@@ -347,6 +408,7 @@ public class EngineRunner
         string? destinationOverride = null,
         string? outputFormat = null,
         bool skipConfidencePolicy = false,
+        EngineBatchSession? batch = null,
         CancellationToken cancellationToken = default)
     {
         // Every run on a subtitle shares one work file beside it, and reads the file the
@@ -458,12 +520,31 @@ public class EngineRunner
                 Runtime = runtime,
                 Parameters = ResolveParameters(engine),
                 ConfidenceSigma = Plugin.Instance?.Configuration.ConfidenceSigma ?? LapseEngine.DefaultConfidenceSigma,
-                ForceAnyway = forceAnyway
+                ForceAnyway = forceAnyway,
+                IgnoreEmbedded = IsOwnTrack(referencePath, subtitlePath)
             };
+
+            // A warm batch process when the caller has one and this build takes jobs that
+            // way, otherwise a process of its own, which is also where any job the batch
+            // process can't carry ends up.
+            var useBatch = batch is not null
+                && string.Equals(engine.Descriptor.Id, "lapse", StringComparison.OrdinalIgnoreCase)
+                && runtime.SupportsBatch;
+
+            async Task<(string Stdout, string Stderr, int ExitCode)> Run(IReadOnlyList<string> arguments)
+            {
+                if (useBatch
+                    && await batch!.TryRunAsync(enginePath, arguments, si => PrepareEnvironment(si, ffmpegDirectory), cancellationToken).ConfigureAwait(false) is { } answer)
+                {
+                    return answer;
+                }
+
+                return await RunProcessAsync(enginePath, arguments, ffmpegDirectory, cancellationToken).ConfigureAwait(false);
+            }
 
             var args = engine.BuildArguments(BuildOptions(false));
 
-            var (stdout, stderr, exitCode) = await RunProcessAsync(enginePath, args, ffmpegDirectory, cancellationToken).ConfigureAwait(false);
+            var (stdout, stderr, exitCode) = await Run(args).ConfigureAwait(false);
 
             var result = engine.ParseResult(stdout, stderr, exitCode, mode, penalty);
             result.EngineId = engine.Descriptor.Id;
@@ -484,7 +565,7 @@ public class EngineRunner
 
                 if (!forcedArgs.SequenceEqual(args))
                 {
-                    (stdout, stderr, exitCode) = await RunProcessAsync(enginePath, forcedArgs, ffmpegDirectory, cancellationToken).ConfigureAwait(false);
+                    (stdout, stderr, exitCode) = await Run(forcedArgs).ConfigureAwait(false);
 
                     result = engine.ParseResult(stdout, stderr, exitCode, mode, penalty);
                     result.EngineId = engine.Descriptor.Id;
@@ -520,8 +601,15 @@ public class EngineRunner
             // and said what it thinks of it, so gate on that rather than re-deriving a
             // judgement from a number here. Engines that report no verdict (alass,
             // ffsubsync) are never held to this and always get written.
-            result.LowConfidence = result.Verdict is not null
-                && !string.Equals(result.Verdict, "solid", StringComparison.OrdinalIgnoreCase);
+            //
+            // A forced retry is doubtful whatever it says: --force makes the engine call
+            // every answer solid, and with a handful of cues there's nothing to check the
+            // answer against. Four lines of a forced subtitle fit speech almost anywhere,
+            // and testing that produced a result eleven seconds out, reported as synced and
+            // written over the original. So it goes through the low-confidence setting like
+            // any other answer the engine couldn't stand behind.
+            result.LowConfidence = result.Forced
+                || (result.Verdict is not null && !string.Equals(result.Verdict, "solid", StringComparison.OrdinalIgnoreCase));
 
             // A candidate run has already been told the engine wasn't sure - that's why it
             // was asked for - and the whole point is to get the answer onto disk to be
@@ -551,9 +639,11 @@ public class EngineRunner
                 if (action == LowConfidenceAction.Sidecar && string.IsNullOrWhiteSpace(destinationOverride))
                 {
                     // Keep the original where it is and put the doubtful result beside it,
-                    // whatever the output mode would normally have done.
+                    // whatever the output mode would normally have done. Nobody has checked
+                    // it, so it doesn't count as the subtitle being synced either.
                     destination = ResolveDestination(subtitlePath, OutputMode.SidecarOnly, outputFormat);
                     resolvedOutputMode = OutputMode.SidecarOnly;
+                    result.Unconfirmed = true;
                 }
             }
 
@@ -567,6 +657,24 @@ public class EngineRunner
                 && outputFormat is null)
             {
                 result.Skipped = true;
+
+                // "Barely moves it" only means "already right" when the engine believes its
+                // own answer. A doubtful answer that happens to land near zero says nothing
+                // about the file, so it's skipped as doubtful rather than counted as done -
+                // and there's no point writing a near copy of the original beside it.
+                if (result.LowConfidence && !skipConfidencePolicy
+                    && Plugin.Instance?.Configuration.LowConfidenceAction != LowConfidenceAction.OverwriteAnyway)
+                {
+                    result.Unconfirmed = false;
+                    _logger.LogInformation(
+                        "{Engine} came back {Verdict} on {Subtitle} with an offset of {Offset}ms - too doubtful to call it in sync, too small to be worth a file",
+                        engine.Descriptor.DisplayName,
+                        result.Verdict,
+                        subtitlePath,
+                        result.OffsetMs);
+                    return result;
+                }
+
                 result.AlreadyInSync = true;
 
                 _logger.LogInformation(
@@ -677,6 +785,46 @@ public class EngineRunner
         }
     }
 
+    /// <summary>
+    /// Says whether a subtitle file was taken out of the video it's being synced against:
+    /// it sits beside it, starts with its name, and carries the stream number an
+    /// extraction adds (".stream8"; ".track8" from older versions), with or without a
+    /// sidecar suffix from an earlier sync after it.
+    /// </summary>
+    /// <param name="referencePath">The video.</param>
+    /// <param name="subtitlePath">The subtitle.</param>
+    /// <returns>True when the subtitle is one of the video's own tracks.</returns>
+    public static bool IsOwnTrack(string referencePath, string subtitlePath)
+    {
+        if (SubtitleFormats.IsSubtitle(referencePath)
+            || !string.Equals(Path.GetDirectoryName(referencePath), Path.GetDirectoryName(subtitlePath), StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var stem = Path.GetFileNameWithoutExtension(referencePath);
+        var name = Path.GetFileNameWithoutExtension(subtitlePath);
+
+        if (!name.StartsWith(stem + ".", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        foreach (var token in name[(stem.Length + 1)..].Split('.'))
+        {
+            var digits = token.StartsWith("stream", StringComparison.Ordinal) ? token[6..]
+                : token.StartsWith("track", StringComparison.Ordinal) ? token[5..]
+                : null;
+
+            if (!string.IsNullOrEmpty(digits) && digits.All(char.IsAsciiDigit))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static bool NeedsFormatChange(string workPath, string destination)
     {
         return !string.Equals(
@@ -769,7 +917,7 @@ public class EngineRunner
 
     private async Task<(string Stdout, string Stderr, int ExitCode)> RunProcessAsync(
         string enginePath,
-        System.Collections.Generic.IReadOnlyList<string> args,
+        IReadOnlyList<string> args,
         string? ffmpegDirectory,
         CancellationToken cancellationToken)
     {
@@ -789,10 +937,9 @@ public class EngineRunner
             startInfo.ArgumentList.Add(arg);
         }
 
-        AddFfmpegToPath(startInfo, ffmpegDirectory);
-        AskPythonForUtf8(startInfo);
+        PrepareEnvironment(startInfo, ffmpegDirectory);
 
-        _logger.LogInformation("Running engine: {Path} {Args}", enginePath, string.Join(' ', startInfo.ArgumentList));
+        _logger.LogInformation("Running engine: {Path} {Args}", enginePath, EngineBatchSession.BuildJobLine(args));
 
         using var process = new Process { StartInfo = startInfo };
         var stdoutBuilder = new StringBuilder();
@@ -947,6 +1094,12 @@ public class EngineRunner
             UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
             | UnixFileMode.GroupRead | UnixFileMode.GroupExecute
             | UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
+    }
+
+    private static void PrepareEnvironment(ProcessStartInfo startInfo, string? ffmpegDirectory)
+    {
+        AddFfmpegToPath(startInfo, ffmpegDirectory);
+        AskPythonForUtf8(startInfo);
     }
 
     // ffsubsync shells out to ffmpeg and ffprobe by name, and the Jellyfin docker images

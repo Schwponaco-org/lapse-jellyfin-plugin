@@ -10,6 +10,7 @@ using System.IO.Compression;
 using System.Linq;
 using System.Net.Http;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
@@ -133,13 +134,21 @@ public class EngineInstaller
 
         Directory.CreateDirectory(engineFolder);
 
-        _logger.LogInformation("Installing {Engine} from {Url}", engine.Descriptor.DisplayName, download.Url);
+        // Ask which release is the latest first and download that one by name. The
+        // download URLs all say "latest", and asking afterwards could name a release that
+        // came out while the archive was downloading. If GitHub's API can't be reached the
+        // latest URLs still work, the version just goes unrecorded.
+        var tag = await _releaseClient.GetLatestTagAsync(engine.Descriptor.GitHubRepo, force: true, cancellationToken).ConfigureAwait(false);
+        var url = PinToRelease(download.Url, tag);
+
+        _logger.LogInformation("Installing {Engine} {Version} from {Url}", engine.Descriptor.DisplayName, tag ?? "(latest)", url);
 
         var tempPath = Path.Combine(engineFolder, engine.Descriptor.ExecutableName + ".download");
 
         try
         {
-            await DownloadToAsync(download.Url, tempPath, engine, cancellationToken).ConfigureAwait(false);
+            await DownloadToAsync(url, tempPath, engine, cancellationToken).ConfigureAwait(false);
+            await VerifyChecksumAsync(url, tempPath, engine, cancellationToken).ConfigureAwait(false);
 
             switch (download.Packaging)
             {
@@ -150,7 +159,8 @@ public class EngineInstaller
                     ExtractFromZip(tempPath, targetPath, engineFolder, engine, download);
                     break;
                 default:
-                    File.Move(tempPath, targetPath, overwrite: true);
+                    MakeExecutable(tempPath);
+                    PutInPlace(tempPath, targetPath);
                     break;
             }
 
@@ -167,12 +177,148 @@ public class EngineInstaller
             }
         }
 
-        // Best effort: the download URLs all point at "latest", so whatever GitHub calls
-        // the latest release right now is what just landed on disk. If GitHub can't be
-        // reached the install still counts, we just don't know its version.
-        var tag = await _releaseClient.GetLatestTagAsync(engine.Descriptor.GitHubRepo, force: true, cancellationToken).ConfigureAwait(false);
         RecordInstalledVersion(engine, tag);
         return tag;
+    }
+
+    /// <summary>
+    /// Turns a "latest release" download URL into one for a named release, so the file
+    /// downloaded is the release that was recorded. URLs in any other shape, and a null
+    /// tag, are left as they are.
+    /// </summary>
+    /// <param name="url">The descriptor's download URL.</param>
+    /// <param name="tag">The release tag, or null.</param>
+    /// <returns>The URL to download.</returns>
+    public static string PinToRelease(string url, string? tag)
+    {
+        const string Latest = "/releases/latest/download/";
+
+        if (string.IsNullOrWhiteSpace(tag) || !url.Contains(Latest, StringComparison.Ordinal))
+        {
+            return url;
+        }
+
+        return url.Replace(Latest, "/releases/download/" + Uri.EscapeDataString(tag) + "/", StringComparison.Ordinal);
+    }
+
+    // LAPSE publishes a SHA256SUMS file with every release. When there is one, the
+    // archive has to match it: a download cut short by a flaky connection or a proxy
+    // handing back something else is caught here rather than surfacing as an engine that
+    // won't start. Releases without the file - the other engines, older LAPSE builds - are
+    // installed as before.
+    private async Task VerifyChecksumAsync(string url, string archivePath, IEngine engine, CancellationToken cancellationToken)
+    {
+        var slash = url.LastIndexOf('/');
+        if (slash < 0)
+        {
+            return;
+        }
+
+        var assetName = url[(slash + 1)..];
+        var sumsUrl = url[..(slash + 1)] + "SHA256SUMS";
+
+        string sums;
+        try
+        {
+            var client = _httpClientFactory.CreateClient("Lapse");
+            using var response = await client.GetAsync(sumsUrl, cancellationToken).ConfigureAwait(false);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogDebug("No SHA256SUMS published next to {Url}, installing without checking it", url);
+                return;
+            }
+
+            sums = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (HttpRequestException ex)
+        {
+            _logger.LogDebug(ex, "Could not fetch SHA256SUMS for {Url}, installing without checking it", url);
+            return;
+        }
+
+        var expected = FindChecksum(sums, assetName);
+        if (expected is null)
+        {
+            _logger.LogDebug("SHA256SUMS has no line for {Asset}, installing without checking it", assetName);
+            return;
+        }
+
+        string actual;
+        await using (var stream = File.OpenRead(archivePath))
+        {
+            actual = Convert.ToHexString(await SHA256.HashDataAsync(stream, cancellationToken).ConfigureAwait(false));
+        }
+
+        if (!string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new IOException(
+                $"The {engine.Descriptor.DisplayName} download doesn't match the checksum published with the release, "
+                + "so it wasn't installed. That's usually a download that got cut short. Try again.");
+        }
+
+        _logger.LogInformation("{Asset} matches the published SHA256 checksum", assetName);
+    }
+
+    /// <summary>
+    /// Finds one file's checksum in a SHA256SUMS file: lines of a hex digest, whitespace,
+    /// and the file name, which sha256sum marks with a * in binary mode.
+    /// </summary>
+    /// <param name="sums">The SHA256SUMS contents.</param>
+    /// <param name="assetName">The file to look for.</param>
+    /// <returns>The hex digest, or null when the file isn't listed.</returns>
+    public static string? FindChecksum(string sums, string assetName)
+    {
+        foreach (var raw in sums.Split('\n'))
+        {
+            // A SHA-256 digest is 64 hex digits, then whitespace, then the name.
+            var line = raw.Trim();
+            if (line.Length <= 65 || !char.IsWhiteSpace(line[64]))
+            {
+                continue;
+            }
+
+            var name = line[64..].Trim().TrimStart('*');
+            if (string.Equals(name, assetName, StringComparison.Ordinal))
+            {
+                return line[..64];
+            }
+        }
+
+        return null;
+    }
+
+    // Puts a freshly extracted file where the engine runs from by renaming over it. A
+    // rename leaves a process that already has the old file open running happily on the
+    // old copy, where writing into the file in place fails on Linux while it runs ("text
+    // file busy") and, for the onnxruntime library, can crash the process that has it
+    // loaded. That matters now a bulk run keeps LAPSE running for its whole length.
+    private static void PutInPlace(string staged, string destination)
+    {
+        try
+        {
+            File.Move(staged, destination, overwrite: true);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            // Windows won't replace an executable that's running.
+            throw new IOException(
+                $"Could not replace {Path.GetFileName(destination)}, probably because a sync is using it right now. "
+                + "Try again once nothing is syncing.",
+                ex);
+        }
+        finally
+        {
+            if (File.Exists(staged))
+            {
+                File.Delete(staged);
+            }
+        }
+    }
+
+    private static string Staging(string path)
+    {
+        return path + ".lapse-new";
     }
 
     /// <summary>
@@ -208,7 +354,8 @@ public class EngineInstaller
 
             try
             {
-                await DownloadToAsync(sidecar.Url, sidecarPath, engine, cancellationToken).ConfigureAwait(false);
+                await DownloadToAsync(sidecar.Url, Staging(sidecarPath), engine, cancellationToken).ConfigureAwait(false);
+                PutInPlace(Staging(sidecarPath), sidecarPath);
                 _logger.LogInformation("Installed {File} alongside {Engine}", sidecar.FileName, engine.Descriptor.DisplayName);
             }
             catch (Exception ex) when (ex is HttpRequestException or IOException)
@@ -219,9 +366,9 @@ public class EngineInstaller
                     sidecar.FileName,
                     engine.Descriptor.DisplayName);
 
-                if (File.Exists(sidecarPath))
+                if (File.Exists(Staging(sidecarPath)))
                 {
-                    File.Delete(sidecarPath);
+                    File.Delete(Staging(sidecarPath));
                 }
             }
         }
@@ -265,6 +412,7 @@ public class EngineInstaller
         CancellationToken cancellationToken)
     {
         var names = new List<string>();
+        var companions = new List<string>();
 
         // 0 = nothing yet, 1 = something named after the engine, 2 = the exact name. A tar
         // is read front to back, so a suffixed name is taken when it turns up and then
@@ -289,22 +437,39 @@ public class EngineInstaller
 
                 if (match > bestMatch)
                 {
-                    await entry.ExtractToFileAsync(targetPath, overwrite: true, cancellationToken).ConfigureAwait(false);
+                    await entry.ExtractToFileAsync(Staging(targetPath), overwrite: true, cancellationToken).ConfigureAwait(false);
                     bestMatch = match;
                     continue;
                 }
 
                 if (IsCompanion(name, download))
                 {
-                    await entry.ExtractToFileAsync(Path.Combine(engineFolder, name), overwrite: true, cancellationToken)
+                    var companionPath = Path.Combine(engineFolder, name);
+                    await entry.ExtractToFileAsync(Staging(companionPath), overwrite: true, cancellationToken)
                         .ConfigureAwait(false);
+                    companions.Add(companionPath);
                 }
             }
         }
 
         if (bestMatch == 0)
         {
+            foreach (var companion in companions)
+            {
+                File.Delete(Staging(companion));
+            }
+
             throw new IOException(BuildNotFoundMessage(engine, names));
+        }
+
+        // Only once the whole archive has come out, so a broken download leaves the
+        // working install as it was rather than half replaced.
+        MakeExecutable(Staging(targetPath));
+        PutInPlace(Staging(targetPath), targetPath);
+
+        foreach (var companion in companions)
+        {
+            PutInPlace(Staging(companion), companion);
         }
     }
 
@@ -335,11 +500,22 @@ public class EngineInstaller
             throw new IOException(BuildNotFoundMessage(engine, archive.Entries.Select(e => e.FullName)));
         }
 
-        entry.ExtractToFile(targetPath, overwrite: true);
+        entry.ExtractToFile(Staging(targetPath), overwrite: true);
 
+        var companions = new List<string>();
         foreach (var companion in archive.Entries.Where(e => IsCompanion(e.Name, download)))
         {
-            companion.ExtractToFile(Path.Combine(engineFolder, companion.Name), overwrite: true);
+            var companionPath = Path.Combine(engineFolder, companion.Name);
+            companion.ExtractToFile(Staging(companionPath), overwrite: true);
+            companions.Add(companionPath);
+        }
+
+        MakeExecutable(Staging(targetPath));
+        PutInPlace(Staging(targetPath), targetPath);
+
+        foreach (var companion in companions)
+        {
+            PutInPlace(Staging(companion), companion);
         }
     }
 

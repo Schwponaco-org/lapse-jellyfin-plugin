@@ -529,26 +529,23 @@ public class ReadableSubtitleService
             return;
         }
 
-        var history = plugin.Configuration.History;
-
-        history.Add(new SyncHistoryEntry
+        lock (Plugin.ConfigurationLock)
         {
-            ItemId = item.Id,
-            ItemName = item.Name ?? string.Empty,
-            Status = MovieSyncStatus.Synced,
-            OutputPath = result.OutputPath,
-            BackupPath = result.BackupPath,
-            WroteNewFile = !result.Replaced,
-            Detail = result.Replaced
-                ? $"Made readable in {result.FontName}, replacing the original"
-                : $"Wrote a readable copy in {result.FontName}"
-        });
+            SyncHistoryService.Append(plugin.Configuration, new SyncHistoryEntry
+            {
+                ItemId = item.Id,
+                ItemName = item.Name ?? string.Empty,
+                Status = MovieSyncStatus.Synced,
+                OutputPath = result.OutputPath,
+                InputPath = result.SourcePath,
+                BackupPath = result.BackupPath,
+                WroteNewFile = !result.Replaced,
+                Detail = result.Replaced
+                    ? $"Made readable in {result.FontName}, replacing the original"
+                    : $"Wrote a readable copy in {result.FontName}"
+            });
 
-        if (history.Count > PluginConfiguration.MaxHistoryEntries)
-        {
-            history.RemoveRange(0, history.Count - PluginConfiguration.MaxHistoryEntries);
+            plugin.SaveConfiguration();
         }
-
-        plugin.SaveConfiguration();
     }
 }

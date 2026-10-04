@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -75,9 +76,15 @@ public partial class SubtitleConverter
     /// </summary>
     public const string ReadableMarker = "; LAPSE-Readable: 1";
 
-    // 00:01:23,456 / 00:01:23.456 / 0:01:23.45 - every timestamp shape the text formats use.
-    [GeneratedRegex(@"(?<h>\d{1,3}):(?<m>\d{2}):(?<s>\d{2})[,.](?<f>\d{1,3})")]
+    // 00:01:23,456 / 00:01:23.456 / 01:23.456 / 0:01:23.45 - every timestamp shape the
+    // text formats use, including vtt's hourless one.
+    [GeneratedRegex(@"(?:(?<h>\d{1,3}):)?(?<m>\d{2}):(?<s>\d{2})[,.](?<f>\d{1,3})")]
     private static partial Regex TimestampRegex();
+
+    // Markup only vtt has: voice and class spans, ruby, language spans and the timestamps
+    // that reveal a line word by word. Any other format would show them as text.
+    [GeneratedRegex(@"</?(?:c|v|lang|ruby|rt)(?:[.\s][^>]*)?>|<(?:\d{1,3}:)?\d{2}:\d{2}\.\d{3}>")]
+    private static partial Regex VttOnlyTagRegex();
 
     // Anything in {curly braces} in an ass line is styling, not words.
     [GeneratedRegex(@"\{[^}]*\}")]
@@ -219,6 +226,11 @@ public partial class SubtitleConverter
 
             var text = await SubtitleEncoding.ReadAllTextAsync(readPath, cancellationToken).ConfigureAwait(false);
             var cues = Parse(text, readPath);
+
+            if (target != "vtt" && string.Equals(Path.GetExtension(readPath), ".vtt", StringComparison.OrdinalIgnoreCase))
+            {
+                CleanVttMarkup(cues);
+            }
 
             if (cues.Count == 0)
             {
@@ -506,13 +518,36 @@ public partial class SubtitleConverter
         return cues;
     }
 
+    // vtt escapes the characters html would read as markup, and keeps markup of its own
+    // that nothing else understands. Taking a cue out of vtt means undoing both.
+    private static void CleanVttMarkup(List<SubtitleCue> cues)
+    {
+        foreach (var cue in cues)
+        {
+            for (var i = 0; i < cue.Lines.Count; i++)
+            {
+                cue.Lines[i] = VttOnlyTagRegex().Replace(cue.Lines[i], string.Empty)
+                    .Replace("&nbsp;", "\u00A0", StringComparison.Ordinal)
+                    .Replace("&lrm;", "\u200E", StringComparison.Ordinal)
+                    .Replace("&rlm;", "\u200F", StringComparison.Ordinal)
+                    .Replace("&lt;", "<", StringComparison.Ordinal)
+                    .Replace("&gt;", ">", StringComparison.Ordinal)
+                    .Replace("&amp;", "&", StringComparison.Ordinal);
+            }
+
+            cue.Lines.RemoveAll(string.IsNullOrWhiteSpace);
+        }
+
+        cues.RemoveAll(c => c.Lines.Count == 0);
+    }
+
     private static TimeSpan ToTimeSpan(Match match)
     {
         var fraction = match.Groups["f"].Value;
 
         return new TimeSpan(
             0,
-            int.Parse(match.Groups["h"].Value, CultureInfo.InvariantCulture),
+            match.Groups["h"].Success ? int.Parse(match.Groups["h"].Value, CultureInfo.InvariantCulture) : 0,
             int.Parse(match.Groups["m"].Value, CultureInfo.InvariantCulture),
             int.Parse(match.Groups["s"].Value, CultureInfo.InvariantCulture),
             int.Parse(fraction.PadRight(3, '0'), CultureInfo.InvariantCulture));
@@ -522,6 +557,16 @@ public partial class SubtitleConverter
 
     private static string Write(List<SubtitleCue> cues, string format, SubtitleStyle? style)
     {
+        // ass keeps its events in whatever order, layers and all, and players sort them
+        // out. srt and vtt are read top to bottom, and plenty of players get a cue that
+        // comes before the one above it wrong, so those go out in time order. Stable, so
+        // two cues at the same moment keep the order they had.
+        if (format is not ("ass" or "ssa"))
+        {
+            var ordered = cues.OrderBy(c => c.Start).ToList();
+            cues = ordered;
+        }
+
         return format switch
         {
             "vtt" => WriteVtt(cues),
@@ -639,16 +684,13 @@ public partial class SubtitleConverter
 
     private static string FormatText(TimeSpan value, char separator = ',')
     {
-        return string.Create(
-            CultureInfo.InvariantCulture,
-            $"{(int)value.TotalHours:00}:{value.Minutes:00}:{value.Seconds:00}{separator}{value.Milliseconds:000}");
+        return SubtitleShifter.Format(value, separator.ToString(), 2, 3);
     }
 
-    // ass counts in centiseconds behind a single digit hour.
+    // ass counts in centiseconds behind a single digit hour, rounded to the nearest one
+    // rather than cut off, the same as the engine writes it.
     private static string FormatAss(TimeSpan value)
     {
-        return string.Create(
-            CultureInfo.InvariantCulture,
-            $"{(int)value.TotalHours:0}:{value.Minutes:00}:{value.Seconds:00}.{value.Milliseconds / 10:00}");
+        return SubtitleShifter.Format(value, ".", 1, 2);
     }
 }

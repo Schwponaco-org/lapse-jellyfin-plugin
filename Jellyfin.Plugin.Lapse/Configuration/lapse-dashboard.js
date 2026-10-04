@@ -29,6 +29,28 @@
     // The one way to get a low-confidence result written instead of skipped: turn on the
     // engine's own "sync even when unsure" and run it again. Offered right where the skip
     // happens, rather than leaving FORCE_HINT to describe where to go looking for it.
+    // Tests what's typed in, not only what's saved, so a key can be checked before it's
+    // relied on. Blank boxes fall back to the saved values on the server.
+    function testOpenSubtitles(view) {
+        var result = view.querySelector('#lapseOpenSubtitlesTestResult');
+        var button = view.querySelector('#btnTestOpenSubtitles');
+
+        result.textContent = 'Asking OpenSubtitles...';
+        button.disabled = true;
+
+        lapsePost('Lapse/OpenSubtitles/Test', {
+            ApiKey: view.querySelector('#lapseOpenSubtitlesApiKey').value || null,
+            Username: view.querySelector('#lapseOpenSubtitlesUsername').value || null,
+            Password: view.querySelector('#lapseOpenSubtitlesPassword').value || null
+        }).then(function (status) {
+            result.textContent = (status && status.Message) || 'No answer.';
+        }).catch(function (err) {
+            result.textContent = 'Could not test it: ' + err.message;
+        }).then(function () {
+            button.disabled = false;
+        });
+    }
+
     function confirmForceRetry(message, engineId, view, retry) {
         if (!engineId) {
             Dashboard.alert(message + '\n\n' + FORCE_HINT);
@@ -546,14 +568,16 @@
                 var revert = entry.CanRevert
                     ? '<button is="emby-button" type="button" class="raised lapseSmallButton lapseBtnRevert"' +
                       ' data-id="' + escapeHtml(entry.Id) + '">Undo</button>'
-                    : (entry.Reverted ? '<span class="lapseActivityUndone">undone</span>' : '');
+                    : entry.Reverted ? '<span class="lapseActivityUndone">undone</span>'
+                    : entry.Superseded ? '<span class="lapseActivityUndone" title="A later run wrote the same file. Undo that one instead.">replaced</span>'
+                    : '';
 
                 return '<div class="lapseActivityRow">' +
                     '<span class="lapseStatusPill ' + statusPillClass(entry.Status) + '">' +
                     escapeHtml(shortStatus(entry.Status)) + '</span>' +
                     '<span class="lapseActivityName" title="' + escapeHtml(entry.OutputPath || '') + '">' +
                     escapeHtml(entry.Name) + '</span>' +
-                    '<span class="lapseActivityDetail">' + escapeHtml(entry.Detail || '') + '</span>' +
+                    '<span class="lapseActivityDetail" title="' + escapeHtml(entry.Detail || '') + '">' + escapeHtml(entry.Detail || '') + '</span>' +
                     '<span class="lapseActivityWhen">' + escapeHtml(timeAgo(entry.WhenUtc)) + '</span>' +
                     '<span class="lapseActivityAction">' + revert + '</span>' +
                     '</div>';
@@ -1924,6 +1948,28 @@
             return;
         }
 
+        if (result.CandidateCount > 0) {
+            Dashboard.alert(name + ': LAPSE was not sure, so the other engines had a go too. ' + result.CandidateCount +
+                ' answers are waiting as extra subtitle tracks. Play the item, try them, and keep the one that lines up.');
+            return;
+        }
+
+        if (result.Forced && (result.Skipped || result.Unconfirmed)) {
+            Dashboard.alert(name + ': this subtitle has too few lines for LAPSE to check its answer, so the original was left alone' +
+                (result.Unconfirmed && result.OutputPath ? ' and the forced guess was written to ' + result.OutputPath : '') +
+                '.\n\nA short track like this is best lined up against the full subtitle, with Sync Subtitles to Reference.');
+            return;
+        }
+
+        // "nothing" means the subtitle doesn't belong to this video at all. Forcing it
+        // through would only write a wrong subtitle, so that offer isn't made for it.
+        if (result.Verdict === 'nothing' && (result.Skipped || result.Unconfirmed)) {
+            Dashboard.alert(name + ': LAPSE could not match this subtitle to the audio at all (' + describeResult(result) + ').\n\n' +
+                'That nearly always means it was made for a different release or a different film. The original was left alone' +
+                (result.Unconfirmed && result.OutputPath ? ', and its guess was written to ' + result.OutputPath : '') + '.');
+            return;
+        }
+
         if (result.Skipped) {
             confirmForceRetry(
                 name + ': left the original alone (' + describeResult(result) + ').\n\n' +
@@ -2821,6 +2867,7 @@
         view.querySelector('#lapseAutoTranslateEnabled').checked = settings.AutoTranslateEnabled === true;
         view.querySelector('#lapseAutoTranslateLanguage').value = settings.AutoTranslateLanguage || '';
         view.querySelector('#lapseAutoTranslateSkipExisting').checked = settings.AutoTranslateSkipExisting !== false;
+        view.querySelector('#lapseSkipSyncedInUnattendedRuns').checked = settings.SkipSyncedInUnattendedRuns !== false;
 
         updateAutomationHint(view);
     }
@@ -3538,6 +3585,7 @@
             AutoTranslateEnabled: view.querySelector('#lapseAutoTranslateEnabled').checked,
             AutoTranslateLanguage: view.querySelector('#lapseAutoTranslateLanguage').value.trim() || null,
             AutoTranslateSkipExisting: view.querySelector('#lapseAutoTranslateSkipExisting').checked,
+            SkipSyncedInUnattendedRuns: view.querySelector('#lapseSkipSyncedInUnattendedRuns').checked,
             SubtitleAccessUserIds: selectedAccessUserIds(view),
             SidecarSuffix: view.querySelector('#lapseSidecarSuffix').value,
             LowConfidenceAction: selectedRadio(view, 'lapseLowConfidence', 'Sidecar'),
@@ -3859,6 +3907,9 @@
         });
         view.querySelector('#btnSaveLabs').addEventListener('click', function () {
             saveSettings(view, 'Experimental settings saved.');
+        });
+        view.querySelector('#btnTestOpenSubtitles').addEventListener('click', function () {
+            testOpenSubtitles(view);
         });
         view.querySelector('#btnSaveMultiEngine').addEventListener('click', function () {
             saveSettings(view, 'Multi engine settings saved.');

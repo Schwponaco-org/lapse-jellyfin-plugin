@@ -25,9 +25,11 @@ namespace Jellyfin.Plugin.Lapse.Engines;
 public static class EngineFormats
 {
     /// <summary>
-    /// What LAPSE 2.2 reads, taken from the subtitle_formats array in its main.cpp. It
+    /// What LAPSE 2.2.4 reads, taken from the subtitle_formats array in its main.cpp. It
     /// writes back in whatever format it read, so nothing on this list needs converting
-    /// on the way in or on the way out.
+    /// on the way in or on the way out. 2.2.4 also stopped caring about the case of the
+    /// extension, so Movie.EN.SRT is read like Movie.en.srt, and took .sami as the SAMI
+    /// files it already read as .smi.
     ///
     /// Three of those formats share the .sub extension - MicroDVD, MPL2 and SubViewer 2 -
     /// and the extension says nothing about which one a file is, so the engine reads the
@@ -45,7 +47,7 @@ public static class EngineFormats
     /// </summary>
     public static readonly string[] Lapse =
     {
-        ".srt", ".ass", ".ssa", ".vtt", ".sub", ".mpl2", ".sup", ".sbv", ".idx", ".smi", ".ttml", ".dfxp"
+        ".srt", ".ass", ".ssa", ".vtt", ".sub", ".mpl2", ".sup", ".sbv", ".idx", ".smi", ".sami", ".ttml", ".dfxp"
     };
 
     /// <summary>
