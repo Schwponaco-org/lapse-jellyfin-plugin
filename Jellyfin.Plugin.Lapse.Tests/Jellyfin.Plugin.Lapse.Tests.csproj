@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <!-- Lets the tests run on a newer .NET runtime when 9 isn't installed. -->
+    <RollForward>Major</RollForward>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+    <!-- The plugin leaves these out of its own output because Jellyfin ships them.
+         The tests run outside Jellyfin, so they need them copied in. -->
+    <PackageReference Include="Jellyfin.Controller" Version="10.11.*-*" />
+    <PackageReference Include="Jellyfin.Model" Version="10.11.*-*" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Jellyfin.Plugin.Lapse\Jellyfin.Plugin.Lapse.csproj" />
+  </ItemGroup>
+
+</Project>
