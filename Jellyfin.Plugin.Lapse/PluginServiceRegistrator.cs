@@ -25,9 +25,10 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
     public void RegisterServices(IServiceCollection serviceCollection, IServerApplicationHost applicationHost)
     {
         // GitHub wants a User-Agent on requests, plain HttpClient doesn't send one by default.
+        var version = typeof(PluginServiceRegistrator).Assembly.GetName().Version?.ToString(3) ?? "1.0.0";
         serviceCollection.AddHttpClient("Lapse", c =>
         {
-            c.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("Jellyfin-Plugin-Lapse", "1.0"));
+            c.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("Jellyfin-Plugin-Lapse", version));
         });
 
         serviceCollection.AddSingleton<EngineRegistry>();

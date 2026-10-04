@@ -256,9 +256,11 @@ public class MultiEngineSyncService
         lapseResult.BackupPath = null;
         lapseResult.CandidateCount = set.Candidates.Count;
 
-        var config = Plugin.Instance!.Configuration;
-        config.PendingCandidates.Add(set);
-        Plugin.Instance.SaveConfiguration();
+        lock (Plugin.ConfigurationLock)
+        {
+            Plugin.Instance!.Configuration.PendingCandidates.Add(set);
+            Plugin.Instance.SaveConfiguration();
+        }
 
         _logger.LogInformation(
             "Multi engine sync left {Count} answers to choose between for {Subtitle}",
@@ -284,9 +286,12 @@ public class MultiEngineSyncService
             return Array.Empty<SyncCandidateSet>();
         }
 
-        return config.PendingCandidates
-            .OrderByDescending(s => s.CreatedUtc)
-            .ToList();
+        lock (Plugin.ConfigurationLock)
+        {
+            return config.PendingCandidates
+                .OrderByDescending(s => s.CreatedUtc)
+                .ToList();
+        }
     }
 
     /// <summary>
@@ -302,7 +307,10 @@ public class MultiEngineSyncService
             return Array.Empty<SyncCandidateSet>();
         }
 
-        return config.PendingCandidates.FindAll(s => s.ItemId.Equals(itemId));
+        lock (Plugin.ConfigurationLock)
+        {
+            return config.PendingCandidates.FindAll(s => s.ItemId.Equals(itemId));
+        }
     }
 
     /// <summary>
@@ -321,6 +329,20 @@ public class MultiEngineSyncService
         "CA3003:Review code for file path injection vulnerabilities",
         Justification = "The paths are the plugin's own record of files it wrote itself. The request only picks one of them out of that list; nothing from the request reaches the filesystem.")]
     public CandidateDecision Keep(Guid itemId, string candidatePath)
+    {
+        // Two presses on Keep from two devices would otherwise both find the set, and the
+        // second would move a file the first had already moved.
+        lock (Plugin.ConfigurationLock)
+        {
+            return KeepLocked(itemId, candidatePath);
+        }
+    }
+
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Security",
+        "CA3003:Review code for file path injection vulnerabilities",
+        Justification = "The paths are the plugin's own record of files it wrote itself. The request only picks one of them out of that list; nothing from the request reaches the filesystem.")]
+    private CandidateDecision KeepLocked(Guid itemId, string candidatePath)
     {
         var config = Plugin.Instance!.Configuration;
 
@@ -409,7 +431,9 @@ public class MultiEngineSyncService
                 OutputPath = destination,
                 BackupPath = backupPath
             },
-            new[] { set.OriginalPath });
+            string.Equals(set.OriginalPath, destination, StringComparison.Ordinal)
+                ? new[] { set.OriginalPath }
+                : new[] { set.OriginalPath, destination });
 
         RequestRefresh(itemId);
 
@@ -490,6 +514,18 @@ public class MultiEngineSyncService
         "CA3003:Review code for file path injection vulnerabilities",
         Justification = "Only ever deletes paths the plugin recorded when it wrote those files itself.")]
     private int DiscardFor(Guid itemId, string? originalPath, bool save)
+    {
+        lock (Plugin.ConfigurationLock)
+        {
+            return DiscardForLocked(itemId, originalPath, save);
+        }
+    }
+
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Security",
+        "CA3003:Review code for file path injection vulnerabilities",
+        Justification = "Only ever deletes paths the plugin recorded when it wrote those files itself.")]
+    private int DiscardForLocked(Guid itemId, string? originalPath, bool save)
     {
         var config = Plugin.Instance!.Configuration;
 

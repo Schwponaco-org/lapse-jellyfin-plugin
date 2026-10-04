@@ -52,7 +52,17 @@ public class SyncQueueManager : IDisposable
     // during the nightly run had both of them driving engines over the same library, and
     // potentially over the same file.
     private readonly SemaphoreSlim _runGate = new(1, 1);
-    private Task? _worker;
+
+    // Set and cleared under _lock. Task.IsCompleted can't be used for this: the loop
+    // decides to stop inside the lock, but its task only completes after the lock is
+    // released, and an item enqueued in that gap would see a worker that looks alive,
+    // not start another, and sit in the queue until something else came along.
+    private bool _workerRunning;
+
+    // One warm LAPSE process for the job that's running, so a library's worth of files
+    // doesn't pay for loading the voice detector once per file. Only touched while
+    // _runGate is held, and closed when the queue runs dry.
+    private EngineBatchSession? _batch;
     private string? _jobName;
     private string? _unitName;
     private string? _referenceKey;
@@ -323,25 +333,32 @@ public class SyncQueueManager : IDisposable
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, JobToken);
         cancellationToken = linked.Token;
 
-        for (var i = 0; i < items.Count; i++)
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            var item = items[i];
-            lock (_lock)
+            for (var i = 0; i < items.Count; i++)
             {
-                if (_items.All(existing => existing.ItemId != item.Id))
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var item = items[i];
+                lock (_lock)
                 {
-                    _items.Add(new QueueItem { ItemId = item.Id, Name = DescribeItem(item) });
+                    if (_items.All(existing => existing.ItemId != item.Id))
+                    {
+                        _items.Add(new QueueItem { ItemId = item.Id, Name = DescribeItem(item) });
+                    }
                 }
-            }
 
-            if (await ProcessOneAsync(item.Id, cancellationToken).ConfigureAwait(false))
-            {
-                succeeded++;
-            }
+                if (await ProcessOneAsync(item.Id, cancellationToken).ConfigureAwait(false))
+                {
+                    succeeded++;
+                }
 
-            progress?.Report((i + 1) * 100.0 / items.Count);
+                progress?.Report((i + 1) * 100.0 / items.Count);
+            }
+        }
+        finally
+        {
+            await CloseBatchSessionAsync().ConfigureAwait(false);
         }
 
         return succeeded;
@@ -370,25 +387,40 @@ public class SyncQueueManager : IDisposable
         }
 
         var threshold = Plugin.Instance?.Configuration.ConfidenceSigma ?? LapseEngine.DefaultConfidenceSigma;
-
-        // The engine's own words for what it thought of the answer. "nothing" means the
-        // audio didn't back it up at all, which nearly always means the subtitle isn't for
-        // this video; "unsure" means it's probably right but not by enough to overwrite.
-        var verdict = result.Verdict switch
-        {
-            "nothing" => "the audio doesn't back that answer up",
-            "unsure" => "it wasn't sure enough to touch the original",
-            _ => "the engine wasn't confident"
-        };
-
         var measured = result.Sigma.HasValue
-            ? $" (scored {result.Sigma.Value:0.#} against a threshold of {threshold:0.#})"
+            ? $" It scored {result.Sigma.Value.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)}, "
+                + $"and needs {threshold.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)} to be sure."
             : string.Empty;
+
+        var where = result.Unconfirmed && result.OutputPath is not null
+            ? $" Its answer was written beside the original as {Path.GetFileName(result.OutputPath)} for you to check, and the original was left alone."
+            : " The original was left alone.";
+
+        // Only got through on a second go with --force, which takes the engine's word with
+        // nothing to check it against.
+        if (result.Forced)
+        {
+            return "This subtitle has too few lines for LAPSE to check its own answer, so it was only timed with --force." + where
+                + " A short track like a forced one is best lined up against the full subtitle in the same language, "
+                + "with Sync Subtitles to Reference.";
+        }
+
+        // "nothing" is the engine saying the audio doesn't back any answer up, which
+        // nearly always means the subtitle is for another release or another film. Telling
+        // someone to force that through would write a wrong subtitle over a wrong subtitle,
+        // so this one points at getting the right file instead.
+        if (string.Equals(result.Verdict, "nothing", StringComparison.OrdinalIgnoreCase))
+        {
+            return "LAPSE couldn't match this subtitle to the audio at all, which nearly always means it was made "
+                + "for a different release or a different film." + measured + where
+                + " A subtitle made for this exact release is the fix; forcing this one through won't be.";
+        }
 
         // Anyone reading this has already decided the engine is being too careful, so the
         // way to overrule it goes in the message rather than being left to be found.
-        return $"Left the original alone: {verdict}{measured}. To sync it anyway, turn on "
-            + "\"Sync even when the engine is unsure\" under Settings, Engines, Advanced.";
+        return "LAPSE found an answer but wasn't sure enough of it to replace the subtitle." + measured + where
+            + " If you know the subtitle belongs to this video, turn on \"Sync even when the engine is unsure\" "
+            + "under Settings, Engines, Advanced.";
     }
 
     /// <summary>
@@ -455,16 +487,37 @@ public class SyncQueueManager : IDisposable
     {
         lock (_lock)
         {
-            if (_worker is not null && !_worker.IsCompleted)
+            if (_workerRunning)
             {
                 return;
             }
 
-            _worker = Task.Run(WorkerLoopAsync);
+            _workerRunning = true;
+            _ = Task.Run(WorkerLoopAsync);
         }
     }
 
     private async Task WorkerLoopAsync()
+    {
+        try
+        {
+            await DrainQueueAsync().ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            // ProcessOneAsync keeps everything it can in, so this is the last line. A
+            // worker that dies without saying so leaves the flag set and the queue jammed
+            // until a restart, which is worse than the item that broke it.
+            _logger.LogError(ex, "The sync queue stopped unexpectedly");
+
+            lock (_lock)
+            {
+                _workerRunning = false;
+            }
+        }
+    }
+
+    private async Task DrainQueueAsync()
     {
         while (true)
         {
@@ -473,7 +526,8 @@ public class SyncQueueManager : IDisposable
             {
                 if (_pending.Count == 0)
                 {
-                    return;
+                    _workerRunning = false;
+                    break;
                 }
 
                 itemId = _pending.Dequeue();
@@ -490,6 +544,26 @@ public class SyncQueueManager : IDisposable
             }
 
             await ProcessOneAsync(itemId, CancellationToken.None).ConfigureAwait(false);
+        }
+
+        await CloseBatchSessionAsync().ConfigureAwait(false);
+    }
+
+    // The queue has run dry, so the warm engine process has nothing left to do. Taken
+    // under the run gate so it can't be closed underneath an item that's using it; if
+    // another run has started meanwhile, the next item it syncs simply starts a new one.
+    private async Task CloseBatchSessionAsync()
+    {
+        await _runGate.WaitAsync().ConfigureAwait(false);
+
+        try
+        {
+            _batch?.Dispose();
+            _batch = null;
+        }
+        finally
+        {
+            _runGate.Release();
         }
     }
 
@@ -508,6 +582,8 @@ public class SyncQueueManager : IDisposable
     {
         if (disposing)
         {
+            _batch?.Dispose();
+            _batch = null;
             _runGate.Dispose();
             _jobCancellation.Dispose();
         }
@@ -615,11 +691,22 @@ public class SyncQueueManager : IDisposable
         var subtitles = _subtitleLocator.GetExternalSubtitles(item)
             .FindAll(s => !s.IsEmbedded && s.Supported && !SubtitleExtractor.IsUntouchedExtraction(item, s.Path));
 
+        // A sidecar an earlier sync wrote is rewritten when its original is synced, so it
+        // isn't synced again as a subtitle of its own.
+        var allPaths = subtitles.ConvertAll(s => s.Path);
+        subtitles.RemoveAll(s => EngineRunner.IsSidecarOfAnother(s.Path, allPaths));
+
         if (subtitles.Count == 0)
         {
-            SaveRecord(itemId, MovieSyncStatus.Failed, "No external subtitle found");
-            SetItemStatus(itemId, QueueItemStatus.Failed);
-            return false;
+            // Nothing went wrong, there's just nothing here an unattended run touches.
+            // Calling that a failure filled the list with red for every film whose only
+            // subtitles are inside the video.
+            SaveRecord(
+                itemId,
+                MovieSyncStatus.Pending,
+                "No subtitle file to sync. Runs nobody is watching leave the tracks inside the video alone; sync one by hand to bring it out as a file.");
+            SetItemStatus(itemId, QueueItemStatus.Done);
+            return true;
         }
 
         string? lastError = null;
@@ -657,6 +744,25 @@ public class SyncQueueManager : IDisposable
 
         var action = Plugin.Instance?.Configuration.AutomationAction ?? AutomationAction.Sync;
         var converted = 0;
+
+        // A subtitle that was synced and hasn't been written to since gets the same answer
+        // again, so unattended runs leave it alone. A reference job is someone asking for
+        // a whole series to be lined up against one track, and does every episode.
+        if (referenceKey is null
+            && action != AutomationAction.Convert
+            && Plugin.Instance?.Configuration.SkipSyncedInUnattendedRuns == true)
+        {
+            var record = FindRecord(itemId);
+            var before = subtitles.Count;
+            subtitles.RemoveAll(s => record is not null && IsStillSynced(record, s.Path));
+
+            if (subtitles.Count == 0)
+            {
+                _logger.LogDebug("{Item} is already synced, leaving its {Count} subtitles alone", item.Name, before);
+                SetItemStatus(itemId, QueueItemStatus.Done);
+                return true;
+            }
+        }
 
         foreach (var subtitle in subtitles)
         {
@@ -701,8 +807,12 @@ public class SyncQueueManager : IDisposable
 
             var referencePath = reference?.Path ?? item.Path;
 
+            // Created here rather than up front so a job that never reaches the engine -
+            // nothing but conversions, or no subtitles anywhere - never starts one.
+            _batch ??= _runner.CreateBatchSession();
+
             var result = await _runner
-                .RunAsync(engine, referencePath, workPath, mode, penalty, outputMode: null, destinationOverride: null, outputFormat: null, cancellationToken: cancellationToken)
+                .RunAsync(engine, referencePath, workPath, mode, penalty, batch: _batch, cancellationToken: cancellationToken)
                 .ConfigureAwait(false);
             lastResult = result;
 
@@ -737,12 +847,26 @@ public class SyncQueueManager : IDisposable
                     doubted = true;
                 }
             }
+            else if (result.Unconfirmed)
+            {
+                // Written, but beside the original because the engine had its doubts.
+                // That file is waiting for someone to look at it, which is not the same
+                // thing as the subtitle being synced.
+                lastSkip = DescribeSkip(result);
+                doubted = true;
+            }
             else
             {
                 // Only a subtitle we actually rewrote counts. A failure and a deliberate
                 // low-confidence skip both leave the file as it was, so neither of them
-                // should make the item look any more synced than it was before.
+                // should make the item look any more synced than it was before. A new file
+                // written beside it is synced too, by definition, and counts with it.
                 syncedPaths.Add(workPath);
+
+                if (result.OutputPath is { } written && !string.Equals(written, workPath, StringComparison.Ordinal))
+                {
+                    syncedPaths.Add(written);
+                }
 
                 // Translate what the sync produced rather than what it read, so the
                 // translation carries the corrected timings.
@@ -1010,11 +1134,12 @@ public class SyncQueueManager : IDisposable
 
                     if (existing is null)
                     {
-                        record.SyncedSubtitles.Add(new SubtitleSyncRecord { Path = path, LastSyncUtc = DateTime.UtcNow });
+                        record.SyncedSubtitles.Add(new SubtitleSyncRecord { Path = path, LastSyncUtc = DateTime.UtcNow, FileWriteUtc = WriteTimeOf(path) });
                     }
                     else
                     {
                         existing.LastSyncUtc = DateTime.UtcNow;
+                        existing.FileWriteUtc = WriteTimeOf(path);
                     }
                 }
             }
@@ -1028,43 +1153,129 @@ public class SyncQueueManager : IDisposable
             record.Slope = result?.Slope;
             record.Intercept = result?.Intercept;
 
-            AddHistory(plugin, itemId, status, error, result);
+            AddHistory(plugin, itemId, status, result);
 
             plugin.SaveConfiguration();
+        }
+    }
+
+    /// <summary>
+    /// Says whether a subtitle is still the one that was synced: the record has it, and
+    /// the file's write time is the one it had after the sync. A subtitle Bazarr or a
+    /// person replaced under the same name is a new subtitle, and so is an older copy put
+    /// back from a backup. Records from before the write time was kept fall back to
+    /// "not written since the sync", with five minutes of slack for a network share whose
+    /// clock runs a little ahead of the server's.
+    /// </summary>
+    /// <param name="record">The item's record.</param>
+    /// <param name="path">The subtitle.</param>
+    /// <returns>True when it's synced and untouched since.</returns>
+    public static bool IsStillSynced(MovieSyncRecord record, string path)
+    {
+        var synced = record.SyncedSubtitles.FirstOrDefault(s => string.Equals(s.Path, path, StringComparison.Ordinal));
+        if (synced is null)
+        {
+            return false;
+        }
+
+        if (SubtitleExtractor.IsEmbedded(path))
+        {
+            return true;
+        }
+
+        var written = File.GetLastWriteTimeUtc(path);
+
+        // Both times come off the same file system, so they match exactly unless the file
+        // changed. The second of slack is for file systems that keep coarse times.
+        return synced.FileWriteUtc is { } recorded
+            ? Math.Abs((written - recorded).TotalSeconds) < 1
+            : written <= synced.LastSyncUtc.AddMinutes(5);
+    }
+
+    private static DateTime? WriteTimeOf(string path)
+    {
+        try
+        {
+            return File.Exists(path) ? File.GetLastWriteTimeUtc(path) : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    private static MovieSyncRecord? FindRecord(Guid itemId)
+    {
+        var plugin = Plugin.Instance;
+        if (plugin is null)
+        {
+            return null;
+        }
+
+        lock (Plugin.ConfigurationLock)
+        {
+            return plugin.Configuration.MovieRecords.FirstOrDefault(r => r.ItemId == itemId);
+        }
+    }
+
+    /// <summary>
+    /// Moves a synced subtitle's sync time up to now, when LAPSE itself has just written
+    /// to it again, so the status list doesn't take the newer file for a replaced one. A
+    /// file that isn't recorded as synced is left as it is.
+    /// </summary>
+    /// <param name="itemId">The item.</param>
+    /// <param name="path">The subtitle file that was written.</param>
+    public static void TouchSyncedSubtitle(Guid itemId, string? path)
+    {
+        var plugin = Plugin.Instance;
+        if (plugin is null || string.IsNullOrEmpty(path))
+        {
+            return;
+        }
+
+        lock (Plugin.ConfigurationLock)
+        {
+            var synced = plugin.Configuration.MovieRecords
+                .FirstOrDefault(r => r.ItemId == itemId)?
+                .SyncedSubtitles.FirstOrDefault(s => string.Equals(s.Path, path, StringComparison.Ordinal));
+
+            if (synced is not null)
+            {
+                synced.LastSyncUtc = DateTime.UtcNow;
+                synced.FileWriteUtc = WriteTimeOf(path);
+                plugin.SaveConfiguration();
+            }
         }
     }
 
     // One line per file the plugin actually wrote, so it can be put back. A run that
     // deliberately wrote nothing (low confidence, or a failure) has nothing to undo and
     // doesn't get an entry - the item record already carries the reason.
-    private static void AddHistory(Plugin plugin, Guid itemId, MovieSyncStatus status, string? error, SyncResult? result)
+    private static void AddHistory(Plugin plugin, Guid itemId, MovieSyncStatus status, SyncResult? result)
     {
         if (result is null || !result.Success || result.Skipped || string.IsNullOrEmpty(result.OutputPath))
         {
             return;
         }
 
-        var history = plugin.Configuration.History;
-
-        history.Add(new SyncHistoryEntry
+        SyncHistoryService.Append(plugin.Configuration, new SyncHistoryEntry
         {
             ItemId = itemId,
             Status = status,
             EngineId = result.EngineId,
             OutputPath = result.OutputPath,
+            InputPath = result.InputPath,
             BackupPath = result.BackupPath,
 
             // Nothing was replaced, so undoing this means taking away the file it added
             // rather than restoring anything over the top of it.
             WroteNewFile = result.BackupPath is null
                 && !string.Equals(result.OutputPath, result.InputPath, StringComparison.Ordinal),
-            Detail = error ?? DescribeForHistory(result)
-        });
 
-        if (history.Count > PluginConfiguration.MaxHistoryEntries)
-        {
-            history.RemoveRange(0, history.Count - PluginConfiguration.MaxHistoryEntries);
-        }
+            // The short version. The item's own record carries the full explanation, and
+            // a paragraph here pushed the item's name off its row in the activity list.
+            Detail = DescribeForHistory(result)
+        });
     }
 
     private static string DescribeForHistory(SyncResult result)
@@ -1084,6 +1295,11 @@ public class SyncQueueManager : IDisposable
         if (result.Verdict is not null)
         {
             parts.Add(result.Verdict);
+        }
+
+        if (result.Unconfirmed)
+        {
+            parts.Add("written beside the original to check");
         }
 
         return parts.Count == 0 ? "synced" : string.Join(", ", parts);

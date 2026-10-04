@@ -60,6 +60,14 @@ public class EngineRunOptions
     public bool ForceAnyway { get; set; }
 
     /// <summary>
+    /// Gets or sets a value indicating whether the engine has to listen to the audio
+    /// rather than line up against a subtitle track inside the video. Set when the
+    /// subtitle being synced was taken out of that same video: lined up against itself,
+    /// it always comes back "already in sync", however far out it is.
+    /// </summary>
+    public bool IgnoreEmbedded { get; set; }
+
+    /// <summary>
     /// Gets or sets this engine's advanced parameters, already merged with the engine's
     /// own defaults.
     /// </summary>

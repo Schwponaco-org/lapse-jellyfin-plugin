@@ -56,6 +56,12 @@ public class RecentActivityEntry
     /// Gets or sets a value indicating whether undoing this would still do something.
     /// </summary>
     public bool CanRevert { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether a later run wrote the same file, which is
+    /// why this one can no longer be undone on its own.
+    /// </summary>
+    public bool Superseded { get; set; }
 }
 
 /// <summary>

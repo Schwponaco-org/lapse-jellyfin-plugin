@@ -146,6 +146,49 @@ public class SubtitleLanguages
         return !string.IsNullOrWhiteSpace(token) && Find(token.Trim()) is not null;
     }
 
+    /// <summary>
+    /// Turns a language however it was typed - "en", "eng", "English", "pt_BR" - into the
+    /// code OpenSubtitles files subtitles under. That's the two letter code, except for
+    /// the few languages it splits by region: Portuguese and Chinese.
+    /// </summary>
+    /// <param name="tag">The language as typed.</param>
+    /// <returns>The OpenSubtitles code, or null when it isn't a language.</returns>
+    public string? ToOpenSubtitlesCode(string? tag)
+    {
+        var normalized = tag?.Trim().Replace('_', '-').ToLowerInvariant();
+        if (string.IsNullOrEmpty(normalized))
+        {
+            return null;
+        }
+
+        switch (normalized)
+        {
+            case "pt" or "pt-pt" or "por" or "portuguese":
+                return "pt-pt";
+            case "pt-br" or "pob" or "brazilian portuguese" or "portuguese (brazil)":
+                return "pt-br";
+            case "zh" or "zh-cn" or "zh-hans" or "chi" or "zho" or "chinese":
+                return "zh-cn";
+            case "zh-tw" or "zh-hant" or "zh-hk":
+                return "zh-tw";
+            default:
+                break;
+        }
+
+        var culture = Find(normalized);
+        var two = culture?.TwoLetterISOLanguageName?.ToLowerInvariant();
+
+        if (!string.IsNullOrEmpty(two))
+        {
+            return two == "pt" ? "pt-pt" : two;
+        }
+
+        // Not in Jellyfin's table, but already shaped like a code: trust it.
+        return normalized.Length == 2 && char.IsAsciiLetter(normalized[0]) && char.IsAsciiLetter(normalized[1])
+            ? normalized
+            : null;
+    }
+
     private SubtitleLanguageKey ResolveUncached(string tag)
     {
         // pt_BR turns up as often as pt-BR.

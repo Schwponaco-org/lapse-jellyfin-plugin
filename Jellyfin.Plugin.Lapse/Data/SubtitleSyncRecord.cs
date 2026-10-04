@@ -25,4 +25,12 @@ public class SubtitleSyncRecord
     /// Gets or sets when it was synced.
     /// </summary>
     public DateTime LastSyncUtc { get; set; }
+
+    /// <summary>
+    /// Gets or sets the file's own last write time once the sync was done with it. Any
+    /// other time later on, newer or older, means the file was replaced: by Bazarr, by a
+    /// person, or by a restore that kept the old file's time. Null on records from before
+    /// this was kept, which fall back to comparing with <see cref="LastSyncUtc"/>.
+    /// </summary>
+    public DateTime? FileWriteUtc { get; set; }
 }

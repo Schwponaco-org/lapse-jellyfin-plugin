@@ -60,18 +60,13 @@ public class LibrarySyncTask : IScheduledTask, IConfigurableScheduledTask
     /// <inheritdoc />
     public IEnumerable<TaskTriggerInfo> GetDefaultTriggers()
     {
-        // Per-library schedules are handled separately by LibraryScheduleService, because
-        // Jellyfin triggers belong to the task rather than to a library. This one is the
-        // "everything, once a day" default, and it can be retimed or removed in the
-        // Scheduled Tasks page like any other.
-        return new[]
-        {
-            new TaskTriggerInfo
-            {
-                Type = TaskTriggerInfoType.DailyTrigger,
-                TimeOfDayTicks = TimeSpan.FromHours(3).Ticks
-            }
-        };
+        // No schedule of its own. This used to run every night at 03:00 over every library
+        // that was turned on, which on a fresh install meant rewriting the whole library
+        // the first night without anybody asking, against everything else in LAPSE that
+        // stays off until someone turns it on. A library that should be synced on a timer
+        // gets that from its own schedule on the dashboard, and anyone who wants this one
+        // on a timer can add one under Scheduled Tasks.
+        return Array.Empty<TaskTriggerInfo>();
     }
 
     /// <inheritdoc />

@@ -48,13 +48,38 @@ public static class SubtitleFileLock
         "Security",
         "CA3003:Review code for file path injection vulnerabilities",
         Justification = "Callers pass a path they already validated against the library, or one derived from it with a fixed suffix.")]
-    public static async Task WriteAllLinesAsync(string path, IEnumerable<string> lines, CancellationToken cancellationToken = default)
+    public static Task WriteAllLinesAsync(string path, IEnumerable<string> lines, CancellationToken cancellationToken = default)
+    {
+        var document = new SubtitleDocument(Array.Empty<string>(), SubtitleEncoding.Utf8NoBom, Environment.NewLine, true);
+        return WriteBytesAsync(path, SubtitleEncoding.Encode(document, new List<string>(lines)), cancellationToken);
+    }
+
+    /// <summary>
+    /// Writes edited lines back the way the file they came from was written: same
+    /// encoding, same byte order mark, same line endings. Goes through a temporary file
+    /// the same way <see cref="WriteAllLinesAsync"/> does.
+    /// </summary>
+    /// <param name="path">The file to write.</param>
+    /// <param name="document">What the source was read as.</param>
+    /// <param name="lines">The edited lines.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Task.</returns>
+    public static Task WriteDocumentAsync(string path, SubtitleDocument document, IReadOnlyList<string> lines, CancellationToken cancellationToken = default)
+    {
+        return WriteBytesAsync(path, SubtitleEncoding.Encode(document, lines), cancellationToken);
+    }
+
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Security",
+        "CA3003:Review code for file path injection vulnerabilities",
+        Justification = "Callers pass a path they already validated against the library, or one derived from it with a fixed suffix.")]
+    private static async Task WriteBytesAsync(string path, byte[] bytes, CancellationToken cancellationToken)
     {
         var temp = path + ".lapse-write-" + Guid.NewGuid().ToString("N")[..8];
 
         try
         {
-            await File.WriteAllLinesAsync(temp, lines, SubtitleEncoding.Utf8NoBom, cancellationToken).ConfigureAwait(false);
+            await File.WriteAllBytesAsync(temp, bytes, cancellationToken).ConfigureAwait(false);
             File.Move(temp, path, overwrite: true);
         }
         finally

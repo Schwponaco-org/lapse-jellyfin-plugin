@@ -61,7 +61,7 @@ public class PluginConfiguration : BasePluginConfiguration
     /// <summary>
     /// Gets or sets where synced subtitles get written, and whether the original is kept.
     /// </summary>
-    public OutputMode OutputMode { get; set; } = OutputMode.OverwriteWithBackup;
+    public OutputMode OutputMode { get; set; } = OutputMode.SidecarOnly;
 
     /// <summary>
     /// Gets or sets what gets inserted before the extension in the sidecar output modes,
@@ -355,6 +355,14 @@ public class PluginConfiguration : BasePluginConfiguration
     /// it every scheduled run retranslates the whole library and pays for it again.
     /// </summary>
     public bool AutoTranslateSkipExisting { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether bulk, scheduled, new-item and webhook runs
+    /// leave a subtitle alone when it has been synced and nothing has written to it since.
+    /// On by default: without it a nightly schedule syncs the whole library again, every
+    /// night, to arrive at the answers it already has.
+    /// </summary>
+    public bool SkipSyncedInUnattendedRuns { get; set; } = true;
 
     /// <summary>
     /// Gets or sets who besides administrators may sync, shift, convert and translate the

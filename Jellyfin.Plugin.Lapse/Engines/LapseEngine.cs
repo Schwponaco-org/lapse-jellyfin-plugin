@@ -136,7 +136,14 @@ public partial class LapseEngine : IEngine
         // the plugin always passes a number so what's in the box is what runs.
         AddNumber(args, runtime, values, "snap", "--snap");
 
-        AddSwitch(args, runtime, values, "noEmbedded", "--no-embedded");
+        if (options.IgnoreEmbedded && !values.GetBool("noEmbedded") && runtime.HasFlag("--no-embedded"))
+        {
+            args.Add("--no-embedded");
+        }
+        else
+        {
+            AddSwitch(args, runtime, values, "noEmbedded", "--no-embedded");
+        }
         AddSwitch(args, runtime, values, "fullScan", "--full-scan");
         AddSwitch(args, runtime, values, "noCache", "--no-cache");
         AddSwitch(args, runtime, values, "force", "--force");

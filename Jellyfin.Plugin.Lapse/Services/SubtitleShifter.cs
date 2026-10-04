@@ -60,12 +60,18 @@ public class SubtitlePreview
 /// </summary>
 public partial class SubtitleShifter
 {
-    // Matches timestamps like 00:01:23,456 (srt), 00:01:23.456 (vtt) and 0:01:23.45
-    // (ass/ssa, which counts in centiseconds and writes a single digit hour). The widths
-    // are captured rather than assumed so each format can be written back the way it
-    // came in - an ass file with millisecond timings in it is not an ass file any more.
-    [GeneratedRegex(@"(?<h>\d{1,3}):(?<m>\d{2}):(?<s>\d{2})(?<sep>[,.])(?<f>\d{1,3})")]
+    // Matches timestamps like 00:01:23,456 (srt), 00:01:23.456 and 01:23.456 (vtt, which
+    // leaves the hours off when there are none) and 0:01:23.45 (ass/ssa, which counts in
+    // centiseconds and writes a single digit hour). The widths are captured rather than
+    // assumed so each format can be written back the way it came in - an ass file with
+    // millisecond timings in it is not an ass file any more.
+    [GeneratedRegex(@"(?:(?<h>\d{1,3}):)?(?<m>\d{2}):(?<s>\d{2})(?<sep>[,.])(?<f>\d{1,3})")]
     private static partial Regex TimestampRegex();
+
+    // A vtt cue can carry timestamps inside its text, <00:01:02.500>, to reveal a line a
+    // word at a time. They're absolute, so they move with the cue.
+    [GeneratedRegex(@"<(?<t>(?:\d{1,3}:)?\d{2}:\d{2}\.\d{3})>")]
+    private static partial Regex InlineTimestampRegex();
 
     // Anything in {curly braces} on an ass line is a style override, not dialogue.
     [GeneratedRegex(@"\{[^}]*\}")]
@@ -194,8 +200,7 @@ public partial class SubtitleShifter
     /// <returns>The line with its timestamps moved.</returns>
     public static string PreviewShift(string timingLine, int offsetMs)
     {
-        var offset = TimeSpan.FromMilliseconds(offsetMs);
-        return TimestampRegex().Replace(timingLine, match => ShiftOne(match, offset));
+        return ShiftTimingLine(timingLine, TimeSpan.FromMilliseconds(offsetMs), int.MaxValue, out _);
     }
 
     /// <summary>
@@ -237,11 +242,16 @@ public partial class SubtitleShifter
         using var fileLock = await SubtitleFileLock.AcquireAsync(subtitlePath, cancellationToken).ConfigureAwait(false);
 
         var offset = TimeSpan.FromSeconds(offsetSeconds);
-        var lines = await SubtitleEncoding.ReadAllLinesAsync(subtitlePath, cancellationToken).ConfigureAwait(false);
+
+        // Read with its encoding and line endings, so what goes back out is the same file
+        // with different numbers in it rather than the same subtitle re-encoded as UTF-8.
+        var document = await SubtitleEncoding.ReadDocumentAsync(subtitlePath, cancellationToken).ConfigureAwait(false);
+        var lines = new List<string>(document.Lines);
         var isAss = IsAss(subtitlePath);
+        var isVtt = string.Equals(Path.GetExtension(subtitlePath), ".vtt", StringComparison.OrdinalIgnoreCase);
         var shiftedCount = 0;
 
-        for (var i = 0; i < lines.Length; i++)
+        for (var i = 0; i < lines.Count; i++)
         {
             // Only touch the timing lines. Subtitle text could contain something that
             // looks like a timestamp and we'd rather not mangle someone's dialogue.
@@ -250,42 +260,39 @@ public partial class SubtitleShifter
             if (isAss)
             {
                 // ass and ssa put the timings on their event lines, and the dialogue is on
-                // the same line right after them. Replacing only the first two matches
-                // keeps this to the Start and End fields and off anything in the text.
-                if (!IsAssEventLine(line))
+                // the same line right after them. Only the first two matches are taken,
+                // which keeps this to the Start and End fields and off anything in the text.
+                if (IsAssEventLine(line))
                 {
-                    continue;
+                    lines[i] = ShiftTimingLine(line, offset, AssTimestampsPerLine, out var moved);
+                    shiftedCount += moved;
                 }
 
-                lines[i] = TimestampRegex().Replace(
-                    line,
-                    match =>
-                    {
-                        shiftedCount++;
-                        return ShiftOne(match, offset);
-                    },
-                    AssTimestampsPerLine);
-
                 continue;
             }
 
-            if (!line.Contains("-->", StringComparison.Ordinal))
+            if (line.Contains("-->", StringComparison.Ordinal))
             {
+                lines[i] = ShiftTimingLine(line, offset, int.MaxValue, out var moved);
+                shiftedCount += moved;
                 continue;
             }
 
-            lines[i] = TimestampRegex().Replace(line, match =>
+            if (isVtt && line.Contains('<', StringComparison.Ordinal))
             {
-                shiftedCount++;
-                return ShiftOne(match, offset);
-            });
+                lines[i] = InlineTimestampRegex().Replace(line, match =>
+                {
+                    var inner = TimestampRegex().Match(match.Groups["t"].Value);
+                    return inner.Success ? "<" + FormatLike(inner, Clamp(Parse(inner) + offset)) + ">" : match.Value;
+                });
+            }
         }
 
         var mode = EngineRunner.ResolveOutputMode(outputMode);
         var destination = EngineRunner.ResolveDestination(subtitlePath, mode);
         var backup = EngineRunner.TakeBackup(destination, mode);
 
-        await SubtitleFileLock.WriteAllLinesAsync(destination, lines, cancellationToken).ConfigureAwait(false);
+        await SubtitleFileLock.WriteDocumentAsync(destination, document, lines, cancellationToken).ConfigureAwait(false);
 
         return new ShiftResult
         {
@@ -315,48 +322,117 @@ public partial class SubtitleShifter
             || trimmed.StartsWith("Command:", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static string ShiftOne(Match match, TimeSpan offset)
+    // Moves the start and end of one cue together. A cue moved to before the start of the
+    // film keeps its length and starts at zero, the way the engine and alass both handle
+    // it; pinning each end on its own used to cut a cue short, or to nothing at all when
+    // both ends went under.
+    private static string ShiftTimingLine(string line, TimeSpan offset, int count, out int moved)
     {
-        var fraction = match.Groups["f"].Value;
+        var matches = TimestampRegex().Matches(line);
+        var taken = Math.Min(matches.Count, count);
+        moved = taken;
 
-        var original = new TimeSpan(
-            0,
-            int.Parse(match.Groups["h"].Value, CultureInfo.InvariantCulture),
-            int.Parse(match.Groups["m"].Value, CultureInfo.InvariantCulture),
-            int.Parse(match.Groups["s"].Value, CultureInfo.InvariantCulture),
-            int.Parse(fraction.PadRight(3, '0'), CultureInfo.InvariantCulture));
-
-        var shifted = original + offset;
-
-        // Subtitles can't start before the movie does, so anything that would go negative
-        // just gets pinned to zero.
-        if (shifted < TimeSpan.Zero)
+        if (taken == 0)
         {
-            shifted = TimeSpan.Zero;
+            return line;
         }
 
-        return Format(
-            shifted,
-            match.Groups["sep"].Value,
-            match.Groups["h"].Value.Length,
-            fraction.Length);
+        var times = new TimeSpan[taken];
+        for (var i = 0; i < taken; i++)
+        {
+            times[i] = Parse(matches[i]) + offset;
+        }
+
+        if (taken >= 2 && times[0] < TimeSpan.Zero)
+        {
+            var length = times[1] - times[0];
+            times[0] = TimeSpan.Zero;
+            times[1] = length > TimeSpan.Zero ? length : TimeSpan.Zero;
+        }
+
+        var builder = new System.Text.StringBuilder(line.Length + 8);
+        var at = 0;
+
+        for (var i = 0; i < taken; i++)
+        {
+            builder.Append(line, at, matches[i].Index - at);
+            builder.Append(FormatLike(matches[i], Clamp(times[i])));
+            at = matches[i].Index + matches[i].Length;
+        }
+
+        builder.Append(line, at, line.Length - at);
+        return builder.ToString();
+    }
+
+    private static TimeSpan Clamp(TimeSpan value)
+    {
+        // Subtitles can't start before the movie does.
+        return value < TimeSpan.Zero ? TimeSpan.Zero : value;
+    }
+
+    private static TimeSpan Parse(Match match)
+    {
+        var hours = match.Groups["h"].Success ? int.Parse(match.Groups["h"].Value, CultureInfo.InvariantCulture) : 0;
+
+        return new TimeSpan(
+            0,
+            hours,
+            int.Parse(match.Groups["m"].Value, CultureInfo.InvariantCulture),
+            int.Parse(match.Groups["s"].Value, CultureInfo.InvariantCulture),
+            int.Parse(match.Groups["f"].Value.PadRight(3, '0'), CultureInfo.InvariantCulture));
     }
 
     // Writes a timestamp back in the shape it was read in. srt and vtt want two digit
     // hours and milliseconds; ass and ssa want a single digit hour and centiseconds, and
-    // a player will refuse a file that mixes them up.
-    private static string Format(TimeSpan value, string separator, int hourDigits, int fractionDigits)
+    // a player will refuse a file that mixes them up. vtt without hours stays without
+    // them until a shift takes it past the hour, where it needs them.
+    private static string FormatLike(Match match, TimeSpan value)
     {
-        var hours = (int)value.TotalHours;
-        var fraction = fractionDigits switch
+        var fractionDigits = match.Groups["f"].Value.Length;
+        var separator = match.Groups["sep"].Success ? match.Groups["sep"].Value : ".";
+        var hourDigits = match.Groups["h"].Success ? match.Groups["h"].Value.Length : 0;
+
+        return Format(value, separator, hourDigits, fractionDigits);
+    }
+
+    /// <summary>
+    /// Formats a time the way a subtitle writes it, rounded to the precision the format
+    /// keeps rather than cut off at it. Cutting off put every ass line up to 9ms early, and
+    /// the engine stopped doing that in 2.2.4.
+    /// </summary>
+    /// <param name="value">The time.</param>
+    /// <param name="separator">The character between seconds and the fraction.</param>
+    /// <param name="hourDigits">How many digits the hour gets, or 0 to leave it off while
+    /// the time is under an hour.</param>
+    /// <param name="fractionDigits">1, 2 or 3: tenths, hundredths or thousandths.</param>
+    /// <returns>The formatted time.</returns>
+    internal static string Format(TimeSpan value, string separator, int hourDigits, int fractionDigits)
+    {
+        var unit = fractionDigits switch
         {
-            1 => value.Milliseconds / 100,
-            2 => value.Milliseconds / 10,
-            _ => value.Milliseconds
+            1 => 100L,
+            2 => 10L,
+            _ => 1L
         };
 
-        return string.Create(
-            CultureInfo.InvariantCulture,
-            $"{hours.ToString(CultureInfo.InvariantCulture).PadLeft(hourDigits, '0')}:{value.Minutes:00}:{value.Seconds:00}{separator}{fraction.ToString(CultureInfo.InvariantCulture).PadLeft(fractionDigits, '0')}");
+        // Rounded as a whole, so 59.996 seconds carries into the next minute rather than
+        // coming out as a 60th second.
+        var units = (long)Math.Round(value.TotalMilliseconds / unit, MidpointRounding.AwayFromZero);
+        var rounded = TimeSpan.FromMilliseconds(units * unit);
+        var fraction = rounded.Milliseconds / unit;
+
+        var hours = (int)rounded.TotalHours;
+        var fractionText = fraction.ToString(CultureInfo.InvariantCulture).PadLeft(fractionDigits, '0');
+        var clock = string.Create(CultureInfo.InvariantCulture, $"{rounded.Minutes:00}:{rounded.Seconds:00}{separator}{fractionText}");
+
+        if (hourDigits == 0 && hours == 0)
+        {
+            return clock;
+        }
+
+        // A vtt time that grew an hour gets the two digit hour vtt uses; everything else
+        // keeps the width it came in with.
+        var width = hourDigits == 0 ? 2 : hourDigits;
+        return hours.ToString(CultureInfo.InvariantCulture).PadLeft(width, '0') + ":" + clock;
     }
 }

@@ -225,7 +225,7 @@ public class ArrWebhookService
 
     private async Task<BaseItem?> WaitForItemAsync(string path, CancellationToken cancellationToken)
     {
-        var item = _libraryManager.FindByPath(path, isFolder: false);
+        var item = Find(path);
         if (item is not null)
         {
             return item;
@@ -235,7 +235,7 @@ public class ArrWebhookService
         {
             await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
 
-            item = _libraryManager.FindByPath(path, isFolder: false);
+            item = Find(path);
             if (item is not null)
             {
                 return item;
@@ -243,5 +243,56 @@ public class ArrWebhookService
         }
 
         return null;
+    }
+
+    // By the path as Radarr or Sonarr sent it, and failing that by the last two parts of
+    // it: the folder and the file. The apps and Jellyfin often see the same disk mounted in
+    // different places - /data/movies in one container, /movies in the other - and the
+    // full path then matches nothing even once the item is there.
+    private BaseItem? Find(string path)
+    {
+        var item = _libraryManager.FindByPath(path, isFolder: false);
+        if (item is not null)
+        {
+            return item;
+        }
+
+        var tail = Tail(path);
+        if (tail is null)
+        {
+            return null;
+        }
+
+        BaseItem? match = null;
+        foreach (var candidate in _libraryService.GetItems())
+        {
+            if (candidate.Path is null || !string.Equals(Tail(candidate.Path), tail, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            // Two items ending the same way is a guess either way, so it's left to the
+            // scheduled run rather than syncing whichever came first.
+            if (match is not null)
+            {
+                _logger.LogInformation("More than one item ends in {Tail}, so the webhook can't tell which one it meant", tail);
+                return null;
+            }
+
+            match = candidate;
+        }
+
+        if (match is not null)
+        {
+            _logger.LogInformation("Matched {Path} to {Item} by folder and file name, since Jellyfin has it at {JellyfinPath}", path, match.Name, match.Path);
+        }
+
+        return match;
+    }
+
+    private static string? Tail(string path)
+    {
+        var parts = path.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length >= 2 ? parts[^2] + "/" + parts[^1] : null;
     }
 }
