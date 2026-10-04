@@ -1,7 +1,7 @@
 ---
 name: "LAPSE"
 guid: "486090e1-ca92-46e1-8549-9f6bb914a1d0"
-version: "2.0.2.0"
+version: "2.1.0.0"
 targetAbi: "10.11.0.0"
 framework: "net9.0"
 overview: "Sync subtitles to audio (or subtitle to subtitle) using the LAPSE engine. Open Settings after installing to set it up."
@@ -21,34 +21,47 @@ owner: "rs-jensen"
 artifacts:
 - "Jellyfin.Plugin.Lapse.dll"
 changelog: >
-  Mostly a security and reliability release, and worth taking if other
-  users on your server can sign in.
+  Brings the plugin up to date with LAPSE 2.2.4, gets OpenSubtitles working
+  properly, and fixes a long list of things found by running every feature
+  against real files.
 
-  The settings endpoint was readable by any signed-in user, not just
-  admins, and it included your DeepL, Google and OpenSubtitles keys, the
-  OpenSubtitles password and the Radarr/Sonarr webhook token. That and the
-  other dashboard-only endpoints need an admin now. If you've had
-  non-admin accounts on the server, it's worth rotating those keys.
+  Bulk and scheduled runs now keep one LAPSE process running for the whole
+  job and hand it one file after another (the engine's new batch mode), so
+  the voice detector is loaded once per run. Engine downloads are checked
+  against the checksums published with each release, and updating the engine
+  while a sync is running no longer breaks it. LAPSE 2.2.4 also reads .sami
+  files and upper case extensions.
 
-  If you'd opened subtitle access up to other users, they could also edit
-  subtitles on items in libraries they don't have access to, or above
-  their parental rating. They now only see what Jellyfin itself lets them
-  see.
+  OpenSubtitles was effectively broken: it searched by the full release file
+  name, which rarely matches, and a bad API key looked like "no subtitle
+  found". It now searches by the video file's hash and the IMDb or TMDb id
+  first, takes several languages in order, uses the download host VIP
+  accounts get, and says plainly what went wrong. There's a Test the
+  connection button in the settings, and a new Find Subtitles Online entry
+  in the item menu and the player that lets you pick a subtitle and sync it
+  in one go.
 
-  Two edits to the same subtitle at once - a quick double press on the
-  delay buttons, or a shift while the queue was syncing that file - could
-  leave an empty subtitle behind. Writes now go through a temporary file
-  and take turns per file, so that can't happen anymore.
+  A result LAPSE wasn't sure about no longer counts as synced, and the
+  messages now tell an unsure answer apart from a subtitle that belongs to a
+  different release. A very short subtitle that only got through with
+  --force used to be written over the original as if it were certain, which
+  in testing put a forced track eleven seconds out; it's treated as unsure
+  now. Syncing a track taken out of the video always came back "already in
+  sync", because the engine compared it with its own copy inside the video.
+  That's fixed too.
 
-  Also fixed: an error in auto-sync or the per-library schedule could
-  take the whole Jellyfin server down with it; one unexpected error could
-  jam the sync queue until a restart; and servers where an old version
-  had patched index.html on disk (the official Docker image among them)
-  never picked up the cache busting from 2.0.1, so browsers kept running
-  an old copy of the script. That one needs a hard refresh once.
+  On Jellyfin 10.11 the item menu stayed open after you picked a LAPSE entry,
+  with the LAPSE dialog stuck behind it. People without subtitle access no
+  longer see LAPSE entries they can't use. Undo no longer lets an older entry
+  restore the wrong version of a file, the sync status notices when a
+  subtitle has been replaced, and unattended runs skip subtitles that are
+  already synced, so a nightly schedule only works on what's new. The
+  Radarr/Sonarr webhook finds the item even when the two see the media
+  under different paths, and shifting by hand keeps a subtitle's own
+  encoding and line endings.
 
-  New since 2.0.1: the engine card warns you when LAPSE has fallen back
-  to its weaker built-in voice detector because the Silero model or
-  onnxruntime is missing. And "Sync even when the engine is unsure" now
-  sits on the engine card itself, and a skipped low-confidence sync
-  offers to turn it on and try again right there.
+  Two defaults changed. The Sync subtitles scheduled task no longer runs
+  every night at 03:00 by itself; add a trigger under Scheduled Tasks, or use
+  a library schedule, if you relied on that. And new installs write synced
+  subtitles to a new file next to the original, as the README always said.
+  Existing settings are kept.
