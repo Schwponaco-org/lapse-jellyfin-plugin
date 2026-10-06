@@ -173,7 +173,7 @@ The plugin targets .NET 9 and Jellyfin 10.11. The tests run the real subtitle ha
 
 ## License
 
-GPL v3. See [LICENSE](LICENSE).
+GPL v3. See [LICENSE](LICENSE)
 
 ## Credits
 
