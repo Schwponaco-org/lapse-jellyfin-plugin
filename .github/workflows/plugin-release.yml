@@ -90,13 +90,18 @@ jobs:
           git fetch origin main
           git checkout -B main origin/main
 
-          SOURCE_URL="https://github.com/${{ github.repository }}/releases/download/${{ steps.vars.outputs.tag }}/${{ steps.vars.outputs.zip }}"
+          # Always rs-jensen, not github.repository. The repo moved to Schwponaco-org and
+          # GitHub redirects the old name, so these URLs reach the same files, and every
+          # server that added the repository under rs-jensen keeps working unchanged.
+          MANIFEST_REPO="rs-jensen/lapse-jellyfin-plugin"
+
+          SOURCE_URL="https://github.com/$MANIFEST_REPO/releases/download/${{ steps.vars.outputs.tag }}/${{ steps.vars.outputs.zip }}"
           TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
           # Pinned to this tag rather than main, so the catalog thumbnail always points at
           # a commit that actually has the file, instead of whatever main happens to be
           # (which briefly didn't have it at all, and could change shape again later).
-          IMAGE_URL="https://raw.githubusercontent.com/${{ github.repository }}/${{ steps.vars.outputs.tag }}/Jellyfin.Plugin.Lapse/Configuration/LAPSE.png"
+          IMAGE_URL="https://raw.githubusercontent.com/$MANIFEST_REPO/${{ steps.vars.outputs.tag }}/Jellyfin.Plugin.Lapse/Configuration/LAPSE.png"
 
           # Newest version goes first. Drop any existing entry for the same version so
           # re-running a tag replaces it instead of listing it twice.
