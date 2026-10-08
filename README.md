@@ -15,7 +15,7 @@ If you only have a file or two to fix and no Jellyfin, try **[LAPSE in the brows
 1. In Jellyfin, open **Dashboard > Plugins > Repositories** and add this repository:
 
    ```
-   https://raw.githubusercontent.com/Schwponaco-org/lapse-jellyfin-plugin/main/manifest.json
+   https://raw.githubusercontent.com/rs-jensen/lapse-jellyfin-plugin/main/manifest.json
    ```
 
 2. Find LAPSE in the **Catalog**, install it and restart Jellyfin.
