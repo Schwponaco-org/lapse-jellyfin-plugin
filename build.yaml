@@ -1,7 +1,7 @@
 ---
 name: "LAPSE"
 guid: "486090e1-ca92-46e1-8549-9f6bb914a1d0"
-version: "2.1.0.0"
+version: "2.1.1.0"
 targetAbi: "10.11.0.0"
 framework: "net9.0"
 overview: "Sync subtitles to audio (or subtitle to subtitle) using the LAPSE engine. Open Settings after installing to set it up."
@@ -21,47 +21,10 @@ owner: "rs-jensen"
 artifacts:
 - "Jellyfin.Plugin.Lapse.dll"
 changelog: >
-  Brings the plugin up to date with LAPSE 2.2.4, gets OpenSubtitles working
-  properly, and fixes a long list of things found by running every feature
-  against real files.
-
-  Bulk and scheduled runs now keep one LAPSE process running for the whole
-  job and hand it one file after another (the engine's new batch mode), so
-  the voice detector is loaded once per run. Engine downloads are checked
-  against the checksums published with each release, and updating the engine
-  while a sync is running no longer breaks it. LAPSE 2.2.4 also reads .sami
-  files and upper case extensions.
-
-  OpenSubtitles was effectively broken: it searched by the full release file
-  name, which rarely matches, and a bad API key looked like "no subtitle
-  found". It now searches by the video file's hash and the IMDb or TMDb id
-  first, takes several languages in order, uses the download host VIP
-  accounts get, and says plainly what went wrong. There's a Test the
-  connection button in the settings, and a new Find Subtitles Online entry
-  in the item menu and the player that lets you pick a subtitle and sync it
-  in one go.
-
-  A result LAPSE wasn't sure about no longer counts as synced, and the
-  messages now tell an unsure answer apart from a subtitle that belongs to a
-  different release. A very short subtitle that only got through with
-  --force used to be written over the original as if it were certain, which
-  in testing put a forced track eleven seconds out; it's treated as unsure
-  now. Syncing a track taken out of the video always came back "already in
-  sync", because the engine compared it with its own copy inside the video.
-  That's fixed too.
-
-  On Jellyfin 10.11 the item menu stayed open after you picked a LAPSE entry,
-  with the LAPSE dialog stuck behind it. People without subtitle access no
-  longer see LAPSE entries they can't use. Undo no longer lets an older entry
-  restore the wrong version of a file, the sync status notices when a
-  subtitle has been replaced, and unattended runs skip subtitles that are
-  already synced, so a nightly schedule only works on what's new. The
-  Radarr/Sonarr webhook finds the item even when the two see the media
-  under different paths, and shifting by hand keeps a subtitle's own
-  encoding and line endings.
-
-  Two defaults changed. The Sync subtitles scheduled task no longer runs
-  every night at 03:00 by itself; add a trigger under Scheduled Tasks, or use
-  a library schedule, if you relied on that. And new installs write synced
-  subtitles to a new file next to the original, as the README always said.
-  Existing settings are kept.
+  Syncing a subtitle that was embedded in the video no longer leaves an extra
+  copy behind. LAPSE pulls the track out to a file first, and with output set
+  to write a new file it used to keep that copy and put the synced result
+  next to it, so Jellyfin listed the same subtitle three times. The copy is
+  now replaced by the synced result, since the original is still inside the
+  video, and undoing the sync removes it again. Shifting an embedded track by
+  hand works the same way.
