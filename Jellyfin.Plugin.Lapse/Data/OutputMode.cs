@@ -20,10 +20,8 @@ public enum OutputMode
     OverwriteNoBackup,
 
     /// <summary>
-    /// Leave the original alone and write the synced result next to it as a new file,
-    /// e.g. Movie.en.srt -> Movie.en.shifted.srt. Jellyfin picks the new file up as an
-    /// extra subtitle track on its next scan. The default for a new install: it's the one
-    /// that can't lose anybody's subtitle.
+    /// Leave the original alone and write next to it (Movie.en.srt -> Movie.en.shifted.srt). The default,
+    /// it can't lose anyone's subtitle.
     /// </summary>
     SidecarOnly,
 

@@ -11,9 +11,7 @@ namespace Jellyfin.Plugin.Lapse.Data;
 public enum SyncMode
 {
     /// <summary>
-    /// One constant offset for the whole file, no splitting. LAPSE calls this "nosplit",
-    /// alass gets --no-split, and it's how ffsubsync behaves when it isn't given a split
-    /// penalty.
+    /// One offset for the whole file. LAPSE "nosplit", alass --no-split, ffsubsync without a split penalty.
     /// </summary>
     Standard,
 
@@ -30,12 +28,8 @@ public enum SyncMode
     Split,
 
     /// <summary>
-    /// Let the engine work out for itself whether the file is shifted, drifting, split,
-    /// re-cut, or some combination, and handle each accordingly. This is what LAPSE does
-    /// when it's given no mode at all, and it's what the plugin asks for by default.
-    ///
-    /// Deliberately last in the enum: the config is serialized to XML by name, but an
-    /// older config that stored these as numbers would shift meaning if this went first.
+    /// Let the engine figure out shifted/drifting/split/re-cut by itself. LAPSE's default and ours.
+    /// Last in the enum so old configs that stored numbers don't change meaning.
     /// </summary>
     Auto
 }

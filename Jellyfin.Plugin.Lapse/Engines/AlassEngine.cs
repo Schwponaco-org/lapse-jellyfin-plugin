@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Rasmus Stisen Jensen (rs-jensen)
 // Licensed under GPL v3 - see LICENSE for details
 
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Text.RegularExpressions;
@@ -17,17 +18,15 @@ namespace Jellyfin.Plugin.Lapse.Engines;
 ///       [--allow-negative-timestamps] [--disable-fps-guessing] [--audio-index N]
 ///       [--sub-fps-ref N] [--sub-fps-inc N] [--encoding-ref E] [--encoding-inc E]
 ///
-/// Flag names and defaults here come from the argument definitions in alass-cli's
-/// main.rs, not from its README, which writes --no-split as "--no-splits" and would be
-/// rejected by the binary. Splitting is on by default in alass with a penalty of 7.
+/// Flags and defaults from alass-cli's main.rs, not the README (which says "--no-splits",
+/// the binary rejects that). Splitting is on by default with penalty 7.
 /// </summary>
 public partial class AlassEngine : IEngine
 {
     private const string RepoUrl = "https://github.com/kaegi/alass";
 
-    // alass prints its shift in seconds somewhere in its output, something along the lines
-    // of "shift: 1.25s". We don't have a guaranteed format for this so it's best effort
-    // only, and the run is judged on its exit code plus whether a file came out.
+    // something like "shift: 1.25s", no guaranteed format so best effort. The run is
+    // judged on exit code + whether a file came out.
     [GeneratedRegex(@"(?:shift|offset)[^-0-9]{0,12}(?<seconds>-?[0-9]+(?:\.[0-9]+)?)\s*s", RegexOptions.IgnoreCase)]
     private static partial Regex ShiftRegex();
 
@@ -54,23 +53,16 @@ public partial class AlassEngine : IEngine
             args.Add("--no-split");
         }
 
-        AddNumber(args, values, "interval", "--interval");
-        AddNumber(args, values, "speedOptimization", "--speed-optimization");
-        AddNumber(args, values, "audioIndex", "--audio-index");
-        AddNumber(args, values, "subFpsRef", "--sub-fps-ref");
-        AddNumber(args, values, "subFpsInc", "--sub-fps-inc");
-        AddText(args, values, "encodingRef", "--encoding-ref");
-        AddText(args, values, "encodingInc", "--encoding-inc");
+        values.AddNumber(args, "interval", "--interval");
+        values.AddNumber(args, "speedOptimization", "--speed-optimization");
+        values.AddNumber(args, "audioIndex", "--audio-index");
+        values.AddNumber(args, "subFpsRef", "--sub-fps-ref");
+        values.AddNumber(args, "subFpsInc", "--sub-fps-inc");
+        values.AddText(args, "encodingRef", "--encoding-ref");
+        values.AddText(args, "encodingInc", "--encoding-inc");
 
-        if (values.GetBool("allowNegativeTimestamps"))
-        {
-            args.Add("--allow-negative-timestamps");
-        }
-
-        if (values.GetBool("disableFpsGuessing"))
-        {
-            args.Add("--disable-fps-guessing");
-        }
+        values.AddSwitch(args, "allowNegativeTimestamps", "--allow-negative-timestamps");
+        values.AddSwitch(args, "disableFpsGuessing", "--disable-fps-guessing");
 
         return args;
     }
@@ -94,7 +86,7 @@ public partial class AlassEngine : IEngine
         var match = ShiftRegex().Match(stdout);
         if (match.Success && double.TryParse(match.Groups["seconds"].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var seconds))
         {
-            result.OffsetMs = (int)(seconds * 1000);
+            result.OffsetMs = (int)Math.Round(seconds * 1000);
         }
 
         return result;
@@ -121,9 +113,7 @@ public partial class AlassEngine : IEngine
                 RepoUrl + "/releases/latest/download/alass-windows64.zip",
                 EnginePackaging.Zip),
 
-            // alass only publishes x86_64 builds, so there's deliberately no arm64 or macOS
-            // entry here. The installer turns that into a clear "no build for this machine"
-            // message with a link to the build instructions.
+            // alass only publishes x86_64 builds, the installer explains that for everything else
             Capabilities = new EngineCapabilities
             {
                 SupportsStandard = true,
@@ -200,10 +190,8 @@ public partial class AlassEngine : IEngine
             DefaultValue = "false"
         });
 
-        // Blank, not "auto". alass's help prints "default: auto", but that describes what
-        // it does when the flag is absent - the 2.0.0 binary hands the literal string to
-        // encoding_rs and panics with "auto is not a known encoding label". Leave it off
-        // and it detects the encoding itself, which is what everyone wants anyway.
+        // Blank, NOT "auto". The help says "default: auto" but alass 2.0.0 panics on the
+        // literal string. Leaving it off autodetects anyway.
         descriptor.Parameters.Add(new EngineParameter
         {
             Key = "encodingRef",
@@ -249,29 +237,5 @@ public partial class AlassEngine : IEngine
         });
 
         return descriptor;
-    }
-
-    private static void AddNumber(List<string> args, EngineParameterValues values, string key, string flag)
-    {
-        if (!values.ShouldPass(key))
-        {
-            return;
-        }
-
-        var value = values.GetNumber(key);
-        if (value.HasValue)
-        {
-            args.Add(flag);
-            args.Add(EngineParameterValues.Format(value.Value));
-        }
-    }
-
-    private static void AddText(List<string> args, EngineParameterValues values, string key, string flag)
-    {
-        if (values.ShouldPass(key))
-        {
-            args.Add(flag);
-            args.Add(values.GetString(key));
-        }
     }
 }

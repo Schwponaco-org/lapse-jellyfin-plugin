@@ -31,30 +31,22 @@ public class SubtitleOption
     public string Format { get; set; } = string.Empty;
 
     /// <summary>
-    /// Gets or sets a value indicating whether this file has to be converted before an
-    /// engine can touch it. Depends on which engine: LAPSE reads MicroDVD .sub and eight
-    /// other formats directly, where alass and ffsubsync read none of them.
+    /// Gets or sets a value indicating whether it needs converting before the default engine can read it.
     /// </summary>
     public bool NeedsConversion { get; set; }
 
     /// <summary>
-    /// Gets or sets a value indicating whether the plugin can do anything with this file
-    /// at all - which now means "can it be synced", since a picture based subtitle has no
-    /// text but can still have its timing rewritten by an engine that reads the format.
+    /// Gets or sets a value indicating whether it can be synced at all (PGS can, if the engine reads it).
     /// </summary>
     public bool Supported { get; set; } = true;
 
     /// <summary>
-    /// Gets or sets a value indicating whether there is text in this file the plugin can
-    /// get at. False for PGS and VobSub, which are pictures. Converting, translating and
-    /// shifting by hand all need this; syncing does not.
+    /// Gets or sets a value indicating whether there's text in it (false for PGS/VobSub). Convert, translate and shift need this.
     /// </summary>
     public bool TextBased { get; set; } = true;
 
     /// <summary>
-    /// Gets or sets a value indicating whether this track is still inside the video file
-    /// rather than sitting beside it. Those get pulled out to a real file the first time
-    /// something needs to work on them.
+    /// Gets or sets a value indicating whether it's still inside the video. Gets extracted the first time something needs it.
     /// </summary>
     public bool IsEmbedded { get; set; }
 

@@ -21,8 +21,7 @@ namespace Jellyfin.Plugin.Lapse.Services.Translation;
 /// </summary>
 public class LibreTranslateTranslationProvider : ITranslationProvider
 {
-    // Batched rather than one request per line, but not so large that a single failure
-    // costs the whole file.
+    // batched, but small enough that one failure doesn't cost the whole file
     private const int BatchSize = 50;
 
     private readonly IHttpClientFactory _httpClientFactory;
@@ -31,8 +30,6 @@ public class LibreTranslateTranslationProvider : ITranslationProvider
     /// <summary>
     /// Initializes a new instance of the <see cref="LibreTranslateTranslationProvider"/> class.
     /// </summary>
-    /// <param name="httpClientFactory">Factory to grab an HttpClient from.</param>
-    /// <param name="logger">Logger.</param>
     public LibreTranslateTranslationProvider(IHttpClientFactory httpClientFactory, ILogger<LibreTranslateTranslationProvider> logger)
     {
         _httpClientFactory = httpClientFactory;
@@ -85,15 +82,9 @@ public class LibreTranslateTranslationProvider : ITranslationProvider
         var client = _httpClientFactory.CreateClient("Lapse");
         var results = new List<TranslatedLine>(lines.Count);
 
-        for (var start = 0; start < lines.Count; start += BatchSize)
+        foreach (var batch in TranslationBatches.Split(lines, BatchSize))
         {
             cancellationToken.ThrowIfCancellationRequested();
-
-            var batch = new List<string>();
-            for (var i = start; i < Math.Min(start + BatchSize, lines.Count); i++)
-            {
-                batch.Add(lines[i]);
-            }
 
             var payload = new Dictionary<string, object>
             {
@@ -118,7 +109,7 @@ public class LibreTranslateTranslationProvider : ITranslationProvider
                     "LibreTranslate returned {0} for {1}: {2}",
                     (int)response.StatusCode,
                     url,
-                    Shorten(body)));
+                    TranslationBatches.Shorten(body)));
             }
 
             using var document = await response.Content
@@ -131,19 +122,18 @@ public class LibreTranslateTranslationProvider : ITranslationProvider
         return results;
     }
 
-    private IEnumerable<TranslatedLine> ReadTranslations(JsonDocument? document, int expected)
+    private List<TranslatedLine> ReadTranslations(JsonDocument? document, int expected)
     {
         var results = new List<TranslatedLine>();
 
         if (document is not null && document.RootElement.TryGetProperty("translatedText", out var translated))
         {
-            // Handed an array it answers with an array, but some builds unwrap a single
-            // element back to a bare string, so take either.
+            // some builds unwrap a one element array to a bare string
             if (translated.ValueKind == JsonValueKind.Array)
             {
                 foreach (var entry in translated.EnumerateArray())
                 {
-                    results.Add(new TranslatedLine { Text = entry.GetString() });
+                    results.Add(new TranslatedLine { Text = entry.ValueKind == JsonValueKind.String ? entry.GetString() : null });
                 }
             }
             else if (translated.ValueKind == JsonValueKind.String)
@@ -152,21 +142,6 @@ public class LibreTranslateTranslationProvider : ITranslationProvider
             }
         }
 
-        if (results.Count != expected)
-        {
-            _logger.LogWarning("LibreTranslate returned {Got} translations for {Expected} lines", results.Count, expected);
-            while (results.Count < expected)
-            {
-                results.Add(new TranslatedLine());
-            }
-        }
-
-        return results;
-    }
-
-    private static string Shorten(string text)
-    {
-        var trimmed = text.Trim();
-        return trimmed.Length > 300 ? trimmed[..300] : trimmed;
+        return TranslationBatches.Align(results, expected, _logger, DisplayName);
     }
 }

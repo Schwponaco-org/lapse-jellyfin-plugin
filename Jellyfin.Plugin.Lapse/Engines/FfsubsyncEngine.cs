@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Rasmus Stisen Jensen (rs-jensen)
 // Licensed under GPL v3 - see LICENSE for details
 
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Text.RegularExpressions;
@@ -18,16 +19,14 @@ namespace Jellyfin.Plugin.Lapse.Engines;
 ///           [--max-subtitle-seconds N] [--start-seconds N]
 ///           [--reference-stream S] [--ffmpeg-path DIR] [--strict]
 ///
-/// Names and defaults come from the argument parser in ffsubsync/ffsubsync.py. It works
-/// out one offset for the whole file by default; giving it --split-penalty turns on its
-/// piecewise mode, which is the closest thing it has to split alignment.
+/// Names and defaults from the argument parser in ffsubsync.py. One offset by default,
+/// --split-penalty turns on piecewise mode (its version of split).
 /// </summary>
 public partial class FfsubsyncEngine : IEngine
 {
     private const string RepoUrl = "https://github.com/smacke/ffsubsync";
 
-    // ffsubsync logs a line with the offset it settled on. Same caveat as alass, this is
-    // best effort and the run is really judged on exit code plus output file.
+    // the offset it logs, best effort, the run is judged on exit code + output file
     [GeneratedRegex(@"offset\s*(?:seconds)?\s*[:=]\s*(?<seconds>-?[0-9]+(?:\.[0-9]+)?)", RegexOptions.IgnoreCase)]
     private static partial Regex OffsetRegex();
 
@@ -43,46 +42,32 @@ public partial class FfsubsyncEngine : IEngine
         var values = options.Parameters;
         var args = new List<string> { options.ReferencePath, "-i", options.InputPath, "-o", options.OutputPath };
 
-        // ffsubsync runs ffmpeg and ffprobe itself. Telling it exactly which folder to
-        // look in is steadier than hoping PATH resolves to the same build, since the
-        // Jellyfin images keep their ffmpeg somewhere PATH doesn't cover.
+        // point it at Jellyfin's ffmpeg folder, the docker images don't have it on PATH
         if (!string.IsNullOrEmpty(options.FfmpegDirectory))
         {
             args.Add("--ffmpeg-path");
             args.Add(options.FfmpegDirectory);
         }
 
-        // The presence of --split-penalty is what switches ffsubsync into piecewise mode,
-        // so it only goes on the command line for a split run.
+        // --split-penalty is what turns piecewise on, so only for split runs
         if (options.Mode == SyncMode.Split)
         {
             args.Add("--split-penalty");
             args.Add(options.Penalty.ToString(CultureInfo.InvariantCulture));
         }
 
-        AddNumber(args, values, "maxOffsetSeconds", "--max-offset-seconds");
-        AddNumber(args, values, "maxSubtitleSeconds", "--max-subtitle-seconds");
-        AddNumber(args, values, "startSeconds", "--start-seconds");
-        AddNumber(args, values, "frameRate", "--frame-rate");
-        AddText(args, values, "vad", "--vad");
-        AddText(args, values, "encoding", "--encoding");
-        AddText(args, values, "outputEncoding", "--output-encoding");
-        AddText(args, values, "referenceStream", "--reference-stream");
+        values.AddNumber(args, "maxOffsetSeconds", "--max-offset-seconds");
+        values.AddNumber(args, "maxSubtitleSeconds", "--max-subtitle-seconds");
+        values.AddNumber(args, "startSeconds", "--start-seconds");
+        values.AddNumber(args, "frameRate", "--frame-rate");
+        values.AddText(args, "vad", "--vad");
+        values.AddText(args, "encoding", "--encoding");
+        values.AddText(args, "outputEncoding", "--output-encoding");
+        values.AddText(args, "referenceStream", "--reference-stream");
 
-        if (values.GetBool("gss"))
-        {
-            args.Add("--gss");
-        }
-
-        if (values.GetBool("noFixFramerate"))
-        {
-            args.Add("--no-fix-framerate");
-        }
-
-        if (values.GetBool("strict"))
-        {
-            args.Add("--strict");
-        }
+        values.AddSwitch(args, "gss", "--gss");
+        values.AddSwitch(args, "noFixFramerate", "--no-fix-framerate");
+        values.AddSwitch(args, "strict", "--strict");
 
         return args;
     }
@@ -109,7 +94,7 @@ public partial class FfsubsyncEngine : IEngine
         var match = OffsetRegex().Match(combined);
         if (match.Success && double.TryParse(match.Groups["seconds"].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var seconds))
         {
-            result.OffsetMs = (int)(seconds * 1000);
+            result.OffsetMs = (int)Math.Round(seconds * 1000);
         }
 
         return result;
@@ -163,8 +148,7 @@ public partial class FfsubsyncEngine : IEngine
             "Single offset",
             "How ffsubsync ships. One offset for the whole file, plus a framerate correction if it spots one."));
 
-        // ffsubsync's own docs call this "piecewise", but every other engine here calls the
-        // same idea a split and that is what people search for, so it gets the common name.
+        // ffsubsync calls it "piecewise", everyone else says split
         descriptor.Modes.Add(new EngineModeOption(
             SyncMode.Split,
             "Split",
@@ -289,29 +273,5 @@ public partial class FfsubsyncEngine : IEngine
         });
 
         return descriptor;
-    }
-
-    private static void AddNumber(List<string> args, EngineParameterValues values, string key, string flag)
-    {
-        if (!values.ShouldPass(key))
-        {
-            return;
-        }
-
-        var value = values.GetNumber(key);
-        if (value.HasValue)
-        {
-            args.Add(flag);
-            args.Add(EngineParameterValues.Format(value.Value));
-        }
-    }
-
-    private static void AddText(List<string> args, EngineParameterValues values, string key, string flag)
-    {
-        if (values.ShouldPass(key))
-        {
-            args.Add(flag);
-            args.Add(values.GetString(key));
-        }
     }
 }

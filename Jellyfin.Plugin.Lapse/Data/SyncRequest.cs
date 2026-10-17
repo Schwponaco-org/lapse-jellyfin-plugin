@@ -22,9 +22,7 @@ public class SyncRequest
     public string? EngineId { get; set; }
 
     /// <summary>
-    /// Gets or sets the alignment mode to use. Null means "whatever this engine's default
-    /// sync mode is set to", which is what the context menu's Sync button and the item
-    /// list's Sync button both send.
+    /// Gets or sets the mode. Null = the engine's default mode (what the Sync buttons send).
     /// </summary>
     public SyncMode? Mode { get; set; }
 
@@ -45,10 +43,7 @@ public class SyncRequest
     public OutputMode? OutputMode { get; set; }
 
     /// <summary>
-    /// Gets or sets the format to write the result in - srt, vtt, ass or ssa - or null to
-    /// keep whatever the subtitle already was. A subtitle in a format no engine reads is
-    /// converted to srt on the way in whatever this says, since there's no other way to
-    /// sync it at all.
+    /// Gets or sets the output format (srt, vtt, ass, ssa), or null to keep it. Formats no engine reads become srt regardless.
     /// </summary>
     public string? OutputFormat { get; set; }
 }

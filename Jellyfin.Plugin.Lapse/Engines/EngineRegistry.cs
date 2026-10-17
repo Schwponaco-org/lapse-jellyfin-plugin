@@ -41,8 +41,6 @@ public class EngineRegistry
     /// <summary>
     /// Finds an engine by id.
     /// </summary>
-    /// <param name="id">The engine id.</param>
-    /// <returns>The engine, or null if there isn't one with that id.</returns>
     public IEngine? Find(string? id)
     {
         if (string.IsNullOrWhiteSpace(id))
@@ -57,7 +55,6 @@ public class EngineRegistry
     /// Gets the engine a sync should use when the request didn't name one. Falls back to
     /// LAPSE if the configured default has gone missing somehow.
     /// </summary>
-    /// <returns>The default engine.</returns>
     public IEngine GetDefault()
     {
         var configured = Plugin.Instance?.Configuration.DefaultEngineId;
@@ -68,8 +65,6 @@ public class EngineRegistry
     /// Gets the engine for a request, falling back to the configured default when the
     /// request didn't specify one.
     /// </summary>
-    /// <param name="engineId">The requested engine id, possibly null.</param>
-    /// <returns>The engine to run.</returns>
     public IEngine Resolve(string? engineId)
     {
         return string.IsNullOrWhiteSpace(engineId) ? GetDefault() : Find(engineId) ?? GetDefault();

@@ -16,25 +16,18 @@ namespace Jellyfin.Plugin.Lapse.Engines;
 /// </summary>
 public static partial class EngineResults
 {
-    // FFmpeg's libraries log through their own callback, and on a file with a damaged or
-    // unusual stream they will happily print the same complaint once per frame. A single
-    // film produced several hundred lines of "[mp3 @ 0x7ff935c2ea80] Header missing",
-    // every one of which went into the item's status message. These lines are decoder
-    // chatter, not the reason a run failed, so they never reach the user.
+    // ffmpeg decoder chatter ("[mp3 @ 0x7ff9...] Header missing" once per frame, hundreds
+    // of lines on one film). Not the reason a run failed, so it never reaches the user.
     [GeneratedRegex(@"^\[[a-z0-9_,]+ @ 0x[0-9a-f]+\]", RegexOptions.IgnoreCase)]
     private static partial Regex LibavNoiseRegex();
 
-    // A traceback is worth reducing to its last line, which is the actual exception.
+    // a traceback's last line is the actual exception
     [GeneratedRegex(@"^\s+(at |File ""|\.\.\.)", RegexOptions.IgnoreCase)]
     private static partial Regex StackFrameRegex();
 
     /// <summary>
     /// Builds a failure result from whatever the engine printed.
     /// </summary>
-    /// <param name="mode">The mode that was requested.</param>
-    /// <param name="stderr">Whatever the engine printed to stderr.</param>
-    /// <param name="exitCode">Process exit code.</param>
-    /// <returns>A failed result.</returns>
     public static SyncResult Failure(SyncMode mode, string stderr, int exitCode)
     {
         var error = Summarize(stderr, 400)
@@ -44,16 +37,9 @@ public static partial class EngineResults
     }
 
     /// <summary>
-    /// Turns an engine's output into something worth showing a person: decoder noise
-    /// dropped, repeats collapsed, and only the last few meaningful lines kept.
-    ///
-    /// This is what stands between the dashboard and several hundred identical lines of
-    /// libav logging. Nothing is lost by filtering here, since the full output still goes
-    /// to the server log for anyone actually debugging a file.
+    /// Boils engine output down to something readable: decoder noise dropped, repeats
+    /// collapsed, last few lines kept. The full output still goes to the debug log.
     /// </summary>
-    /// <param name="text">The raw output.</param>
-    /// <param name="maxLength">How much to keep.</param>
-    /// <returns>The trimmed text, or null if there was nothing useful in it.</returns>
     public static string? Summarize(string text, int maxLength = 200)
     {
         if (string.IsNullOrWhiteSpace(text))
@@ -79,15 +65,14 @@ public static partial class EngineResults
                 continue;
             }
 
-            // The same complaint repeated is one fact, not fifty.
+            // same line fifty times is one line
             if (meaningful.Count == 0 || !string.Equals(meaningful[^1], line, StringComparison.Ordinal))
             {
                 meaningful.Add(line);
             }
         }
 
-        // Everything it said was decoder noise, which on its own is the diagnosis: the
-        // audio in this file is not something ffmpeg can read cleanly.
+        // only decoder noise, which is the diagnosis: ffmpeg can't read this audio cleanly
         if (meaningful.Count == 0)
         {
             return noiseCount == 0
@@ -97,7 +82,7 @@ public static partial class EngineResults
                     + " decoder errors and no result. The file's audio track is probably damaged or in an unusual format. The full output is in the server log.";
         }
 
-        // The tail is where engines put the thing that actually went wrong.
+        // the actual error is usually at the end
         var kept = string.Join(" ", meaningful.TakeLast(3));
 
         if (noiseCount > 0)

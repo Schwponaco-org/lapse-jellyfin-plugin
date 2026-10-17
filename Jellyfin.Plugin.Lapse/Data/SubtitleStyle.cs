@@ -8,12 +8,8 @@ using System.Globalization;
 namespace Jellyfin.Plugin.Lapse.Data;
 
 /// <summary>
-/// How a subtitle should look. This gets written into an ASS file's style line rather than
-/// applied in a client, which is the whole point of it: a client setting has to be found
-/// and set again on every device someone watches on, and most of them have no font picker
-/// at all. Styling carried by the subtitle file travels with it.
-///
-/// The numbers are for a 1920x1080 script, which is what the writer declares.
+/// How a readable subtitle looks, written into the ASS style line so it travels with the file
+/// (most clients have no font picker). Numbers are for a 1920x1080 script.
 /// </summary>
 public class SubtitleStyle
 {
@@ -40,9 +36,7 @@ public class SubtitleStyle
     public int FontSize { get; set; } = 72;
 
     /// <summary>
-    /// Gets or sets the extra space between letters, in the same units. Loosened tracking
-    /// is the single change with the most evidence behind it for readability, more than
-    /// the typeface itself.
+    /// Gets or sets extra letter spacing. Wider tracking helps readability more than the typeface does.
     /// </summary>
     public double LetterSpacing { get; set; }
 
@@ -63,10 +57,7 @@ public class SubtitleStyle
     public int MarginV { get; set; } = 60;
 
     /// <summary>
-    /// Gets or sets the ASS Encoding field. 1 leaves the reading direction to the
-    /// renderer, which is right for every left to right script; Arabic and Hebrew get
-    /// their charset number, which is what tells libass the paragraph runs the other way.
-    /// See <see cref="SubtitleScripts.GetAssEncoding"/>.
+    /// Gets or sets the ASS Encoding field. 1 for left to right, the charset number for Arabic/Hebrew. See <see cref="SubtitleScripts.GetAssEncoding"/>.
     /// </summary>
     public int Encoding { get; set; } = SubtitleScripts.AutoEncoding;
 
@@ -74,7 +65,6 @@ public class SubtitleStyle
     /// Gets the dyslexia-friendly preset: the installable typeface, a little larger than
     /// standard, with the tracking opened up and a heavier outline.
     /// </summary>
-    /// <returns>The preset.</returns>
     public static SubtitleStyle Dyslexic() => new()
     {
         FontName = DyslexicFontName,
@@ -86,23 +76,9 @@ public class SubtitleStyle
     };
 
     /// <summary>
-    /// Returns this style adjusted for the writing system the subtitle is actually in.
-    ///
-    /// The readable preset is a set of decisions about the Latin alphabet, and three of
-    /// them are wrong elsewhere. A Latin-only typeface has no Arabic, Hebrew, Thai or CJK
-    /// glyphs in it, so asking for one gives a row of empty boxes. Letter spacing pulls
-    /// Arabic's joined letters apart and separates Thai and Indic marks from what they
-    /// belong to. And a right to left script has to say so in the file, or it renders
-    /// backwards.
-    ///
-    /// What survives is everything that helps regardless of script: the larger text, the
-    /// heavier outline and the margin.
+    /// Fits the style to the script. Latin-only fonts have no Arabic/Hebrew/Thai/CJK glyphs, spacing breaks
+    /// joined letters, and RTL has to be marked. Size, outline and margin stay.
     /// </summary>
-    /// <param name="script">The script the subtitle's dialogue is in.</param>
-    /// <param name="nonLatinFontName">The font to use when the chosen one can't render
-    /// the script. Empty falls back to <see cref="DefaultFontName"/>, which every system
-    /// has something for.</param>
-    /// <returns>A copy of this style, fit for that script.</returns>
     public SubtitleStyle ForScript(SubtitleScript script, string? nonLatinFontName = null)
     {
         var adapted = new SubtitleStyle
@@ -121,10 +97,7 @@ public class SubtitleStyle
             adapted.LetterSpacing = 0;
         }
 
-        // Only a font known to be Latin-only gets swapped out. An admin who typed a font
-        // name of their own has said which font they want, and it may well be the one that
-        // covers their library's language - second-guessing that would be worse than
-        // leaving it alone.
+        // Only swap a font we know is Latin-only. If an admin typed their own font, they meant it.
         if (!SubtitleScripts.IsLatinTypefaceEnough(script) && IsLatinOnlyFont(FontName))
         {
             adapted.FontName = string.IsNullOrWhiteSpace(nonLatinFontName)
@@ -136,12 +109,8 @@ public class SubtitleStyle
     }
 
     /// <summary>
-    /// Says whether a font name is one we know carries nothing but Latin. Only the font
-    /// the plugin installs itself is on that list, because it's the only one whose
-    /// coverage the plugin can be sure of.
+    /// Says whether a font is Latin-only. Only the one we install is on the list, it's the only one we're sure about.
     /// </summary>
-    /// <param name="fontName">The font name.</param>
-    /// <returns>True when the font has no non-Latin glyphs.</returns>
     public static bool IsLatinOnlyFont(string? fontName)
     {
         return fontName is not null
@@ -152,9 +121,6 @@ public class SubtitleStyle
     /// Builds the comma separated body of a Style line, from the font name onwards, in the
     /// order the given format declared.
     /// </summary>
-    /// <param name="advanced">True for V4+ (ass), false for V4 (ssa). The two formats
-    /// order their fields differently and V4 has no Spacing field at all.</param>
-    /// <returns>The style line's fields, without the leading "Style: Default,".</returns>
     public string ToStyleFields(bool advanced)
     {
         var font = SanitizeFontName(FontName);
@@ -180,9 +146,7 @@ public class SubtitleStyle
         return $"{font},{size},&H00FFFFFF,&H000000FF,&H00000000,&H00000000,{bold},0,0,0,100,100,{spacing},0,1,{outline},1,2,60,60,{margin},{encoding}";
     }
 
-    // A comma or a newline in the font name would end the field early and shift every
-    // value after it into the wrong column, which is a corrupt style line rather than an
-    // odd looking one.
+    // a comma or newline in the font name would shift every field after it
     private static string SanitizeFontName(string? name)
     {
         if (string.IsNullOrWhiteSpace(name))

@@ -17,9 +17,7 @@ public class SeriesSyncRequest
     public Guid ItemId { get; set; }
 
     /// <summary>
-    /// Gets or sets the reference track key, from
-    /// <see cref="Services.SeriesSyncService.GetReferenceOptions"/>. Null syncs every
-    /// subtitle against its episode's audio instead.
+    /// Gets or sets the reference track key from <see cref="Services.SeriesSyncService.GetReferenceOptions"/>. Null = sync against the audio.
     /// </summary>
     public string? ReferenceKey { get; set; }
 }
@@ -31,7 +29,7 @@ public class SeriesSyncRequest
 public class ReferenceOption
 {
     /// <summary>
-    /// Gets or sets the track key - a language code, or the suffix the file names carry.
+    /// Gets or sets the track key (a language code, or the file name suffix).
     /// </summary>
     public string Key { get; set; } = string.Empty;
 

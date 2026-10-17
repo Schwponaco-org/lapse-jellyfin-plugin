@@ -8,12 +8,8 @@ using System.Collections.Generic;
 namespace Jellyfin.Plugin.Lapse.Data;
 
 /// <summary>
-/// Asks for readable copies of an item's subtitles.
-///
-/// Which subtitles is always spelled out. A film can carry a Danish, an English and a
-/// Spanish track, and somebody who wants the Danish one in a dyslexia-friendly font has
-/// no reason to want the other two rewritten - still less if they share the library with
-/// people reading those.
+/// Asks for readable copies of specific subtitles. Always spelled out, wanting the Danish track in a
+/// dyslexia font is no reason to rewrite the English and Spanish ones.
 /// </summary>
 public class RestyleRequest
 {
@@ -32,17 +28,11 @@ public class RestyleRequest
     /// Gets or sets the subtitles to restyle, when more than one was picked. Empty falls
     /// back to <see cref="SubtitlePath"/>.
     /// </summary>
-    [System.Diagnostics.CodeAnalysis.SuppressMessage(
-        "Usage",
-        "CA2227:Collection properties should be read only",
-        Justification = "Bound from a request body, and System.Text.Json skips collection properties it can't assign to.")]
     public List<string>? SubtitlePaths { get; set; }
 
     /// <summary>
-    /// Gets or sets a value indicating whether the styled copy replaces the subtitle it
-    /// came from. Off by default: the styled file is written beside the original as a new
-    /// track, so both are offered in the player and everyone else's subtitle is left
-    /// alone. On, the original is kept as a backup so this is still undoable.
+    /// Gets or sets a value indicating whether the styled copy replaces the original (kept as backup).
+    /// Off by default, it's added as a new track instead.
     /// </summary>
     public bool ReplaceOriginal { get; set; }
 }
@@ -95,9 +85,7 @@ public class RestyleResult
     public string? Script { get; set; }
 
     /// <summary>
-    /// Gets or sets a value indicating whether the configured font had to be swapped for
-    /// one that can render this script. True means the size, outline and margin applied
-    /// but the dyslexia typeface didn't, because it has no glyphs for these letters.
+    /// Gets or sets a value indicating whether the font got swapped because it can't draw this script.
     /// </summary>
     public bool FontSwapped { get; set; }
 
@@ -129,9 +117,7 @@ public class RestyleResult
     public string? BackupPath { get; set; }
 
     /// <summary>
-    /// Gets or sets a value indicating whether the font this asks for is actually where
-    /// the player can find it. False means the file is correct but will render in
-    /// whatever font the player falls back to.
+    /// Gets or sets a value indicating whether the player can actually find the font.
     /// </summary>
     public bool FontAvailable { get; set; }
 

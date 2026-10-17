@@ -40,18 +40,13 @@ public class SyncResult
     public int? Penalty { get; set; }
 
     /// <summary>
-    /// Gets or sets how much of the subtitle ended up sitting on speech, 0 to 1. Newer
-    /// LAPSE builds report this; anything below about 0.5 usually means the subtitle and
-    /// the video aren't the same content. Null when the engine didn't say.
+    /// Gets or sets how much of the subtitle sits on speech, 0..1. Below ~0.5 usually means wrong content. Newer LAPSE only.
     /// </summary>
     public double? Confidence { get; set; }
 
     /// <summary>
-    /// Gets or sets what LAPSE made of its own answer: "solid" when it stood out clearly
-    /// enough to overwrite the original, "unsure" when it is probably right, "nothing"
-    /// when the audio doesn't back it up at all. This is the engine's own judgement
-    /// against the configured confidence, and it's a better thing to gate on than a
-    /// number the plugin re-interprets. Null for engines that don't report one.
+    /// Gets or sets LAPSE's verdict: "solid", "unsure" or "nothing". We gate on this rather than
+    /// reinterpreting a number. Null for engines that don't say.
     /// </summary>
     public string? Verdict { get; set; }
 
@@ -68,55 +63,40 @@ public class SyncResult
     public double? Agreement { get; set; }
 
     /// <summary>
-    /// Gets or sets a value indicating whether the engine's confidence came in under the
-    /// configured threshold. What actually happened to the result then depends on the
-    /// low-confidence setting in File output.
+    /// Gets or sets a value indicating whether confidence came in under the threshold. What happens next is the low confidence setting.
     /// </summary>
     public bool LowConfidence { get; set; }
 
     /// <summary>
-    /// Gets or sets a value indicating whether this run only went through because the
-    /// runner tried again with the engine's force flag, which it does when the first go
-    /// came back saying the subtitle has too few cues to judge. Worth saying out loud:
-    /// nothing checked the answer.
+    /// Gets or sets a value indicating whether it only went through on the --force retry, so nothing checked the answer.
     /// </summary>
     public bool Forced { get; set; }
 
     /// <summary>
-    /// Gets or sets a value indicating whether the result was thrown away and the file on
-    /// disk left exactly as it was. Happens for a low-confidence result under the "keep
-    /// original" setting, and for a subtitle that turned out to already be in sync - the
-    /// run itself still counts as a success, it just deliberately didn't write anything.
+    /// Gets or sets a value indicating whether nothing was written (low confidence with keep original,
+    /// or already in sync). The run still counts as a success.
     /// </summary>
     public bool Skipped { get; set; }
 
     /// <summary>
-    /// Gets or sets a value indicating whether the engine's answer was small enough to
-    /// count as no change at all, so the file was left alone. Unlike the low-confidence
-    /// kind of <see cref="Skipped"/>, this one means the subtitle is right: it counts as
-    /// synced everywhere the plugin keeps track of what's been done.
+    /// Gets or sets a value indicating whether the shift was too small to bother. Unlike a doubtful skip,
+    /// this counts as synced.
     /// </summary>
     public bool AlreadyInSync { get; set; }
 
     /// <summary>
-    /// Gets or sets a value indicating whether the result was written, but beside the
-    /// original rather than over it, because the engine wasn't sure of it. The file is
-    /// there to be looked at; until somebody has, the subtitle doesn't count as synced.
+    /// Gets or sets a value indicating whether it was written next to the original because the engine
+    /// wasn't sure. Not synced until someone checks it.
     /// </summary>
     public bool Unconfirmed { get; set; }
 
     /// <summary>
-    /// Gets a value indicating whether this run leaves the subtitle synced: something was
-    /// written that the engine stood behind, or the file was already right. A failure, a
-    /// doubtful result left beside the original, and a doubtful result thrown away all
-    /// leave it where it was.
+    /// Gets a value indicating whether the subtitle is synced after this (written and trusted, or already right).
     /// </summary>
     public bool CountsAsSynced => Success && (AlreadyInSync || (!Skipped && !Unconfirmed));
 
     /// <summary>
-    /// Gets or sets the subtitle that was read. Recorded so the history can tell a run
-    /// that replaced a file from one that added a new one next to it, which is the
-    /// difference between undoing by restoring a backup and undoing by deleting.
+    /// Gets or sets the subtitle that was read, so undo knows whether to restore a backup or delete a new file.
     /// </summary>
     public string? InputPath { get; set; }
 
@@ -126,10 +106,7 @@ public class SyncResult
     public string? OutputPath { get; set; }
 
     /// <summary>
-    /// Gets or sets the format the subtitle was in before the plugin converted it so an
-    /// engine could read it, or null when no conversion was needed. Worth surfacing,
-    /// since it explains why the result has a different extension from the file that was
-    /// picked.
+    /// Gets or sets the format before we converted it for the engine, or null. Explains a different extension.
     /// </summary>
     public string? ConvertedFrom { get; set; }
 
@@ -150,16 +127,12 @@ public class SyncResult
     public string? EngineId { get; set; }
 
     /// <summary>
-    /// Gets or sets a short line of whatever the engine said. Used for engines where we
-    /// don't have a documented output format to pull exact numbers out of, so there's
-    /// still something meaningful to show the user.
+    /// Gets or sets a short summary of what the engine said.
     /// </summary>
     public string? EngineOutput { get; set; }
 
     /// <summary>
-    /// Gets or sets how many answers multi engine sync left to choose between, when it ran.
-    /// Zero for an ordinary sync. What it means is that nothing was decided: the original
-    /// is still where it was, and this many files are waiting to be compared.
+    /// Gets or sets how many multi engine answers are waiting. Zero for a normal sync.
     /// </summary>
     public int CandidateCount { get; set; }
 }

@@ -10,9 +10,7 @@ namespace Jellyfin.Plugin.Lapse.Data;
 public enum SubToSubPlacement
 {
     /// <summary>
-    /// Next to the reference subtitle. This is the default: the reference is the file that
-    /// is already correctly placed for the video, so a result beside it is the one Jellyfin
-    /// will pick up as another track for that video.
+    /// Next to the reference subtitle (default), that one already sits next to its video.
     /// </summary>
     ReferenceFolder,
 

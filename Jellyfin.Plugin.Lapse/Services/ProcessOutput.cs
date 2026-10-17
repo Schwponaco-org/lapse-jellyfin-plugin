@@ -8,27 +8,20 @@ using System.Text;
 namespace Jellyfin.Plugin.Lapse.Services;
 
 /// <summary>
-/// Shared setup for reading what a child process prints.
+/// Makes child process output read as UTF-8.
 ///
-/// .NET decodes a redirected pipe with the console's code page, and a Jellyfin server
-/// started without a console falls back to the machine's ANSI one - 936 on a Chinese
-/// Windows install, 1252 on a Western one. The engines and ffmpeg all write UTF-8, so
-/// unless we say so, every non-ASCII path they mention comes back mangled. That is worse
-/// than cosmetic: a UTF-8 byte pair read as one code page 936 character can swallow the
-/// backslash that followed it, which turns the engine's JSON into something that no
-/// longer parses and a finished sync into "the output didn't look like a normal result".
+/// Without a console .NET decodes pipes with the machine's ANSI code page (936 on Chinese
+/// Windows, 1252 on Western). Engines write UTF-8, so non-ASCII paths got mangled, and on
+/// 936 a byte pair could eat the following backslash and break the engine's JSON.
 /// </summary>
 public static class ProcessOutput
 {
-    // No BOM: this decodes a stream rather than writing a file, and a stray U+FEFF at the
-    // front of the first line would only get in the way of parsing it.
+    // no BOM, a stray U+FEFF would just get in the way of parsing
     private static readonly UTF8Encoding Utf8 = new(encoderShouldEmitUTF8Identifier: false);
 
     /// <summary>
-    /// Reads a process's stdout and stderr as UTF-8, whatever the server's code page is.
-    /// Both streams have to already be redirected.
+    /// Sets stdout and stderr to UTF-8. Both must already be redirected.
     /// </summary>
-    /// <param name="startInfo">The process about to be started.</param>
     public static void ReadAsUtf8(ProcessStartInfo startInfo)
     {
         startInfo.StandardOutputEncoding = Utf8;

@@ -5,12 +5,8 @@
 namespace Jellyfin.Plugin.Lapse.Data;
 
 /// <summary>
-/// One user's own subtitle appearance, kept against their id.
-///
-/// Stored on the server rather than in the browser so it follows the person from the TV
-/// to the phone to the laptop, which is the whole complaint about Jellyfin's own subtitle
-/// settings: they are per device, so anyone who needs them has to find and set them again
-/// everywhere, on clients that mostly have no font picker at all.
+/// One user's subtitle appearance. On the server so it follows them between devices, unlike
+/// Jellyfin's own per-device subtitle settings.
 /// </summary>
 public class UserSubtitleAppearance
 {

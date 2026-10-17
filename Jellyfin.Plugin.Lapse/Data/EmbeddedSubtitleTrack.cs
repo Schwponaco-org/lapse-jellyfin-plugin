@@ -5,9 +5,7 @@
 namespace Jellyfin.Plugin.Lapse.Data;
 
 /// <summary>
-/// One subtitle stream inside a video file, as the file itself describes it. Built from
-/// ffprobe's answer when the file has been looked at directly, or from Jellyfin's own
-/// record of the stream when it hasn't.
+/// One subtitle stream inside a video, from ffprobe or from Jellyfin's record of it.
 /// </summary>
 public class EmbeddedSubtitleTrack
 {

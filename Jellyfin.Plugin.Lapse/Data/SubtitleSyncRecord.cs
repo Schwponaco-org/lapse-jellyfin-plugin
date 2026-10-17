@@ -7,12 +7,8 @@ using System;
 namespace Jellyfin.Plugin.Lapse.Data;
 
 /// <summary>
-/// One subtitle file that has actually been synced, and when.
-///
-/// The status used to be a single flag on the item, which couldn't tell "synced" from
-/// "one of its four subtitles was synced", and couldn't tell either of those from a
-/// record left behind by an older install. Recording the files themselves means the
-/// status is worked out from evidence rather than asserted.
+/// One subtitle file that got synced, and when. The item status is worked out from these instead
+/// of a single flag that couldn't tell "all synced" from "1 of 4".
 /// </summary>
 public class SubtitleSyncRecord
 {
@@ -27,10 +23,8 @@ public class SubtitleSyncRecord
     public DateTime LastSyncUtc { get; set; }
 
     /// <summary>
-    /// Gets or sets the file's own last write time once the sync was done with it. Any
-    /// other time later on, newer or older, means the file was replaced: by Bazarr, by a
-    /// person, or by a restore that kept the old file's time. Null on records from before
-    /// this was kept, which fall back to comparing with <see cref="LastSyncUtc"/>.
+    /// Gets or sets the file's write time after the sync. Any other time later means it got replaced.
+    /// Null on old records, which compare against <see cref="LastSyncUtc"/> instead.
     /// </summary>
     public DateTime? FileWriteUtc { get; set; }
 }

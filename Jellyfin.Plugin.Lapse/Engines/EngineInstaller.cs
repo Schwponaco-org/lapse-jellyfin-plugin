@@ -18,13 +18,13 @@ using Microsoft.Extensions.Logging;
 namespace Jellyfin.Plugin.Lapse.Engines;
 
 /// <summary>
-/// Downloads and installs engine binaries. Projects publish these in all sorts of shapes
-/// - a bare executable, a tarball, a zip - and not every project publishes one for every
-/// platform, so this handles the packaging differences and gives a straight answer when
-/// there simply isn't a build for the machine the server is running on.
+/// Downloads and installs engine binaries (bare executable, tarball or zip), and says so
+/// plainly when there's no build for this machine.
 /// </summary>
-public class EngineInstaller
+public sealed class EngineInstaller : IDisposable
 {
+    // one install at a time, two would share the same temp and staging files
+    private readonly SemaphoreSlim _installGate = new(1, 1);
     private readonly EngineRunner _runner;
     private readonly EngineCapabilityProbe _probe;
     private readonly GitHubReleaseClient _releaseClient;
@@ -34,11 +34,6 @@ public class EngineInstaller
     /// <summary>
     /// Initializes a new instance of the <see cref="EngineInstaller"/> class.
     /// </summary>
-    /// <param name="runner">Used to work out install paths.</param>
-    /// <param name="probe">Cleared after an install, since the binary just changed.</param>
-    /// <param name="releaseClient">Used to record which release got installed.</param>
-    /// <param name="httpClientFactory">Factory to grab an HttpClient from.</param>
-    /// <param name="logger">Logger.</param>
     public EngineInstaller(
         EngineRunner runner,
         EngineCapabilityProbe probe,
@@ -54,36 +49,24 @@ public class EngineInstaller
     }
 
     /// <summary>
-    /// Gets a short description of the OS and CPU this server is running on. Everything
-    /// here is read out of the running process, not baked in at build time, so it is what
-    /// the server actually is - including inside a container, where the host and the image
-    /// can easily disagree.
+    /// Gets the OS and CPU we're actually running on (read at runtime, so right inside containers too).
     /// </summary>
     public static string DetectedOsArch => $"{RuntimeInformation.OSDescription} ({RuntimeInformation.OSArchitecture})";
 
     /// <summary>
-    /// Gets the CPU architecture the engine download is chosen for. This is the OS
-    /// architecture rather than the process one: engines run as their own processes, so
-    /// what matters is what the machine can execute, not how this .NET process happens to
-    /// have been started.
+    /// Gets the architecture downloads are picked for. The OS one, not the process one, engines are their own processes.
     /// </summary>
     public static string TargetArchitecture => RuntimeInformation.OSArchitecture.ToString();
 
     /// <summary>
-    /// Gets the architecture this process is running as. Worth showing next to
-    /// <see cref="TargetArchitecture"/> because the two differ under emulation (an x64
-    /// build on Apple silicon, an amd64 image on an arm64 host), and when they do, that is
-    /// usually the explanation for an engine that installs fine and then won't start.
+    /// Gets the process architecture. Differs from <see cref="TargetArchitecture"/> under
+    /// emulation, which usually explains an engine that installs fine and won't start.
     /// </summary>
     public static string ProcessArchitecture => RuntimeInformation.ProcessArchitecture.ToString();
 
     /// <summary>
-    /// Explains why an engine can't be downloaded onto this machine, and what to do about
-    /// it. This is the message people actually read when the Install button won't work, so
-    /// it spells out the options rather than stopping at "not supported".
+    /// Explains why there's no download for this machine and what to do instead.
     /// </summary>
-    /// <param name="engine">The engine with no build for this machine.</param>
-    /// <returns>A message to show in the dashboard.</returns>
     public static string DescribeMissingBuild(IEngine engine)
     {
         var descriptor = engine.Descriptor;
@@ -108,9 +91,6 @@ public class EngineInstaller
     /// <summary>
     /// Downloads an engine and puts it somewhere it can be run from.
     /// </summary>
-    /// <param name="engine">The engine to install.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>The release tag that got installed, or null if it couldn't be determined.</returns>
     /// <exception cref="NotSupportedException">Thrown when there's no build for this machine.</exception>
     public async Task<string?> InstallAsync(IEngine engine, CancellationToken cancellationToken = default)
     {
@@ -120,12 +100,30 @@ public class EngineInstaller
             throw new NotSupportedException(DescribeMissingBuild(engine));
         }
 
+        await _installGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+        try
+        {
+            return await InstallLockedAsync(engine, download, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _installGate.Release();
+        }
+    }
+
+    /// <inheritdoc />
+    public void Dispose()
+    {
+        _installGate.Dispose();
+    }
+
+    private async Task<string?> InstallLockedAsync(IEngine engine, EngineDownload download, CancellationToken cancellationToken)
+    {
         var targetPath = _runner.GetInstalledPath(engine);
         var engineFolder = Path.GetDirectoryName(targetPath)!;
 
-        // Before there were several engines, LAPSE's binary was a file sitting directly at
-        // engines/lapse. Now that path needs to be the engine's folder, so an old install
-        // blocks the new one with "the file already exists". Clear the stale binary out.
+        // old single engine installs put the binary at engines/lapse, which is now the folder
         if (File.Exists(engineFolder))
         {
             _logger.LogInformation("Removing old style engine binary at {Path} to make room for the new layout", engineFolder);
@@ -134,10 +132,8 @@ public class EngineInstaller
 
         Directory.CreateDirectory(engineFolder);
 
-        // Ask which release is the latest first and download that one by name. The
-        // download URLs all say "latest", and asking afterwards could name a release that
-        // came out while the archive was downloading. If GitHub's API can't be reached the
-        // latest URLs still work, the version just goes unrecorded.
+        // Look up the latest tag first and download that by name, so the recorded version
+        // is really what we got. If the API is down the "latest" URL still works.
         var tag = await _releaseClient.GetLatestTagAsync(engine.Descriptor.GitHubRepo, force: true, cancellationToken).ConfigureAwait(false);
         var url = PinToRelease(download.Url, tag);
 
@@ -165,16 +161,12 @@ public class EngineInstaller
             }
 
             MakeExecutable(targetPath);
-            await DownloadSidecarsAsync(download, engineFolder, engine, cancellationToken).ConfigureAwait(false);
             _probe.Invalidate();
             _logger.LogInformation("{Engine} installed to {Path}", engine.Descriptor.DisplayName, targetPath);
         }
         finally
         {
-            if (File.Exists(tempPath))
-            {
-                File.Delete(tempPath);
-            }
+            TryDelete(tempPath);
         }
 
         RecordInstalledVersion(engine, tag);
@@ -182,13 +174,8 @@ public class EngineInstaller
     }
 
     /// <summary>
-    /// Turns a "latest release" download URL into one for a named release, so the file
-    /// downloaded is the release that was recorded. URLs in any other shape, and a null
-    /// tag, are left as they are.
+    /// Turns a /releases/latest/download/ URL into one for a named tag. Anything else is left alone.
     /// </summary>
-    /// <param name="url">The descriptor's download URL.</param>
-    /// <param name="tag">The release tag, or null.</param>
-    /// <returns>The URL to download.</returns>
     public static string PinToRelease(string url, string? tag)
     {
         const string Latest = "/releases/latest/download/";
@@ -201,11 +188,8 @@ public class EngineInstaller
         return url.Replace(Latest, "/releases/download/" + Uri.EscapeDataString(tag) + "/", StringComparison.Ordinal);
     }
 
-    // LAPSE publishes a SHA256SUMS file with every release. When there is one, the
-    // archive has to match it: a download cut short by a flaky connection or a proxy
-    // handing back something else is caught here rather than surfacing as an engine that
-    // won't start. Releases without the file - the other engines, older LAPSE builds - are
-    // installed as before.
+    // LAPSE releases have a SHA256SUMS file. If there is one the download must match, catches
+    // cut off downloads and proxies handing back junk. No file (other engines, old LAPSE) = no check.
     private async Task VerifyChecksumAsync(string url, string archivePath, IEngine engine, CancellationToken cancellationToken)
     {
         var slash = url.LastIndexOf('/');
@@ -261,17 +245,13 @@ public class EngineInstaller
     }
 
     /// <summary>
-    /// Finds one file's checksum in a SHA256SUMS file: lines of a hex digest, whitespace,
-    /// and the file name, which sha256sum marks with a * in binary mode.
+    /// Finds a file's digest in SHA256SUMS ("digest  name", or "*name" in binary mode).
     /// </summary>
-    /// <param name="sums">The SHA256SUMS contents.</param>
-    /// <param name="assetName">The file to look for.</param>
-    /// <returns>The hex digest, or null when the file isn't listed.</returns>
     public static string? FindChecksum(string sums, string assetName)
     {
         foreach (var raw in sums.Split('\n'))
         {
-            // A SHA-256 digest is 64 hex digits, then whitespace, then the name.
+            // 64 hex digits, whitespace, name
             var line = raw.Trim();
             if (line.Length <= 65 || !char.IsWhiteSpace(line[64]))
             {
@@ -288,11 +268,8 @@ public class EngineInstaller
         return null;
     }
 
-    // Puts a freshly extracted file where the engine runs from by renaming over it. A
-    // rename leaves a process that already has the old file open running happily on the
-    // old copy, where writing into the file in place fails on Linux while it runs ("text
-    // file busy") and, for the onnxruntime library, can crash the process that has it
-    // loaded. That matters now a bulk run keeps LAPSE running for its whole length.
+    // Rename over the old file instead of writing into it. A running process keeps the old
+    // copy, writing in place gives "text file busy" on Linux and can crash onnxruntime.
     private static void PutInPlace(string staged, string destination)
     {
         try
@@ -301,7 +278,7 @@ public class EngineInstaller
         }
         catch (UnauthorizedAccessException ex)
         {
-            // Windows won't replace an executable that's running.
+            // Windows won't replace a running exe
             throw new IOException(
                 $"Could not replace {Path.GetFileName(destination)}, probably because a sync is using it right now. "
                 + "Try again once nothing is syncing.",
@@ -316,17 +293,27 @@ public class EngineInstaller
         }
     }
 
+    private void TryDelete(string path)
+    {
+        try
+        {
+            File.Delete(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // don't bury the real install error under this
+            _logger.LogDebug(ex, "Could not remove {Path}", path);
+        }
+    }
+
     private static string Staging(string path)
     {
         return path + ".lapse-new";
     }
 
     /// <summary>
-    /// Writes down which release of an engine is on disk, so the update check has
-    /// something to compare against.
+    /// Records which release is installed so the update check has something to compare to.
     /// </summary>
-    /// <param name="engine">The engine.</param>
-    /// <param name="tag">The release tag, or null if it isn't known.</param>
     public static void RecordInstalledVersion(IEngine engine, string? tag)
     {
         var plugin = Plugin.Instance;
@@ -335,42 +322,13 @@ public class EngineInstaller
             return;
         }
 
-        var settings = plugin.Configuration.GetEngineSettings(engine.Descriptor.Id);
-        settings.InstalledVersion = tag;
-        settings.LatestKnownVersion = tag;
-        settings.LastUpdateCheckUtc = DateTime.UtcNow;
-        plugin.SaveConfiguration();
-    }
-
-    // Best effort on purpose. Sidecars back an optional capability (LAPSE's Silero VAD
-    // falls back to libfvad when its onnxruntime library or model isn't there, the same
-    // way it behaves on a machine that never had them), so a missing or renamed sidecar
-    // asset should degrade the engine, not fail the whole install.
-    private async Task DownloadSidecarsAsync(EngineDownload download, string engineFolder, IEngine engine, CancellationToken cancellationToken)
-    {
-        foreach (var sidecar in download.Sidecars)
+        lock (Plugin.ConfigurationLock)
         {
-            var sidecarPath = Path.Combine(engineFolder, sidecar.FileName);
-
-            try
-            {
-                await DownloadToAsync(sidecar.Url, Staging(sidecarPath), engine, cancellationToken).ConfigureAwait(false);
-                PutInPlace(Staging(sidecarPath), sidecarPath);
-                _logger.LogInformation("Installed {File} alongside {Engine}", sidecar.FileName, engine.Descriptor.DisplayName);
-            }
-            catch (Exception ex) when (ex is HttpRequestException or IOException)
-            {
-                _logger.LogInformation(
-                    ex,
-                    "Could not fetch {File} for {Engine}, it will fall back to running without it",
-                    sidecar.FileName,
-                    engine.Descriptor.DisplayName);
-
-                if (File.Exists(Staging(sidecarPath)))
-                {
-                    File.Delete(Staging(sidecarPath));
-                }
-            }
+            var settings = plugin.Configuration.GetEngineSettings(engine.Descriptor.Id);
+            settings.InstalledVersion = tag;
+            settings.LatestKnownVersion = tag;
+            settings.LastUpdateCheckUtc = DateTime.UtcNow;
+            plugin.SaveConfiguration();
         }
     }
 
@@ -399,10 +357,8 @@ public class EngineInstaller
         }
     }
 
-    // The archives we deal with have the executable at the root, but don't assume that -
-    // walk the whole archive and take the entry that looks most like what we're after.
-    // Anything the descriptor lists as a companion comes out at the same time, next to the
-    // executable, because that is where the engine looks for it.
+    // Walk the whole archive for the best matching entry instead of assuming it's at the
+    // root. Companion files land next to the executable, that's where the engine looks.
     private static async Task ExtractFromTarGzAsync(
         string archivePath,
         string targetPath,
@@ -414,9 +370,8 @@ public class EngineInstaller
         var names = new List<string>();
         var companions = new List<string>();
 
-        // 0 = nothing yet, 1 = something named after the engine, 2 = the exact name. A tar
-        // is read front to back, so a suffixed name is taken when it turns up and then
-        // given way to the real thing if that appears later on.
+        // 0 nothing, 1 named like the engine, 2 exact name. Tars are read front to back so
+        // a better match later on replaces an earlier one.
         var bestMatch = 0;
 
         await using (var fileStream = File.OpenRead(archivePath))
@@ -462,8 +417,7 @@ public class EngineInstaller
             throw new IOException(BuildNotFoundMessage(engine, names));
         }
 
-        // Only once the whole archive has come out, so a broken download leaves the
-        // working install as it was rather than half replaced.
+        // only now, so a broken archive leaves the old install alone
         MakeExecutable(Staging(targetPath));
         PutInPlace(Staging(targetPath), targetPath);
 
@@ -484,14 +438,10 @@ public class EngineInstaller
 
         var entry = archive.Entries.FirstOrDefault(e => IsWantedEntry(e.Name, engine));
 
-        // alass's Windows zip calls the binary alass-cli.exe and ships a whole ffmpeg
-        // build next to it, so neither the exact name nor "the only .exe in here" finds
-        // it. A file named after the engine with a suffix is the engine; ffmpeg.exe
-        // sitting beside it is not.
+        // alass' Windows zip has alass-cli.exe next to a whole ffmpeg build, so match on the name prefix
         entry ??= archive.Entries.FirstOrDefault(e => IsEngineVariant(e.Name, engine));
 
-        // Still nothing, so fall back to the only executable in there. Anything with
-        // exactly one .exe (or one file at all) is unambiguous.
+        // still nothing, take the only .exe (or the only file) if there's exactly one
         entry ??= SingleOrNull(archive.Entries.Where(e => e.Name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)));
         entry ??= SingleOrNull(archive.Entries.Where(e => !string.IsNullOrEmpty(e.Name)));
 
@@ -537,11 +487,8 @@ public class EngineInstaller
             || string.Equals(entryName, wanted + ".exe", StringComparison.OrdinalIgnoreCase);
     }
 
-    // Named after the engine but not exactly it: alass-cli.exe, alass-windows64. The
-    // separator is what keeps this honest - it matches the engine's own build under
-    // another name without ever picking up an unrelated binary that happens to start
-    // with the same letters. Only real executables qualify, so a stray alass-cli.dll
-    // or alass-notes.txt is left where it is.
+    // alass-cli.exe, alass-windows64: engine name plus - or _. Executables only, so
+    // alass-notes.txt or a .dll don't count.
     private static bool IsEngineVariant(string entryName, IEngine engine)
     {
         var extension = Path.GetExtension(entryName);
@@ -567,7 +514,7 @@ public class EngineInstaller
 
     private static void MakeExecutable(string path)
     {
-        // Windows has no exec bit, the .exe extension is the whole story there
+        // no exec bit on Windows
         if (OperatingSystem.IsWindows())
         {
             return;

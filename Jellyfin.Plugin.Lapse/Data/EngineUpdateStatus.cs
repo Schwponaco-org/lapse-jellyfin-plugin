@@ -33,9 +33,7 @@ public class EngineUpdateStatus
     public bool UpdateAvailable { get; set; }
 
     /// <summary>
-    /// Gets or sets a value indicating whether the plugin couldn't work out what version
-    /// is installed. The update still goes ahead in that case, it just can't say what
-    /// it's replacing.
+    /// Gets or sets a value indicating whether we couldn't tell the installed version. Updating still works.
     /// </summary>
     public bool VersionUnknown { get; set; }
 

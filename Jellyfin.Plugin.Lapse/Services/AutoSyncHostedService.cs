@@ -14,14 +14,8 @@ using Microsoft.Extensions.Logging;
 namespace Jellyfin.Plugin.Lapse.Services;
 
 /// <summary>
-/// Watches for new items getting added to a library and queues them up for a sync,
-/// same as the classic intro-skipper auto-detect hook. Debounced with a timer so a big
-/// library scan that adds a bunch of items at once doesn't kick off a sync per item
-/// the instant each one shows up, before its subtitles have even settled.
-///
-/// This is what means adding a film doesn't have to wait for the next scheduled run. It
-/// is per library, so a library can be on for scheduled and bulk runs and still not have
-/// every new file picked up the moment it lands.
+/// Queues newly added items for a sync (per library, off by default). Debounced so a big
+/// scan doesn't kick off a sync per item before its subtitles have even landed.
 /// </summary>
 public sealed class AutoSyncHostedService : IHostedService, IDisposable
 {
@@ -38,10 +32,6 @@ public sealed class AutoSyncHostedService : IHostedService, IDisposable
     /// <summary>
     /// Initializes a new instance of the <see cref="AutoSyncHostedService"/> class.
     /// </summary>
-    /// <param name="libraryManager">Used to subscribe to ItemAdded and look items back up.</param>
-    /// <param name="libraryService">Decides whether an item's library is turned on.</param>
-    /// <param name="queueManager">Where newly added items get queued for syncing.</param>
-    /// <param name="logger">Logger.</param>
     public AutoSyncHostedService(
         ILibraryManager libraryManager,
         LibraryService libraryService,
@@ -79,10 +69,12 @@ public sealed class AutoSyncHostedService : IHostedService, IDisposable
     {
         var item = itemChangeEventArgs.Item;
 
-        // The library check happens on the timer rather than here: during a scan the item's
-        // parents aren't always wired up yet, so asking which library it's in this early
-        // can come back empty for something that is perfectly fine 30 seconds later.
-        if (item.LocationType == LocationType.Virtual || !LibraryService.IsSyncableKind(item))
+        // Nobody has auto-sync on (the default), so don't collect anything during scans.
+        // The real library check waits for the timer, mid-scan the parents aren't always
+        // wired up yet and it can come back empty.
+        if (item.LocationType == LocationType.Virtual
+            || !LibraryService.IsSyncableKind(item)
+            || Plugin.Instance?.Configuration.Libraries.Exists(l => l.AutoSyncEnabled) != true)
         {
             return;
         }
@@ -97,8 +89,7 @@ public sealed class AutoSyncHostedService : IHostedService, IDisposable
 
     private void OnTimerElapsed(object? state)
     {
-        // A timer callback that throws takes the whole server down with it, so nothing
-        // gets out of here.
+        // an exception out of a timer callback takes the whole server down
         try
         {
             QueuePending();

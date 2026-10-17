@@ -11,39 +11,19 @@ namespace Jellyfin.Plugin.Lapse.Engines;
 /// <summary>
 /// Which subtitle formats each engine reads and writes.
 ///
-/// This used to be one list for all of them, because it used to be true: every engine
-/// took srt, vtt, ass or ssa and nothing else, so anything else had to be converted
-/// first. LAPSE 2.0.3 reads and writes nine more, including the two picture based ones,
-/// where it rewrites the timing without touching the bitmaps. Converting before syncing
-/// is therefore no longer something the plugin has to do, only something it can do.
+/// LAPSE 2.0.3+ reads and writes a lot more than srt/vtt/ass/ssa (PGS and VobSub too,
+/// rewriting timing only), so converting first is optional for it.
 ///
-/// The lists here are the fallback. When a binary is installed the plugin asks it with
-/// <c>--formats</c> and uses that answer instead, so a newer or older build than the one
-/// this was written against is still handled correctly. See
-/// <see cref="EngineRuntimeInfo.GetSubtitleExtensions"/>.
+/// These lists are only the fallback, an installed binary gets asked with --formats
+/// (see <see cref="EngineRuntimeInfo.GetSubtitleExtensions"/>).
 /// </summary>
 public static class EngineFormats
 {
     /// <summary>
-    /// What LAPSE 2.2.4 reads, taken from the subtitle_formats array in its main.cpp. It
-    /// writes back in whatever format it read, so nothing on this list needs converting
-    /// on the way in or on the way out. 2.2.4 also stopped caring about the case of the
-    /// extension, so Movie.EN.SRT is read like Movie.en.srt, and took .sami as the SAMI
-    /// files it already read as .smi.
-    ///
-    /// Three of those formats share the .sub extension - MicroDVD, MPL2 and SubViewer 2 -
-    /// and the extension says nothing about which one a file is, so the engine reads the
-    /// file to tell them apart rather than going by the name. Only MicroDVD needs a frame
-    /// rate, because it counts frames; MPL2's numbers are tenths of a second and SubViewer
-    /// 2's are timestamps. .idx is the VobSub pair, named after the file that holds the
-    /// timings rather than the .sub beside it that holds the pictures.
-    ///
-    /// The engine will also open a .txt, or a file with no extension at all, and sniff it
-    /// for one of the text formats above before turning it away. That is deliberately not
-    /// on this list, for the same reason the engine leaves it off its own --formats answer
-    /// and its container leaves it out of a scan: .txt files sit in media folders for all
-    /// sorts of reasons that have nothing to do with subtitles. See
-    /// <see cref="Services.SubtitleFormats.ConvertibleExtensions"/>.
+    /// What LAPSE 2.2.4 reads (subtitle_formats in its main.cpp), written back in the same
+    /// format. .sub can be MicroDVD, MPL2 or SubViewer 2, the engine sniffs which. .idx is
+    /// VobSub. It also sniffs .txt but that's left off on purpose, .txt in a media folder
+    /// is rarely a subtitle (see <see cref="Services.SubtitleFormats.ConvertibleExtensions"/>).
     /// </summary>
     public static readonly string[] Lapse =
     {
@@ -51,9 +31,8 @@ public static class EngineFormats
     };
 
     /// <summary>
-    /// What alass reads. Its own README lists srt, ass, ssa, idx and sub, but the plugin
-    /// only claims the plain text ones here: an engine that turns out to read more says so
-    /// through --formats, and claiming too much would mean handing it a file it fails on.
+    /// What alass reads. Its README also lists idx and sub, but we only claim the text ones,
+    /// overclaiming means handing it files it fails on.
     /// </summary>
     public static readonly string[] Alass = { ".srt", ".ass", ".ssa", ".vtt" };
 
@@ -65,8 +44,6 @@ public static class EngineFormats
     /// <summary>
     /// Gets the formats an engine reads, without asking its binary.
     /// </summary>
-    /// <param name="engineId">The engine id.</param>
-    /// <returns>The extensions, each with a leading dot.</returns>
     public static IReadOnlyList<string> ForEngine(string? engineId)
     {
         return (engineId ?? string.Empty).ToLowerInvariant() switch
@@ -75,20 +52,14 @@ public static class EngineFormats
             "alass" => Alass,
             "ffsubsync" => Ffsubsync,
 
-            // An engine the plugin doesn't know gets the set every one of them has always
-            // taken, which is the safe answer rather than the generous one.
+            // unknown engine, the safe set
             _ => Ffsubsync
         };
     }
 
     /// <summary>
-    /// Says whether an engine reads a file as it stands, going by the static list rather
-    /// than by what the installed binary reports. Used where there's no binary to ask -
-    /// listing an item's subtitles, mostly - while the runner uses the probed answer.
+    /// Says whether an engine reads a file, from the static list (the runner uses the probed answer instead).
     /// </summary>
-    /// <param name="engineId">The engine id.</param>
-    /// <param name="path">The subtitle path.</param>
-    /// <returns>True if that engine takes the file directly.</returns>
     public static bool CanRead(string? engineId, string? path)
     {
         return Contains(ForEngine(engineId), path);
@@ -97,8 +68,6 @@ public static class EngineFormats
     /// <summary>
     /// Says whether the engine a plain Sync press would use reads a file as it stands.
     /// </summary>
-    /// <param name="path">The subtitle path.</param>
-    /// <returns>True if the default engine takes the file directly.</returns>
     public static bool DefaultEngineCanRead(string? path)
     {
         return CanRead(Plugin.Instance?.Configuration.DefaultEngineId, path);
@@ -107,9 +76,6 @@ public static class EngineFormats
     /// <summary>
     /// Checks a path against a list of extensions.
     /// </summary>
-    /// <param name="extensions">The extensions to match, each with a leading dot.</param>
-    /// <param name="path">The path to check.</param>
-    /// <returns>True if the path's extension is on the list.</returns>
     public static bool Contains(IReadOnlyList<string> extensions, string? path)
     {
         if (string.IsNullOrEmpty(path))
@@ -137,8 +103,6 @@ public static class EngineFormats
     /// <summary>
     /// Turns a list of extensions into something to show a person: ".srt, .ass, .vtt".
     /// </summary>
-    /// <param name="extensions">The extensions.</param>
-    /// <returns>A comma separated list.</returns>
     public static string Describe(IReadOnlyList<string> extensions)
     {
         return string.Join(", ", extensions);

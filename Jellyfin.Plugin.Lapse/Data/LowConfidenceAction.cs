@@ -5,9 +5,8 @@
 namespace Jellyfin.Plugin.Lapse.Data;
 
 /// <summary>
-/// What to do with a sync result the engine wasn't confident about. A low score usually
-/// means the subtitle and the video aren't the same content, and writing that result over
-/// a subtitle that was already fine is the one outcome nobody wants.
+/// What to do with a result the engine wasn't sure about. A low score usually means the subtitle
+/// isn't for this video, and writing that over a good subtitle is the worst outcome.
 /// </summary>
 public enum LowConfidenceAction
 {

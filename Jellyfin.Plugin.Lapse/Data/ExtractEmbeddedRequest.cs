@@ -18,17 +18,12 @@ public class ExtractEmbeddedRequest
     public Guid ItemId { get; set; }
 
     /// <summary>
-    /// Gets or sets a value indicating whether the extracted tracks should then be taken
-    /// out of the video file. Off by default: extracting alone adds files and removes
-    /// nothing, which is the answer that can't go wrong.
+    /// Gets or sets a value indicating whether to also remove the tracks from the video. Off by default.
     /// </summary>
     public bool RemoveFromVideo { get; set; }
 
     /// <summary>
-    /// Gets or sets a value indicating whether the rebuilt video replaces the original.
-    /// Off by default, which leaves the original where it is and writes the rebuilt one
-    /// beside it as a .nosubs file. Only means anything with
-    /// <see cref="RemoveFromVideo"/> set.
+    /// Gets or sets a value indicating whether the rebuilt video replaces the original (otherwise it's written as .nosubs).
     /// </summary>
     public bool ReplaceOriginal { get; set; }
 }

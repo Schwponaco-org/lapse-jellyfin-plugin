@@ -4,7 +4,6 @@
 
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -27,8 +26,7 @@ internal sealed class SubtitleCue
 
     public TimeSpan End { get; set; }
 
-    // Lines of dialogue, already stripped of whatever markup the source format used to
-    // hold them apart.
+    // dialogue lines, markup already stripped
     public List<string> Lines { get; } = new();
 }
 
@@ -48,8 +46,7 @@ public class StyledConversionResult
     public SubtitleScript Script { get; set; }
 
     /// <summary>
-    /// Gets or sets the style as it was actually written, after being fitted to the
-    /// script. Null when no style was asked for.
+    /// Gets or sets the style actually written after fitting it to the script. Null when none was asked for.
     /// </summary>
     public SubtitleStyle? Style { get; set; }
 }
@@ -57,32 +54,23 @@ public class StyledConversionResult
 /// <summary>
 /// Turns a subtitle file into another format.
 ///
-/// The four formats the plugin works in - srt, vtt, ass and ssa - are read and written
-/// here directly, because they're all plain text and going through a converter that
-/// re-encodes them would be a lot of process starting for some string handling. Anything
-/// else text based (MicroDVD, SAMI, SubViewer and the rest) is handed to the ffmpeg
-/// Jellyfin already ships, which reads far more of them than is worth reimplementing, and
-/// comes back as srt to carry on with.
-///
-/// Picture based subtitles - PGS, VobSub, DVD - hold no text at all, only bitmaps. There
-/// is no conversion of those short of running OCR over every frame, so they're turned
-/// away with a reason rather than half handled.
+/// srt, vtt, ass and ssa are plain text so we read and write those ourselves, no point
+/// starting a process for some string handling. Other text formats (MicroDVD, SAMI,
+/// SubViewer...) go through Jellyfin's ffmpeg and come back as srt. Picture formats
+/// (PGS, VobSub) have no text at all, so those get turned away with a reason.
 /// </summary>
 public partial class SubtitleConverter
 {
     /// <summary>
-    /// The comment written into the header of a subtitle the plugin restyled, so one can
-    /// be told from an ordinary conversion later without guessing from the file name.
+    /// Header comment that marks a file we restyled, so it can be told apart from a plain conversion later.
     /// </summary>
     public const string ReadableMarker = "; LAPSE-Readable: 1";
 
-    // 00:01:23,456 / 00:01:23.456 / 01:23.456 / 0:01:23.45 - every timestamp shape the
-    // text formats use, including vtt's hourless one.
+    // 00:01:23,456 / 00:01:23.456 / 01:23.456 (vtt, no hours) / 0:01:23.45
     [GeneratedRegex(@"(?:(?<h>\d{1,3}):)?(?<m>\d{2}):(?<s>\d{2})[,.](?<f>\d{1,3})")]
     private static partial Regex TimestampRegex();
 
-    // Markup only vtt has: voice and class spans, ruby, language spans and the timestamps
-    // that reveal a line word by word. Any other format would show them as text.
+    // vtt-only markup (voice/class spans, ruby, lang, karaoke timestamps). Other formats would show it as text.
     [GeneratedRegex(@"</?(?:c|v|lang|ruby|rt)(?:[.\s][^>]*)?>|<(?:\d{1,3}:)?\d{2}:\d{2}\.\d{3}>")]
     private static partial Regex VttOnlyTagRegex();
 
@@ -105,8 +93,6 @@ public partial class SubtitleConverter
     /// <summary>
     /// Initializes a new instance of the <see cref="SubtitleConverter"/> class.
     /// </summary>
-    /// <param name="mediaEncoder">Used to find the ffmpeg Jellyfin ships.</param>
-    /// <param name="logger">Logger.</param>
     public SubtitleConverter(IMediaEncoder mediaEncoder, ILogger<SubtitleConverter> logger)
     {
         _mediaEncoder = mediaEncoder;
@@ -116,8 +102,6 @@ public partial class SubtitleConverter
     /// <summary>
     /// Says why a file can't be converted, or null when it can be.
     /// </summary>
-    /// <param name="sourcePath">The file to convert.</param>
-    /// <returns>A message for the caller, or null.</returns>
     public string? GetConversionProblem(string sourcePath)
     {
         switch (SubtitleFormats.GetKind(sourcePath))
@@ -141,19 +125,8 @@ public partial class SubtitleConverter
     /// <summary>
     /// Converts a subtitle file into another format.
     /// </summary>
-    /// <param name="sourcePath">The file to read.</param>
-    /// <param name="destinationPath">The file to write. Its extension decides the format.</param>
-    /// <param name="style">How the result should look, when it's being written as ass or
-    /// ssa. Null writes the plain default style, which is what an ordinary conversion
-    /// wants; the other formats carry no styling and ignore this either way.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>How many cues came across.</returns>
     /// <exception cref="NotSupportedException">The source isn't a format that can be converted.</exception>
     /// <exception cref="InvalidDataException">The source held no cues.</exception>
-    [System.Diagnostics.CodeAnalysis.SuppressMessage(
-        "Security",
-        "CA3003:Review code for file path injection vulnerabilities",
-        Justification = "Callers hand in a subtitle the library lists for an item, and a destination derived from it with a known extension.")]
     public async Task<int> ConvertAsync(
         string sourcePath,
         string destinationPath,
@@ -167,28 +140,12 @@ public partial class SubtitleConverter
     }
 
     /// <summary>
-    /// Converts a subtitle file, fitting the style to the writing system the dialogue
-    /// turns out to be in.
-    ///
-    /// This is the restyling path. It reads the file first and only then decides what the
-    /// style line should say, because the answer depends on the text: a Latin-only
-    /// typeface is no use to an Arabic subtitle, letter spacing breaks a script whose
-    /// letters join, and a right to left script has to be marked as one in the file.
+    /// Converts a subtitle and fits the style to the script the dialogue is in. The text has
+    /// to be read first: a Latin-only font is useless for Arabic, letter spacing breaks
+    /// joined scripts, and RTL has to be marked in the file.
     /// </summary>
-    /// <param name="sourcePath">The file to read.</param>
-    /// <param name="destinationPath">The file to write. Its extension decides the format.</param>
-    /// <param name="style">The style to start from, before it's fitted to the script.
-    /// Null writes the plain default style.</param>
-    /// <param name="nonLatinFontName">The font to fall back to when the style asks for one
-    /// that can't render the script.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>What was written, and what it turned out to be.</returns>
     /// <exception cref="NotSupportedException">The source isn't a format that can be converted.</exception>
     /// <exception cref="InvalidDataException">The source held no cues.</exception>
-    [System.Diagnostics.CodeAnalysis.SuppressMessage(
-        "Security",
-        "CA3003:Review code for file path injection vulnerabilities",
-        Justification = "Callers hand in a subtitle the library lists for an item, and a destination derived from it with a known extension.")]
     public async Task<StyledConversionResult> ConvertStyledAsync(
         string sourcePath,
         string destinationPath,
@@ -206,8 +163,7 @@ public partial class SubtitleConverter
             throw new NotSupportedException($"Can't write {Path.GetExtension(destinationPath)} files. Pick srt, vtt, ass or ssa.");
         }
 
-        // Formats ffmpeg has to read for us land as srt in a scratch file first, and the
-        // rest of this treats that as the source.
+        // formats only ffmpeg reads go to a scratch srt first and we work from that
         string? intermediate = null;
 
         try
@@ -237,12 +193,12 @@ public partial class SubtitleConverter
                 throw new InvalidDataException($"No subtitle cues could be read out of {Path.GetFileName(sourcePath)}.");
             }
 
-            // Only the dialogue decides the script. Cue numbers and timestamps are ASCII
-            // in every file, so reading them in would make every subtitle look Latin.
+            // only the dialogue, timestamps would make everything look Latin
             var script = SubtitleScripts.Detect(JoinDialogue(cues));
             var fitted = style?.ForScript(script, nonLatinFontName);
 
-            await File.WriteAllTextAsync(destinationPath, Write(cues, target, fitted), SubtitleEncoding.Utf8NoBom, cancellationToken)
+            // via a temp file so a library scan or a sync never reads half a subtitle
+            await SubtitleFileLock.WriteTextAsync(destinationPath, Write(cues, target, fitted), cancellationToken)
                 .ConfigureAwait(false);
 
             _logger.LogInformation(
@@ -270,9 +226,7 @@ public partial class SubtitleConverter
                 }
                 catch (IOException ex)
                 {
-                    // A scratch file we couldn't remove is worth a line in the log and
-                    // nothing more - throwing here would lose whatever this call was
-                    // actually about, success or failure.
+                    // don't throw from finally over a temp file
                     _logger.LogDebug(ex, "Could not delete the scratch file {Path}", intermediate);
                 }
             }
@@ -285,8 +239,7 @@ public partial class SubtitleConverter
         return !string.IsNullOrWhiteSpace(path) && File.Exists(path);
     }
 
-    // Enough dialogue to tell one alphabet from another with room to spare. A film's worth
-    // of cues would answer the same question having read a hundred times as much.
+    // plenty to tell one alphabet from another, no need to read the whole film
     private const int ScriptSampleChars = 20000;
 
     private static string JoinDialogue(List<SubtitleCue> cues)
@@ -309,68 +262,26 @@ public partial class SubtitleConverter
         return builder.ToString();
     }
 
-    [System.Diagnostics.CodeAnalysis.SuppressMessage(
-        "Security",
-        "CA3003:Review code for file path injection vulnerabilities",
-        Justification = "The input is a validated subtitle path and the output is a scratch file this class just named.")]
     private async Task RunFfmpegAsync(string sourcePath, string destinationPath, CancellationToken cancellationToken)
     {
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = _mediaEncoder.EncoderPath,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
+        // -y so a leftover can't hang on a prompt. Output format comes from the .srt
+        // extension, and since we named the temp file there's no protocol to worry about.
+        var arguments = new[] { "-nostdin", "-y", "-i", FfmpegPaths.AsFileUrl(sourcePath), destinationPath };
 
-        ProcessOutput.ReadAsUtf8(startInfo);
-
-        // -y so a leftover scratch file can't make this hang on a prompt, and the format
-        // comes from the .srt extension on the destination.
-        startInfo.ArgumentList.Add("-nostdin");
-        startInfo.ArgumentList.Add("-y");
-        startInfo.ArgumentList.Add("-i");
-        startInfo.ArgumentList.Add(sourcePath);
-        startInfo.ArgumentList.Add(destinationPath);
-
-        using var process = new Process { StartInfo = startInfo };
+        int exitCode;
+        string stderr;
 
         try
         {
-            process.Start();
+            (exitCode, stderr) = await FfmpegPaths.RunAsync(_mediaEncoder.EncoderPath, arguments, FfmpegTimeout, cancellationToken)
+                .ConfigureAwait(false);
         }
-        catch (System.ComponentModel.Win32Exception ex)
+        catch (TimeoutException ex)
         {
-            throw new NotSupportedException("Could not start ffmpeg to read that subtitle: " + ex.Message, ex);
+            throw new TimeoutException("ffmpeg took too long reading that subtitle file.", ex);
         }
 
-        var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
-
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeoutCts.CancelAfter(FfmpegTimeout);
-
-        try
-        {
-            await process.WaitForExitAsync(timeoutCts.Token).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            try
-            {
-                process.Kill(entireProcessTree: true);
-            }
-            catch (InvalidOperationException)
-            {
-                // it finished between the timeout firing and getting here
-            }
-
-            throw new TimeoutException("ffmpeg took too long reading that subtitle file.");
-        }
-
-        var stderr = await stderrTask.ConfigureAwait(false);
-
-        if (process.ExitCode != 0 || !File.Exists(destinationPath))
+        if (exitCode != 0 || !File.Exists(destinationPath))
         {
             _logger.LogWarning("ffmpeg could not convert {Source}: {Error}", sourcePath, stderr);
             throw new InvalidDataException(
@@ -378,7 +289,6 @@ public partial class SubtitleConverter
         }
     }
 
-    // ------------------------------------------------------------------------ reading
 
     private static List<SubtitleCue> Parse(string text, string path)
     {
@@ -387,9 +297,8 @@ public partial class SubtitleConverter
         return SubtitleShifter.IsAss(path) ? ParseAss(lines) : ParseTextCues(lines);
     }
 
-    // srt and vtt are the same shape as far as this cares: a timing line with an arrow in
-    // it, then the dialogue until a blank line. The cue numbers, vtt's header and its
-    // NOTE/STYLE blocks all fall out on their own by only acting on arrow lines.
+    // srt and vtt look the same from here: an arrow line, then dialogue until a blank line.
+    // Cue numbers, the vtt header and NOTE/STYLE blocks drop out by only acting on arrow lines.
     private static List<SubtitleCue> ParseTextCues(string[] lines)
     {
         var cues = new List<SubtitleCue>();
@@ -431,8 +340,7 @@ public partial class SubtitleConverter
     {
         var cues = new List<SubtitleCue>();
 
-        // The Format line says which field is which, and files do vary, so read the
-        // positions off it rather than trusting the usual order.
+        // read the field positions off the Format line, files don't all use the usual order
         var startField = 1;
         var endField = 2;
         var textField = 9;
@@ -475,8 +383,7 @@ public partial class SubtitleConverter
                 continue;
             }
 
-            // The text field is last and can hold commas of its own, so the split stops
-            // once it has every field before it.
+            // text is last and can contain commas, so stop splitting there
             var fields = trimmed[9..].Split(',', textField + 1);
             if (fields.Length <= Math.Max(textField, Math.Max(startField, endField)))
             {
@@ -518,8 +425,7 @@ public partial class SubtitleConverter
         return cues;
     }
 
-    // vtt escapes the characters html would read as markup, and keeps markup of its own
-    // that nothing else understands. Taking a cue out of vtt means undoing both.
+    // undo vtt's html escapes and drop its own markup nothing else understands
     private static void CleanVttMarkup(List<SubtitleCue> cues)
     {
         foreach (var cue in cues)
@@ -553,18 +459,14 @@ public partial class SubtitleConverter
             int.Parse(fraction.PadRight(3, '0'), CultureInfo.InvariantCulture));
     }
 
-    // ------------------------------------------------------------------------ writing
 
     private static string Write(List<SubtitleCue> cues, string format, SubtitleStyle? style)
     {
-        // ass keeps its events in whatever order, layers and all, and players sort them
-        // out. srt and vtt are read top to bottom, and plenty of players get a cue that
-        // comes before the one above it wrong, so those go out in time order. Stable, so
-        // two cues at the same moment keep the order they had.
+        // Players sort ass events themselves, but plenty get out of order srt/vtt wrong.
+        // OrderBy is stable so cues at the same time keep their order.
         if (format is not ("ass" or "ssa"))
         {
-            var ordered = cues.OrderBy(c => c.Start).ToList();
-            cues = ordered;
+            cues = cues.OrderBy(c => c.Start).ToList();
         }
 
         return format switch
@@ -617,19 +519,15 @@ public partial class SubtitleConverter
 
     private static string WriteAss(List<SubtitleCue> cues, bool advanced, SubtitleStyle? style)
     {
-        // A minimum viable script: enough header for a player to accept the file, one
-        // default style, and the events. Styling from a source that had it doesn't
-        // survive the trip, which is the deal with converting to a simpler format and
-        // back again.
+        // Bare minimum: enough header for players to accept it, one Default style, the
+        // events. Styling from the source doesn't survive, that's the deal with converting.
         var builder = new StringBuilder();
         var fields = (style ?? new SubtitleStyle()).ToStyleFields(advanced);
 
         builder.Append("[Script Info]\n")
             .Append("; Written by the LAPSE Jellyfin plugin\n");
 
-        // A file written with a style of its own was asked for by somebody pressing
-        // Readable Subtitles, as against an ordinary format conversion. Saying so in the
-        // file is what lets it be recognised later and put back.
+        // a style means someone pressed Readable Subtitles, mark it so it can be undone later
         if (style is not null)
         {
             builder.Append(ReadableMarker).Append('\n');
@@ -672,8 +570,7 @@ public partial class SubtitleConverter
         return builder.ToString();
     }
 
-    // srt and vtt carry italics and the like as html tags. An ass Dialogue line would
-    // show those as literal text, so they come out on the way in.
+    // srt/vtt italics etc are html tags, ass would show them as literal text
     private static IEnumerable<string> StripMarkup(IEnumerable<string> lines)
     {
         foreach (var line in lines)
@@ -687,8 +584,7 @@ public partial class SubtitleConverter
         return SubtitleShifter.Format(value, separator.ToString(), 2, 3);
     }
 
-    // ass counts in centiseconds behind a single digit hour, rounded to the nearest one
-    // rather than cut off, the same as the engine writes it.
+    // ass is h:mm:ss.cc, rounded like the engine does
     private static string FormatAss(TimeSpan value)
     {
         return SubtitleShifter.Format(value, ".", 1, 2);

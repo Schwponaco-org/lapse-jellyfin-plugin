@@ -7,14 +7,8 @@ using System;
 namespace Jellyfin.Plugin.Lapse.Data;
 
 /// <summary>
-/// One entry on the ignore list. Either a library item (a film, a series, a season, a
-/// folder) by id, or a path on disk covering everything under it.
-///
-/// Both shapes exist because they answer different questions. Picking a series out of the
-/// library is what you want for "never touch this show", and it survives the files being
-/// moved. A path is what you want for "never touch anything in here", including things
-/// Jellyfin hasn't scanned yet, which is the case that matters for the Radarr and Sonarr
-/// webhook.
+/// One ignore list entry: a library item by id (survives files moving) or a path (covers stuff
+/// Jellyfin hasn't scanned yet, which matters for the webhook).
 /// </summary>
 public class IgnoreRule
 {
@@ -35,8 +29,7 @@ public class IgnoreRule
     public string DisplayName { get; set; } = string.Empty;
 
     /// <summary>
-    /// Gets or sets what kind of thing this is - Movie, Series, Folder and so on - purely
-    /// for the dashboard listing.
+    /// Gets or sets what kind of thing it is (Movie, Series, Folder...), for the list.
     /// </summary>
     public string? Kind { get; set; }
 
@@ -52,8 +45,7 @@ public class IgnoreRule
 public class IgnoreRemovalResult
 {
     /// <summary>
-    /// Gets or sets how many rules were removed. Zero means the item is ignored through
-    /// something above it - a series, a season, a folder - rather than a rule of its own.
+    /// Gets or sets how many rules were removed. Zero means it's covered by a rule higher up (series, folder).
     /// </summary>
     public int Removed { get; set; }
 }

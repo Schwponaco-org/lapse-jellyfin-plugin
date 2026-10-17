@@ -8,7 +8,6 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using Jellyfin.Plugin.Lapse.Configuration;
 using Jellyfin.Plugin.Lapse.Data;
 using MediaBrowser.Controller.Entities;
 using Microsoft.Extensions.Logging;
@@ -16,27 +15,19 @@ using Microsoft.Extensions.Logging;
 namespace Jellyfin.Plugin.Lapse.Services;
 
 /// <summary>
-/// Writes readable copies of subtitles, and puts them back.
-///
-/// Two rules run through all of it. The first is that a library is usually shared: one
-/// person wanting a dyslexia-friendly subtitle is no reason for everyone else to lose the
-/// one they had, so the default writes a second track and leaves the original alone.
-/// The second is that nothing here is one-way. Replacing a subtitle keeps the original
-/// beside it as a backup, so "put it back to normal" is always something the plugin can
-/// actually do rather than something the person has to have thought of in advance.
+/// Writes readable (dyslexia friendly) copies of subtitles and puts them back.
+/// Libraries are shared, so by default it adds a second track instead of replacing. And
+/// replacing always keeps a backup, so "back to normal" always works.
 /// </summary>
 public class ReadableSubtitleService
 {
     /// <summary>
-    /// The name tag a readable copy carries, e.g. Movie.da.readable.ass. Jellyfin still
-    /// reads the language off the part before it, so the copy lands in the player next to
-    /// the subtitle it came from rather than as some untagged extra.
+    /// Name tag for readable copies, e.g. Movie.da.readable.ass. Jellyfin still reads the language from it.
     /// </summary>
     public const string ReadableTag = ".readable";
 
     /// <summary>
-    /// The extension put on the original when a readable version replaces it. Not a
-    /// subtitle extension, so Jellyfin doesn't offer the backup as a track of its own.
+    /// Extension for the backed up original. Not a subtitle extension, so Jellyfin won't list it as a track.
     /// </summary>
     public const string BackupExtension = ".lapsebak";
 
@@ -47,9 +38,6 @@ public class ReadableSubtitleService
     /// <summary>
     /// Initializes a new instance of the <see cref="ReadableSubtitleService"/> class.
     /// </summary>
-    /// <param name="converter">Reads the subtitle and writes the styled copy.</param>
-    /// <param name="fontInstaller">Says whether the font being asked for is installed.</param>
-    /// <param name="logger">Logger.</param>
     public ReadableSubtitleService(
         SubtitleConverter converter,
         FontInstaller fontInstaller,
@@ -61,10 +49,8 @@ public class ReadableSubtitleService
     }
 
     /// <summary>
-    /// Builds the style from the current settings, before it's fitted to whatever script
-    /// the subtitle turns out to be in.
+    /// Builds the style from the settings (before it gets fitted to the subtitle's script).
     /// </summary>
-    /// <returns>The configured style.</returns>
     public static SubtitleStyle GetConfiguredStyle()
     {
         var config = Plugin.Instance!.Configuration;
@@ -81,16 +67,9 @@ public class ReadableSubtitleService
     }
 
     /// <summary>
-    /// Says whether a file is one the plugin made readable. The name tag answers it for
-    /// the copies; the marker in the header answers it for the ones that replaced their
-    /// original and so carry an ordinary name.
+    /// Says whether we made this file readable. Copies have the name tag, replacements have
+    /// a marker in the header instead.
     /// </summary>
-    /// <param name="path">The subtitle file.</param>
-    /// <returns>True when this is a readable subtitle.</returns>
-    [System.Diagnostics.CodeAnalysis.SuppressMessage(
-        "Security",
-        "CA3003:Review code for file path injection vulnerabilities",
-        Justification = "The path is one the library reported for an item.")]
     public static bool IsReadable(string? path)
     {
         if (string.IsNullOrEmpty(path))
@@ -110,8 +89,7 @@ public class ReadableSubtitleService
 
         try
         {
-            // The marker sits in [Script Info], which is the top of the file. Reading the
-            // first few lines is enough and keeps this cheap enough to call per track.
+            // the marker is in [Script Info] right at the top, a few lines is enough
             using var reader = new StreamReader(path);
 
             for (var i = 0; i < 10; i++)
@@ -130,8 +108,7 @@ public class ReadableSubtitleService
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            // Unreadable is not the same as "not readable subtitles", but it's the only
-            // answer available and the caller only ever uses it to offer a button.
+            // can't tell, and this only decides whether to show a button
             return false;
         }
 
@@ -141,20 +118,6 @@ public class ReadableSubtitleService
     /// <summary>
     /// Writes a readable version of one subtitle.
     /// </summary>
-    /// <param name="item">The item it belongs to, for the history entry.</param>
-    /// <param name="sourcePath">The subtitle file, already extracted to disk if it was an
-    /// embedded track.</param>
-    /// <param name="replaceOriginal">True to leave one subtitle where there were two, with
-    /// the original kept as a backup. False writes a second track and changes nothing.</param>
-    /// <param name="wasEmbedded">True when the source was extracted out of the video for
-    /// this call. Replacing one of those is meaningless - the track is still in the video -
-    /// so it's quietly treated as a copy.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>What was written.</returns>
-    [System.Diagnostics.CodeAnalysis.SuppressMessage(
-        "Security",
-        "CA3003:Review code for file path injection vulnerabilities",
-        Justification = "The source is a subtitle the library listed for this item; every destination is derived from it with a fixed extension.")]
     public async Task<RestyleResult> MakeReadableAsync(
         BaseItem item,
         string sourcePath,
@@ -173,12 +136,9 @@ public class ReadableSubtitleService
             Replaced = replace
         };
 
-        // A replacement takes the original's name with an .ass extension, which is already
-        // taken when the item carries the same subtitle in two formats - Movie.en.srt next
-        // to the Movie.en.ass that Convert left behind. Writing anyway would destroy a
-        // track nobody asked about, and back up the wrong file while doing it. The styled
-        // file can't be renamed out of the way either, since a revert finds it by that
-        // exact name, so this is a case to turn away rather than guess at.
+        // A replacement takes the original's name as .ass, which may already exist (say
+        // Movie.en.srt next to a Movie.en.ass from Convert). Writing would wreck that track,
+        // and renaming would break revert, so just refuse.
         if (replace
             && !string.Equals(sourcePath, destination, StringComparison.Ordinal)
             && File.Exists(destination))
@@ -189,16 +149,14 @@ public class ReadableSubtitleService
             return result;
         }
 
-        // The backup comes first, so a write that fails halfway can't leave someone with
-        // neither the original nor a usable styled file.
+        // backup first, so a failed write can't leave you with neither file
         if (replace)
         {
             var backup = sourcePath + BackupExtension;
 
             try
             {
-                // An existing backup is from an earlier pass and holds the true original.
-                // Overwriting it with an already-styled file would lose that for good.
+                // an existing backup holds the real original from an earlier pass, keep it
                 if (!File.Exists(backup))
                 {
                     File.Copy(sourcePath, backup);
@@ -233,8 +191,7 @@ public class ReadableSubtitleService
             return result;
         }
 
-        // Only now that there is a styled file does the original go. An overwrite in place
-        // - an .ass replaced by an .ass - has nothing left to remove.
+        // only now remove the original (nothing to remove if it was .ass replaced in place)
         if (replace && !string.Equals(sourcePath, destination, StringComparison.Ordinal))
         {
             try
@@ -243,8 +200,7 @@ public class ReadableSubtitleService
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                // The styled file is written, which is what was asked for. A leftover
-                // original is worth saying so about rather than failing the whole thing.
+                // the styled file is there, which is what was asked for, just mention it
                 result.Error = "Wrote the readable subtitle, but could not remove the original: " + ex.Message;
             }
         }
@@ -267,12 +223,6 @@ public class ReadableSubtitleService
     /// Puts a subtitle back the way it was before it was made readable: a copy is deleted,
     /// and a replaced original is restored from its backup.
     /// </summary>
-    /// <param name="path">The readable subtitle file.</param>
-    /// <returns>What happened.</returns>
-    [System.Diagnostics.CodeAnalysis.SuppressMessage(
-        "Security",
-        "CA3003:Review code for file path injection vulnerabilities",
-        Justification = "The path is one the library reported for this item, and the backup is derived from it.")]
     public RestyleRevertItem Revert(string path)
     {
         var reverted = new RestyleRevertItem { Path = path };
@@ -286,8 +236,7 @@ public class ReadableSubtitleService
                 File.Copy(backup, original, overwrite: true);
                 File.Delete(backup);
 
-                // The styled file only goes if it isn't the file we just restored, which it
-                // is when an .ass was overwritten in place.
+                // unless the styled file IS the one we just restored (.ass overwritten in place)
                 if (!string.Equals(original, path, StringComparison.Ordinal) && File.Exists(path))
                 {
                     File.Delete(path);
@@ -305,8 +254,7 @@ public class ReadableSubtitleService
                 return reverted;
             }
 
-            // No backup means nothing was replaced, so the readable version is an extra
-            // track and removing it leaves the original exactly as it was.
+            // no backup = it was an extra track, just delete it
             File.Delete(path);
             reverted.Success = true;
             _logger.LogInformation("Removed the readable subtitle {Path}", path);
@@ -320,16 +268,8 @@ public class ReadableSubtitleService
     }
 
     /// <summary>
-    /// Finds every readable subtitle on an item: the copies the plugin wrote, and any
-    /// original still sitting beside one as a backup.
+    /// Finds every readable subtitle on an item, including replaced ones found via their backup.
     /// </summary>
-    /// <param name="item">The item.</param>
-    /// <param name="subtitles">The item's subtitles, as the locator found them.</param>
-    /// <returns>The files a revert would act on.</returns>
-    [System.Diagnostics.CodeAnalysis.SuppressMessage(
-        "Security",
-        "CA3003:Review code for file path injection vulnerabilities",
-        Justification = "Every path looked at here is one the library reported for this item, or one derived from the item's own video path. Nothing from the request reaches it.")]
     public static List<string> FindReadable(BaseItem item, IEnumerable<SubtitleOption> subtitles)
     {
         var found = new List<string>();
@@ -342,8 +282,7 @@ public class ReadableSubtitleService
             }
         }
 
-        // A replaced subtitle whose library entry hasn't been rescanned yet won't be in
-        // that list, but its backup is still on disk beside the video and names it.
+        // a replaced subtitle might not be rescanned yet, but its backup names it
         foreach (var backup in EnumerateBackups(item))
         {
             var styled = Path.ChangeExtension(backup[..^BackupExtension.Length], ".ass");
@@ -357,10 +296,6 @@ public class ReadableSubtitleService
         return found;
     }
 
-    [System.Diagnostics.CodeAnalysis.SuppressMessage(
-        "Security",
-        "CA3003:Review code for file path injection vulnerabilities",
-        Justification = "The folder and the name it matches on both come from the item's own video path, which Jellyfin resolved.")]
     private static IEnumerable<string> EnumerateBackups(BaseItem item)
     {
         if (string.IsNullOrEmpty(item.Path))
@@ -386,9 +321,8 @@ public class ReadableSubtitleService
         }
     }
 
-    // The original this styled file replaced, whatever format it was in. The backup keeps
-    // the original's whole name, so Movie.da.ass may have come from Movie.da.srt.lapsebak
-    // as easily as from Movie.da.ass.lapsebak.
+    // The backup keeps the original's full name, so Movie.da.ass could come from
+    // Movie.da.srt.lapsebak just as well as Movie.da.ass.lapsebak.
     private static string? FindBackup(string path)
     {
         var sameName = path + BackupExtension;
@@ -426,31 +360,23 @@ public class ReadableSubtitleService
         return null;
     }
 
-    // Always .ass: it's the only one of the formats the plugin writes with anywhere to put
-    // a font. A copy carries the readable tag so both tracks are offered; a replacement
-    // takes the original's name so there's still only one.
+    // Always .ass, it's the only format we write that can carry a font. Copies get the
+    // readable tag, replacements take the original's name.
     private static string BuildDestination(string sourcePath, bool replace)
     {
         var directory = Path.GetDirectoryName(sourcePath) ?? string.Empty;
         var stem = Path.GetFileNameWithoutExtension(sourcePath);
 
-        // Restyling something already restyled replaces it rather than stacking the tag.
+        // don't stack the tag when restyling a restyled file
         if (stem.EndsWith(ReadableTag, StringComparison.OrdinalIgnoreCase))
         {
             stem = stem[..^ReadableTag.Length];
         }
 
-        // Dropping the source's extension is what makes the name readable, but it also
-        // makes it ambiguous: Movie.en.srt and Movie.en.ass - exactly what Convert leaves
-        // behind - both come out as Movie.en.readable.ass, and ticking both in the dialog
-        // means the second quietly overwrites the first. Keeping the extension in the name
-        // is the only thing that tells the two apart, so it goes back in when, and only
-        // when, there is something to be told apart from.
-        //
-        // Only for a copy. A replacement has to keep the plain name, because that name is
-        // how a revert pairs the styled file back up with the .lapsebak beside it; renaming
-        // it here would have the revert delete whatever did hold the plain name instead.
-        // The same collision is turned away in MakeReadableAsync rather than renamed.
+        // Movie.en.srt and Movie.en.ass would both become Movie.en.readable.ass and one
+        // would overwrite the other, so keep the extension in the name when there's a twin.
+        // Copies only: replacements need the plain name for revert to find them (that
+        // collision gets refused in MakeReadableAsync instead).
         if (!replace && SharesStemWithAnotherSubtitle(directory, sourcePath, stem))
         {
             stem = Path.GetFileName(sourcePath);
@@ -459,9 +385,8 @@ public class ReadableSubtitleService
         return Path.Combine(directory, replace ? stem + ".ass" : stem + ReadableTag + ".ass");
     }
 
-    // Whether another subtitle beside this one would reduce to the same name. Answered off
-    // the files rather than off what this run happens to be restyling, so one subtitle
-    // gets the same readable name whether it was ticked on its own or alongside its twin.
+    // Checks the actual files, not what this run is restyling, so the name is the same
+    // whether one or both twins were ticked.
     private static bool SharesStemWithAnotherSubtitle(string directory, string sourcePath, string stem)
     {
         if (string.IsNullOrEmpty(directory))
@@ -479,9 +404,7 @@ public class ReadableSubtitleService
                     continue;
                 }
 
-                // Only a name that reduces to the same stem collides. Movie.en.readable.ass
-                // sits next to Movie.en.srt but reduces to Movie.en.readable, and it's this
-                // subtitle's own output rather than a track competing for the name.
+                // Movie.en.readable.ass reduces to Movie.en.readable, that's our own output, not a twin
                 if (string.Equals(Path.GetFileNameWithoutExtension(sibling), stem, StringComparison.OrdinalIgnoreCase))
                 {
                     return true;
@@ -490,15 +413,15 @@ public class ReadableSubtitleService
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            // Can't tell, so keep the name that has always been used.
+            // can't tell, keep the usual name
             return false;
         }
 
         return false;
     }
 
-    // A style naming a font the renderer can't find still renders - in something else.
-    // Saying so is the difference between "it didn't work" and "install the font".
+    // A missing font still renders, just in some other font. Telling the user means
+    // "install the font" instead of "it didn't work".
     private bool IsFontAvailable(string? fontName)
     {
         if (string.IsNullOrEmpty(fontName))
@@ -506,8 +429,7 @@ public class ReadableSubtitleService
             return false;
         }
 
-        // Anything but the font the plugin installs is one the server already had, or one
-        // the admin named themselves, and the fallback folder says nothing about those.
+        // we can only check the font we install, assume anything else is on the server
         if (!SubtitleStyle.IsLatinOnlyFont(fontName))
         {
             return true;
@@ -519,8 +441,8 @@ public class ReadableSubtitleService
             && fonts.Fonts.Exists(f => f.StartsWith(fontName, StringComparison.OrdinalIgnoreCase));
     }
 
-    // Goes in the same history the dashboard already lists syncs in, so a readable
-    // subtitle can be undone from there as well as from the item's own menu.
+    // Into the same history as syncs, so it can be undone from the dashboard too. Deferred
+    // save since automation can do lots of these in a row.
     private static void Record(BaseItem item, RestyleResult result)
     {
         var plugin = Plugin.Instance;
@@ -545,7 +467,7 @@ public class ReadableSubtitleService
                     : $"Wrote a readable copy in {result.FontName}"
             });
 
-            plugin.SaveConfiguration();
+            plugin.SaveConfigurationSoon();
         }
     }
 }

@@ -7,13 +7,8 @@ using System;
 namespace Jellyfin.Plugin.Lapse.Data;
 
 /// <summary>
-/// One thing that happened to one subtitle file, kept so it can be undone.
-///
-/// The plugin edits files in someone's library, which is the part of it worth being
-/// nervous about. It already writes a .bak before overwriting anything, but nothing ever
-/// pointed at those backups, so putting one back meant finding it in a shell. Recording
-/// where the backup went next to what was written turns "it moved a subtitle that was
-/// already fine" from a problem into one button.
+/// One change to one subtitle file, kept so it can be undone with one button instead of digging
+/// for the .bak in a shell.
 /// </summary>
 public class SyncHistoryEntry
 {
@@ -54,17 +49,12 @@ public class SyncHistoryEntry
     public string? OutputPath { get; set; }
 
     /// <summary>
-    /// Gets or sets the subtitle the run read. The same file as <see cref="OutputPath"/>
-    /// when it was overwritten; the original beside a new file otherwise. Entries from
-    /// before this was recorded have it null.
+    /// Gets or sets the subtitle the run read (same as <see cref="OutputPath"/> when overwritten). Null on old entries.
     /// </summary>
     public string? InputPath { get; set; }
 
     /// <summary>
-    /// Gets or sets the backup taken before writing, when the output mode asked for one.
-    /// Null means there is nothing to put back - either the mode keeps no backup, or the
-    /// run wrote a new file and left the original alone, in which case a revert is just
-    /// deleting what it wrote.
+    /// Gets or sets the backup taken before writing. Null means nothing to restore (no backup mode, or a new file was written).
     /// </summary>
     public string? BackupPath { get; set; }
 
@@ -85,9 +75,7 @@ public class SyncHistoryEntry
     public bool Reverted { get; set; }
 
     /// <summary>
-    /// Gets or sets a value indicating whether a later run wrote the same file. Undoing
-    /// this one would then restore a backup the later run has since replaced, or delete
-    /// the later run's file, so only the newest entry for a file can be undone.
+    /// Gets or sets a value indicating whether a later run wrote the same file. Only the newest one can be undone.
     /// </summary>
     public bool Superseded { get; set; }
 }

@@ -14,6 +14,7 @@ using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.Lapse.Data;
@@ -25,45 +26,39 @@ using Microsoft.Extensions.Logging;
 namespace Jellyfin.Plugin.Lapse.Services;
 
 /// <summary>
-/// What came of trying to fetch a subtitle. Every way this can fail used to end in a log
-/// line and a null, which from the dashboard looked exactly like nothing having happened
-/// at all, so the reason comes back with it now.
+/// What came of trying to fetch a subtitle, including why it failed so the dashboard
+/// doesn't just look like nothing happened.
 /// </summary>
 public class SubtitleFetchResult
 {
     /// <summary>
-    /// Gets or sets the file that was written, or null when nothing was.
+    /// Gets or sets the file that was written, or null.
     /// </summary>
     public string? Path { get; set; }
 
     /// <summary>
-    /// Gets or sets which step this got to: setup, search, login, download or save. Null
-    /// when it worked.
+    /// Gets or sets the step it failed at (setup, search, login, download, save). Null when it worked.
     /// </summary>
     public string? FailedStep { get; set; }
 
     /// <summary>
-    /// Gets or sets what went wrong, in words meant for whoever pressed the button.
+    /// Gets or sets what went wrong, written for whoever pressed the button.
     /// </summary>
     public string? Error { get; set; }
 
     /// <summary>
-    /// Gets or sets how many downloads the account has left today, when OpenSubtitles
-    /// said.
+    /// Gets or sets how many downloads the account has left today, if OpenSubtitles said.
     /// </summary>
     public int? RemainingDownloads { get; set; }
 
     /// <summary>
-    /// Gets a value indicating whether a subtitle was actually fetched.
+    /// Gets a value indicating whether a subtitle was fetched.
     /// </summary>
     public bool Success => Path is not null;
 
     /// <summary>
     /// Builds a failed result.
     /// </summary>
-    /// <param name="step">Which step failed.</param>
-    /// <param name="error">Why.</param>
-    /// <returns>The result.</returns>
     public static SubtitleFetchResult Failed(string step, string error)
     {
         return new SubtitleFetchResult { FailedStep = step, Error = error };
@@ -71,45 +66,30 @@ public class SubtitleFetchResult
 }
 
 /// <summary>
-/// Fetches subtitles from OpenSubtitles for items that have none, or none in the language
-/// someone wants. Experimental: it depends on a third party service and an account there.
+/// Fetches subtitles from OpenSubtitles (experimental, needs an account there).
 ///
-/// Their REST API (api.opensubtitles.com, v1) has a few rules that are easy to trip over,
-/// and the first version of this tripped over most of them:
+/// Things about their v1 API that are easy to trip over:
+/// - every request needs Api-Key and a User-Agent naming the app
+/// - search params must be alphabetical, lower case, spaces as "+", or you get a redirect
+/// - downloads need a /login token, count against a daily quota, and go to whatever host
+///   /login says (VIP accounts get their own)
 ///
-/// - Every request needs an Api-Key and a User-Agent naming the app.
-/// - Search parameters have to be in alphabetical order, in lower case, with spaces as
-///   "+". Anything else is answered with a redirect to the tidy version of the URL.
-/// - Downloading needs a token from /login, comes out of a daily quota tied to the
-///   account, and has to go to whichever host /login names, which differs for VIP
-///   accounts.
-///
-/// Finding the right subtitle goes, in order: the file's own hash (an exact match for the
-/// release), the IMDb or TMDb id Jellyfin already has for the film or show, the title, and
-/// last the file name. The result is synced afterwards anyway, so a subtitle for another
-/// release of the same film is fine; a subtitle for another film is not, which is why the
-/// ids come before any text search.
+/// Search order: file hash, then IMDb/TMDb id, then title, then file name. It gets synced
+/// afterwards anyway so another release of the same film is fine, another film isn't,
+/// which is why ids go before text search.
 /// </summary>
 public partial class OpenSubtitlesService : IDisposable
 {
-    [System.Text.RegularExpressions.GeneratedRegex(@"^\{\d+\}\{\d+\}")]
-    private static partial System.Text.RegularExpressions.Regex MicroDvdRegex();
-
-    [System.Text.RegularExpressions.GeneratedRegex(@"^[a-z]{2,3}(-[a-z]{2,4})?$")]
-    private static partial System.Text.RegularExpressions.Regex LanguageCodeRegex();
-
     private const string DefaultHost = "api.opensubtitles.com";
     private const string ApiPath = "/api/v1/";
 
-    // OpenSubtitles hashes the file size plus the first and last 64KB, read as 64-bit
-    // little endian words. Cheap even over a network share.
+    // the hash is file size + first and last 64KB as 64-bit LE words, cheap even over a share
     private const int HashChunk = 64 * 1024;
 
-    // Enough to pick from without scrolling forever on a TV remote.
+    // enough to pick from without scrolling forever on a TV remote
     private const int MaxCandidates = 25;
 
-    private static readonly string Version =
-        typeof(OpenSubtitlesService).Assembly.GetName().Version?.ToString(3) ?? "1.0.0";
+    private static readonly string Version = typeof(OpenSubtitlesService).Assembly.GetName().Version?.ToString(3) ?? "1.0.0";
 
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly SubtitleLanguages _languages;
@@ -124,9 +104,6 @@ public partial class OpenSubtitlesService : IDisposable
     /// <summary>
     /// Initializes a new instance of the <see cref="OpenSubtitlesService"/> class.
     /// </summary>
-    /// <param name="httpClientFactory">Factory to grab an HttpClient from.</param>
-    /// <param name="languages">Turns typed languages into OpenSubtitles' codes.</param>
-    /// <param name="logger">Logger.</param>
     public OpenSubtitlesService(IHttpClientFactory httpClientFactory, SubtitleLanguages languages, ILogger<OpenSubtitlesService> logger)
     {
         _httpClientFactory = httpClientFactory;
@@ -134,29 +111,9 @@ public partial class OpenSubtitlesService : IDisposable
         _logger = logger;
     }
 
-    /// <inheritdoc />
-    public void Dispose()
-    {
-        Dispose(true);
-        GC.SuppressFinalize(this);
-    }
-
-    /// <summary>
-    /// Releases the login lock.
-    /// </summary>
-    /// <param name="disposing">True when called from <see cref="Dispose()"/>.</param>
-    protected virtual void Dispose(bool disposing)
-    {
-        if (disposing)
-        {
-            _loginLock.Dispose();
-        }
-    }
-
     /// <summary>
     /// Says why fetching isn't set up, or null when it is.
     /// </summary>
-    /// <returns>A message for the dashboard, or null.</returns>
     public static string? GetConfigurationProblem()
     {
         var config = Plugin.Instance?.Configuration;
@@ -180,15 +137,9 @@ public partial class OpenSubtitlesService : IDisposable
     }
 
     /// <summary>
-    /// Computes the OpenSubtitles hash of a video file: its size plus the sum of its first
-    /// and last 64KB as 64-bit little endian words, in hex.
+    /// Computes the OpenSubtitles hash of a video: size plus the sum of the first and last
+    /// 64KB as 64-bit little endian words, in hex. Null for tiny files or read errors.
     /// </summary>
-    /// <param name="path">The video.</param>
-    /// <returns>The hash, or null for a file too small to have one or one that can't be read.</returns>
-    [System.Diagnostics.CodeAnalysis.SuppressMessage(
-        "Security",
-        "CA3003:Review code for file path injection vulnerabilities",
-        Justification = "The path is Jellyfin's own path for a library item.")]
     public static string? ComputeMovieHash(string path)
     {
         try
@@ -220,11 +171,8 @@ public partial class OpenSubtitlesService : IDisposable
     }
 
     /// <summary>
-    /// Builds a search query the way the API wants it: parameters in alphabetical order,
-    /// values in lower case, spaces as "+". Anything else costs a redirect per request.
+    /// Builds a search query the way the API wants it (sorted, lower case, "+" for spaces).
     /// </summary>
-    /// <param name="parameters">The parameters.</param>
-    /// <returns>The query string, without the question mark.</returns>
     public static string BuildQuery(IReadOnlyDictionary<string, string> parameters)
     {
         return string.Join(
@@ -236,12 +184,9 @@ public partial class OpenSubtitlesService : IDisposable
     }
 
     /// <summary>
-    /// Works out which languages to search for, in the order they're preferred. The
-    /// settings box takes several - "da, en" means Danish if there is one, English
-    /// otherwise - and any way of writing them.
+    /// Works out the languages to search for, most wanted first. "da, en" means Danish if
+    /// there is one, otherwise English. Names or codes both work.
     /// </summary>
-    /// <param name="typed">What's in the settings, or what a dialog asked for.</param>
-    /// <returns>OpenSubtitles language codes, best first.</returns>
     public List<string> ResolveLanguages(string? typed)
     {
         var codes = new List<string>();
@@ -258,12 +203,9 @@ public partial class OpenSubtitlesService : IDisposable
     }
 
     /// <summary>
-    /// Finds the best subtitle for an item in the configured languages and writes it next
-    /// to the video. What a sync uses when the item has nothing to sync.
+    /// Finds the best subtitle in the configured languages and writes it next to the video.
+    /// Used when a sync has nothing to sync.
     /// </summary>
-    /// <param name="item">The item.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>What was fetched, or why nothing was.</returns>
     public async Task<SubtitleFetchResult> TryFetchAsync(BaseItem item, CancellationToken cancellationToken = default)
     {
         if (GetConfigurationProblem() is { } problem)
@@ -286,25 +228,14 @@ public partial class OpenSubtitlesService : IDisposable
         }
 
         var best = search.Candidates[0];
-        _logger.LogInformation(
-            "Fetching {Release} ({Language}) for {Item}, found by {SearchedBy}",
-            best.Release ?? best.FileName,
-            best.Language,
-            item.Name,
-            search.SearchedBy);
+        _logger.LogInformation("Fetching {Release} ({Language}) for {Item}, found by {SearchedBy}", best.Release ?? best.FileName, best.Language, item.Name, search.SearchedBy);
 
         return await DownloadAsync(item, best, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
-    /// Searches for an item's subtitles: by the file's hash and the item's ids first, then
-    /// by title, then by file name, stopping at the first that finds anything.
+    /// Searches for an item's subtitles, best search first, stopping at the first one that finds anything.
     /// </summary>
-    /// <param name="item">The item.</param>
-    /// <param name="languageOverride">Languages to search instead of the configured ones,
-    /// or null.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>What was found, best first.</returns>
     public async Task<OpenSubtitlesSearchResult> SearchAsync(BaseItem item, string? languageOverride, CancellationToken cancellationToken = default)
     {
         var result = new OpenSubtitlesSearchResult();
@@ -329,7 +260,6 @@ public partial class OpenSubtitlesService : IDisposable
             return result;
         }
 
-        var ordered = new List<string>(languages);
         var languageList = string.Join(',', languages.OrderBy(l => l, StringComparer.Ordinal));
         var hash = ComputeMovieHash(item.Path);
 
@@ -346,23 +276,16 @@ public partial class OpenSubtitlesService : IDisposable
                     return result;
                 }
 
-                if (found.Count == 0)
+                if (found.Count > 0)
                 {
-                    continue;
+                    result.SearchedBy = by;
+                    result.Candidates.AddRange(Rank(found, languages).Take(MaxCandidates));
+                    return result;
                 }
-
-                result.SearchedBy = by;
-                result.Candidates.AddRange(Rank(found, ordered).Take(MaxCandidates));
-                return result;
             }
         }
-        catch (Exception ex) when (ex is HttpRequestException or JsonException or TaskCanceledException)
+        catch (Exception ex) when (ex is HttpRequestException or JsonException or TaskCanceledException && !cancellationToken.IsCancellationRequested)
         {
-            if (cancellationToken.IsCancellationRequested)
-            {
-                throw;
-            }
-
             _logger.LogWarning(ex, "Could not search OpenSubtitles for {Item}", item.Name);
             result.Error = "Could not reach OpenSubtitles: " + ex.Message;
         }
@@ -371,12 +294,8 @@ public partial class OpenSubtitlesService : IDisposable
     }
 
     /// <summary>
-    /// Downloads one subtitle for an item and writes it next to the video.
+    /// Downloads one subtitle and writes it next to the video.
     /// </summary>
-    /// <param name="item">The item.</param>
-    /// <param name="candidate">The subtitle, from a search.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>What was written, or why nothing was.</returns>
     public async Task<SubtitleFetchResult> DownloadAsync(BaseItem item, OpenSubtitlesCandidate candidate, CancellationToken cancellationToken = default)
     {
         if (GetConfigurationProblem() is { } problem)
@@ -389,8 +308,7 @@ public partial class OpenSubtitlesService : IDisposable
             return SubtitleFetchResult.Failed("setup", "That item has no video file to put a subtitle next to.");
         }
 
-        // The language ends up in a file name, so only something shaped like a language
-        // code gets that far.
+        // this goes in a file name, so only accept something shaped like a language code
         var language = (candidate.Language ?? string.Empty).Trim().ToLowerInvariant();
         if (!LanguageCodeRegex().IsMatch(language))
         {
@@ -399,7 +317,8 @@ public partial class OpenSubtitlesService : IDisposable
 
         try
         {
-            var (token, loginError) = await GetTokenAsync(ReadCredentials(null), cancellationToken).ConfigureAwait(false);
+            var credentials = ReadCredentials(null);
+            var (token, loginError) = await GetTokenAsync(credentials, cancellationToken).ConfigureAwait(false);
             if (token is null)
             {
                 return SubtitleFetchResult.Failed("login", loginError ?? "Could not sign in to OpenSubtitles.");
@@ -410,23 +329,20 @@ public partial class OpenSubtitlesService : IDisposable
                 Content = JsonContent.Create(new { file_id = candidate.FileId })
             };
 
-            Prepare(request, ReadCredentials(null).ApiKey);
+            Prepare(request, credentials.ApiKey);
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
 
-            using var client = CreateClient();
-            using var response = await client.SendAsync(request, cancellationToken).ConfigureAwait(false);
-            var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            var (status, body) = await SendAsync(request, cancellationToken).ConfigureAwait(false);
 
-            if (!response.IsSuccessStatusCode)
+            if (status != HttpStatusCode.OK)
             {
-                if (response.StatusCode is HttpStatusCode.Unauthorized)
+                // drop it so the next try signs in again
+                if (status == HttpStatusCode.Unauthorized)
                 {
-                    // Thrown away so the next attempt signs in again rather than reusing a
-                    // token the server has stopped taking.
                     _token = null;
                 }
 
-                var reason = DescribeFailure(response.StatusCode, body, "download");
+                var reason = DescribeFailure(status, body, "download");
                 _logger.LogWarning("OpenSubtitles refused the download of {FileId}: {Reason}", candidate.FileId, reason);
                 return SubtitleFetchResult.Failed("download", reason);
             }
@@ -439,34 +355,21 @@ public partial class OpenSubtitlesService : IDisposable
                 return SubtitleFetchResult.Failed("download", "OpenSubtitles took the request but sent no download link back.");
             }
 
-            // Their download response names the file, and that name is the only reliable
-            // word on what format it actually is.
-            var fileName = ReadString(root, "file_name") ?? candidate.FileName;
-            var remaining = ReadInt(root, "remaining");
-
-            var saved = await SaveAsync(item.Path, language, candidate, link, fileName, cancellationToken).ConfigureAwait(false);
-            saved.RemainingDownloads = remaining;
+            // the file name in the response is the only reliable word on the actual format
+            var saved = await SaveAsync(item.Path, language, candidate, link, ReadString(root, "file_name") ?? candidate.FileName, cancellationToken).ConfigureAwait(false);
+            saved.RemainingDownloads = ReadInt(root, "remaining");
             return saved;
         }
-        catch (Exception ex) when (ex is HttpRequestException or JsonException or IOException or TaskCanceledException)
+        catch (Exception ex) when (ex is HttpRequestException or JsonException or IOException or TaskCanceledException && !cancellationToken.IsCancellationRequested)
         {
-            if (cancellationToken.IsCancellationRequested)
-            {
-                throw;
-            }
-
             _logger.LogWarning(ex, "Could not fetch a subtitle from OpenSubtitles for {Item}", item.Name);
             return SubtitleFetchResult.Failed("network", "Could not reach OpenSubtitles: " + ex.Message);
         }
     }
 
     /// <summary>
-    /// Checks the key and the account, for the settings page: signs in and asks how many
-    /// downloads are left today.
+    /// Checks the key and account for the settings page: signs in and asks how many downloads are left.
     /// </summary>
-    /// <param name="request">Credentials to test instead of the saved ones, where filled in.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>How it went.</returns>
     public async Task<OpenSubtitlesAccountStatus> TestAsync(OpenSubtitlesTestRequest? request, CancellationToken cancellationToken = default)
     {
         var credentials = ReadCredentials(request);
@@ -480,23 +383,20 @@ public partial class OpenSubtitlesService : IDisposable
         {
             if (string.IsNullOrWhiteSpace(credentials.Username) || string.IsNullOrWhiteSpace(credentials.Password))
             {
-                // No account, so all there is to test is that the key is taken.
-                var parameters = new Dictionary<string, string>(StringComparer.Ordinal)
-                {
-                    ["languages"] = "en",
-                    ["query"] = "test"
-                };
+                // no account, so all we can check is that the key works
+                var parameters = new Dictionary<string, string>(StringComparer.Ordinal) { ["languages"] = "en", ["query"] = "test" };
 
                 using var searchRequest = new HttpRequestMessage(HttpMethod.Get, "https://" + DefaultHost + ApiPath + "subtitles?" + BuildQuery(parameters));
                 Prepare(searchRequest, credentials.ApiKey);
 
-                using var client = CreateClient();
-                using var searchResponse = await client.SendAsync(searchRequest, cancellationToken).ConfigureAwait(false);
-                var searchBody = await searchResponse.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+                var (searchStatus, searchBody) = await SendAsync(searchRequest, cancellationToken).ConfigureAwait(false);
 
-                return searchResponse.IsSuccessStatusCode
-                    ? new OpenSubtitlesAccountStatus { Message = "The API key works, so searching does. Downloading needs the account name and password as well." }
-                    : new OpenSubtitlesAccountStatus { Message = DescribeFailure(searchResponse.StatusCode, searchBody, "search") };
+                return new OpenSubtitlesAccountStatus
+                {
+                    Message = searchStatus == HttpStatusCode.OK
+                        ? "The API key works, so searching does. Downloading needs the account name and password as well."
+                        : DescribeFailure(searchStatus, searchBody, "search")
+                };
             }
 
             var (token, loginError) = await GetTokenAsync(credentials, cancellationToken, force: true).ConfigureAwait(false);
@@ -509,17 +409,14 @@ public partial class OpenSubtitlesService : IDisposable
             Prepare(userRequest, credentials.ApiKey);
             userRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
 
-            using var userClient = CreateClient();
-            using var userResponse = await userClient.SendAsync(userRequest, cancellationToken).ConfigureAwait(false);
-            var userBody = await userResponse.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            var (userStatus, userBody) = await SendAsync(userRequest, cancellationToken).ConfigureAwait(false);
 
-            if (!userResponse.IsSuccessStatusCode)
+            if (userStatus != HttpStatusCode.OK)
             {
                 return new OpenSubtitlesAccountStatus
                 {
                     Success = true,
-                    Message = "Signed in, but OpenSubtitles wouldn't say how many downloads are left: "
-                        + DescribeFailure(userResponse.StatusCode, userBody, "account")
+                    Message = "Signed in, but OpenSubtitles wouldn't say how many downloads are left: " + DescribeFailure(userStatus, userBody, "account")
                 };
             }
 
@@ -542,19 +439,42 @@ public partial class OpenSubtitlesService : IDisposable
 
             return status;
         }
-        catch (Exception ex) when (ex is HttpRequestException or JsonException or TaskCanceledException)
+        catch (Exception ex) when (ex is HttpRequestException or JsonException or TaskCanceledException && !cancellationToken.IsCancellationRequested)
         {
-            if (cancellationToken.IsCancellationRequested)
-            {
-                throw;
-            }
-
             return new OpenSubtitlesAccountStatus { Message = "Could not reach OpenSubtitles: " + ex.Message };
         }
     }
 
-    // The searches to try, best first. Each one is only there when the item has what it
-    // needs: no hash for a tiny file, no ids for a home video.
+    /// <inheritdoc />
+    public void Dispose()
+    {
+        Dispose(true);
+        GC.SuppressFinalize(this);
+    }
+
+    /// <summary>
+    /// Releases the login lock.
+    /// </summary>
+    /// <param name="disposing">True when called from <see cref="Dispose()"/>.</param>
+    protected virtual void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            _loginLock.Dispose();
+        }
+    }
+
+    [GeneratedRegex(@"^\{\d+\}\{\d+\}")]
+    private static partial Regex MicroDvdRegex();
+
+    [GeneratedRegex(@"^\[\d+\]\[\d+\]", RegexOptions.Multiline)]
+    private static partial Regex Mpl2Regex();
+
+    [GeneratedRegex(@"^[a-z]{2,3}(-[a-z]{2,4})?$")]
+    private static partial Regex LanguageCodeRegex();
+
+    // The searches to try, best first. Each only if the item has what it needs (no hash for
+    // a tiny file, no ids for a home video).
     private static List<(string By, Dictionary<string, string> Parameters)> BuildSearches(BaseItem item, string? hash)
     {
         var searches = new List<(string, Dictionary<string, string>)>();
@@ -569,14 +489,12 @@ public partial class OpenSubtitlesService : IDisposable
 
         if (item is Episode episode)
         {
-            var series = episode.Series;
             var imdb = CleanImdb(episode.GetProviderId(MetadataProvider.Imdb));
             var tmdb = CleanNumber(episode.GetProviderId(MetadataProvider.Tmdb));
-            var parentImdb = CleanImdb(series?.GetProviderId(MetadataProvider.Imdb));
-            var parentTmdb = CleanNumber(series?.GetProviderId(MetadataProvider.Tmdb));
+            var parentImdb = CleanImdb(episode.Series?.GetProviderId(MetadataProvider.Imdb));
+            var parentTmdb = CleanNumber(episode.Series?.GetProviderId(MetadataProvider.Tmdb));
 
-            // An episode's own id names exactly that episode. Failing that, the show's id
-            // with the season and episode numbers does the same job.
+            // the episode's own id, or failing that the show's id plus season/episode
             if (imdb is not null)
             {
                 exact["imdb_id"] = imdb;
@@ -602,6 +520,16 @@ public partial class OpenSubtitlesService : IDisposable
                 exact["episode_number"] = episode.IndexNumber.Value.ToString(CultureInfo.InvariantCulture);
                 by.Add("the show's id with the season and episode");
             }
+
+            if (!string.IsNullOrWhiteSpace(episode.SeriesName) && episode.ParentIndexNumber.HasValue && episode.IndexNumber.HasValue)
+            {
+                searches.Add(("the show's name", new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["query"] = episode.SeriesName,
+                    ["season_number"] = episode.ParentIndexNumber.Value.ToString(CultureInfo.InvariantCulture),
+                    ["episode_number"] = episode.IndexNumber.Value.ToString(CultureInfo.InvariantCulture)
+                }));
+            }
         }
         else
         {
@@ -618,36 +546,25 @@ public partial class OpenSubtitlesService : IDisposable
                 exact["tmdb_id"] = tmdb;
                 by.Add("its TMDb id");
             }
+
+            if (!string.IsNullOrWhiteSpace(item.Name))
+            {
+                var byTitle = new Dictionary<string, string>(StringComparer.Ordinal) { ["query"] = item.Name };
+                if (item.ProductionYear is { } year)
+                {
+                    byTitle["year"] = year.ToString(CultureInfo.InvariantCulture);
+                }
+
+                searches.Add(("its title", byTitle));
+            }
         }
 
         if (exact.Count > 0)
         {
-            searches.Add((string.Join(" and ", by), exact));
+            searches.Insert(0, (string.Join(" and ", by), exact));
         }
 
-        // By title. For an episode that's the show's name plus the numbers.
-        if (item is Episode titled && !string.IsNullOrWhiteSpace(titled.SeriesName)
-            && titled.ParentIndexNumber.HasValue && titled.IndexNumber.HasValue)
-        {
-            searches.Add(("the show's name", new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                ["query"] = titled.SeriesName,
-                ["season_number"] = titled.ParentIndexNumber.Value.ToString(CultureInfo.InvariantCulture),
-                ["episode_number"] = titled.IndexNumber.Value.ToString(CultureInfo.InvariantCulture)
-            }));
-        }
-        else if (item is not Episode && !string.IsNullOrWhiteSpace(item.Name))
-        {
-            var byTitle = new Dictionary<string, string>(StringComparer.Ordinal) { ["query"] = item.Name };
-            if (item.ProductionYear is { } year)
-            {
-                byTitle["year"] = year.ToString(CultureInfo.InvariantCulture);
-            }
-
-            searches.Add(("its title", byTitle));
-        }
-
-        // Last, the release name, which is what uploaders name their files after.
+        // last resort, uploaders name their files after the release
         var stem = Path.GetFileNameWithoutExtension(item.Path);
         if (!string.IsNullOrWhiteSpace(stem))
         {
@@ -667,13 +584,11 @@ public partial class OpenSubtitlesService : IDisposable
         using var request = new HttpRequestMessage(HttpMethod.Get, "https://" + DefaultHost + ApiPath + "subtitles?" + BuildQuery(parameters));
         Prepare(request, ReadCredentials(null).ApiKey);
 
-        using var client = CreateClient();
-        using var response = await client.SendAsync(request, cancellationToken).ConfigureAwait(false);
-        var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+        var (status, body) = await SendAsync(request, cancellationToken).ConfigureAwait(false);
 
-        if (!response.IsSuccessStatusCode)
+        if (status != HttpStatusCode.OK)
         {
-            var reason = DescribeFailure(response.StatusCode, body, "search");
+            var reason = DescribeFailure(status, body, "search");
             _logger.LogWarning("OpenSubtitles search failed: {Reason}", reason);
             return (found, reason);
         }
@@ -686,16 +601,11 @@ public partial class OpenSubtitlesService : IDisposable
 
         foreach (var entry in data.EnumerateArray())
         {
+            // A 2-CD subtitle comes as two files, one per disc. Can't use those for one video file.
             if (!entry.TryGetProperty("attributes", out var attributes)
                 || !attributes.TryGetProperty("files", out var files)
-                || files.ValueKind != JsonValueKind.Array)
-            {
-                continue;
-            }
-
-            // A subtitle split over two CDs comes as two files, one per half of an old
-            // two disc rip. There's no putting those together for a single video file.
-            if (files.GetArrayLength() != 1)
+                || files.ValueKind != JsonValueKind.Array
+                || files.GetArrayLength() != 1)
             {
                 continue;
             }
@@ -729,11 +639,9 @@ public partial class OpenSubtitlesService : IDisposable
         return (found, null);
     }
 
-    // Best first: the preferred language, then a subtitle a person wrote over a machine
-    // translation, then one made for this exact file, then full subtitles over forced only
-    // ones, then trusted uploaders, then the most downloaded. Language leads because the
-    // result gets synced anyway, so a perfect match in a language nobody asked for is the
-    // worse outcome.
+    // Best first: wanted language, human over machine translation, exact file match, full
+    // over forced-only, trusted uploader, most downloaded. Language leads because it gets
+    // synced anyway, a perfect match in the wrong language is the worse result.
     private static IEnumerable<OpenSubtitlesCandidate> Rank(List<OpenSubtitlesCandidate> found, List<string> languages)
     {
         int LanguageRank(OpenSubtitlesCandidate c)
@@ -761,11 +669,12 @@ public partial class OpenSubtitlesService : IDisposable
             return (null, "Downloading needs the OpenSubtitles account name and password, set under Settings, Experimental.");
         }
 
-        // A token belongs to one account. Changing the account in the settings must not
-        // carry on downloading on the old one's quota.
+        // tokens belong to one account, switching accounts mustn't keep using the old one's quota
         var owner = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(credentials.ApiKey + "\n" + credentials.Username + "\n" + credentials.Password)));
 
-        if (!force && _token is not null && _tokenOwner == owner && DateTime.UtcNow < _tokenExpiresUtc)
+        bool HaveToken() => !force && _token is not null && _tokenOwner == owner && DateTime.UtcNow < _tokenExpiresUtc;
+
+        if (HaveToken())
         {
             return (_token, null);
         }
@@ -774,7 +683,7 @@ public partial class OpenSubtitlesService : IDisposable
 
         try
         {
-            if (!force && _token is not null && _tokenOwner == owner && DateTime.UtcNow < _tokenExpiresUtc)
+            if (HaveToken())
             {
                 return (_token, null);
             }
@@ -786,13 +695,11 @@ public partial class OpenSubtitlesService : IDisposable
 
             Prepare(request, credentials.ApiKey);
 
-            using var client = CreateClient();
-            using var response = await client.SendAsync(request, cancellationToken).ConfigureAwait(false);
-            var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            var (status, body) = await SendAsync(request, cancellationToken).ConfigureAwait(false);
 
-            if (!response.IsSuccessStatusCode)
+            if (status != HttpStatusCode.OK)
             {
-                var reason = DescribeFailure(response.StatusCode, body, "login");
+                var reason = DescribeFailure(status, body, "login");
                 _logger.LogWarning("Could not sign in to OpenSubtitles: {Reason}", reason);
                 return (null, reason);
             }
@@ -805,8 +712,7 @@ public partial class OpenSubtitlesService : IDisposable
                 return (null, "OpenSubtitles took the sign in but sent no token back.");
             }
 
-            // VIP accounts download from a host of their own, and /login is what says
-            // which. Anything that isn't a plain host name is ignored rather than trusted.
+            // VIP accounts download from their own host. Only take a plain *.opensubtitles.com host name.
             var host = ReadString(document.RootElement, "base_url")?.Trim().TrimEnd('/');
             if (host is not null && host.Contains("://", StringComparison.Ordinal))
             {
@@ -820,8 +726,7 @@ public partial class OpenSubtitlesService : IDisposable
             _token = token;
             _tokenOwner = owner;
 
-            // Tokens last a day, and signing in is itself rate limited, so one is kept
-            // for most of that rather than fetched per subtitle.
+            // tokens last a day and logins are rate limited, so keep it for most of that
             _tokenExpiresUtc = DateTime.UtcNow.AddHours(20);
             return (_token, null);
         }
@@ -831,10 +736,6 @@ public partial class OpenSubtitlesService : IDisposable
         }
     }
 
-    [System.Diagnostics.CodeAnalysis.SuppressMessage(
-        "Security",
-        "CA3003:Review code for file path injection vulnerabilities",
-        Justification = "The destination is built from the library item's own video path, a language code checked against a strict pattern, and an extension picked from a fixed list. Nothing the remote service sent back reaches the path.")]
     private async Task<SubtitleFetchResult> SaveAsync(
         string videoPath,
         string language,
@@ -848,11 +749,10 @@ public partial class OpenSubtitlesService : IDisposable
             return SubtitleFetchResult.Failed("download", "OpenSubtitles sent back a download link that doesn't look right, so it wasn't followed.");
         }
 
-        using var client = CreateClient();
-
         byte[] bytes;
         try
         {
+            using var client = _httpClientFactory.CreateClient("Lapse");
             bytes = await client.GetByteArrayAsync(uri, cancellationToken).ConfigureAwait(false);
         }
         catch (HttpRequestException ex)
@@ -861,9 +761,8 @@ public partial class OpenSubtitlesService : IDisposable
             return SubtitleFetchResult.Failed("download", "The OpenSubtitles download link didn't work: " + ex.Message);
         }
 
-        // Their download links hand back an error page rather than a file when the
-        // account is being rate limited, and writing that to disk as a .srt used to leave
-        // an item looking like it had a subtitle that no engine could read.
+        // when rate limited their links hand back an error page instead of a file, and
+        // saving that as .srt leaves an item with a "subtitle" nothing can read
         if (DescribeBadPayload(bytes) is { } badPayload)
         {
             _logger.LogWarning("OpenSubtitles sent back something that isn't a subtitle: {Problem}", badPayload);
@@ -874,12 +773,11 @@ public partial class OpenSubtitlesService : IDisposable
         var folder = Path.GetDirectoryName(videoPath)!;
         var stem = Path.GetFileNameWithoutExtension(videoPath);
 
-        // Named the way Jellyfin reads a subtitle's flags off its file name, so a hearing
-        // impaired or forced subtitle shows up as one in the player.
+        // named so Jellyfin reads the forced/sdh flags off the file name
         var flags = (candidate.ForeignPartsOnly ? ".forced" : string.Empty) + (candidate.HearingImpaired ? ".sdh" : string.Empty);
         var destination = Path.Combine(folder, $"{stem}.{language}{flags}{extension}");
 
-        // Never write over a subtitle that is already there.
+        // never over an existing subtitle
         for (var attempt = 1; File.Exists(destination); attempt++)
         {
             destination = Path.Combine(folder, $"{stem}.{language}{flags}.{attempt.ToString(CultureInfo.InvariantCulture)}{extension}");
@@ -891,9 +789,8 @@ public partial class OpenSubtitlesService : IDisposable
         return new SubtitleFetchResult { Path = destination };
     }
 
-    // Says what's wrong with the downloaded bytes, or null if they look like a subtitle.
-    // Deliberately loose: the point is to catch an html error page or an empty response,
-    // not to validate someone's subtitle file for them.
+    // What's wrong with the downloaded bytes, or null if they look like a subtitle. Loose on
+    // purpose, it's for catching an html error page or empty response, not validating files.
     private static string? DescribeBadPayload(byte[] bytes)
     {
         if (bytes.Length == 0)
@@ -901,7 +798,7 @@ public partial class OpenSubtitlesService : IDisposable
             return "an empty file.";
         }
 
-        // Long enough to hold a cue, short enough that a truncated download is caught.
+        // long enough for a cue, short enough to catch a truncated download
         if (bytes.Length < 32)
         {
             return "a file too small to be a subtitle.";
@@ -916,21 +813,14 @@ public partial class OpenSubtitlesService : IDisposable
             return "a web page instead of a subtitle file. That's usually what their rate limiting looks like.";
         }
 
-        // A MicroDVD file opens with {frame}{frame}, which is the one subtitle format that
-        // starts the same way an error payload does.
-        if (MicroDvdRegex().IsMatch(head))
+        // MicroDVD ({1}{2}) and ass ([Script Info]) start like a JSON error would
+        if (MicroDvdRegex().IsMatch(head) || head.StartsWith("[Script Info]", StringComparison.OrdinalIgnoreCase))
         {
             return null;
         }
 
         if (head.StartsWith('{') || head.StartsWith('['))
         {
-            // ass files open with [Script Info].
-            if (head.StartsWith("[Script Info]", StringComparison.OrdinalIgnoreCase))
-            {
-                return null;
-            }
-
             return "an error message instead of a subtitle file: " + Shorten(head);
         }
 
@@ -940,13 +830,12 @@ public partial class OpenSubtitlesService : IDisposable
             || head.Contains("<SAMI", StringComparison.OrdinalIgnoreCase)
             || head.Contains("<tt", StringComparison.OrdinalIgnoreCase)
             || head.Contains("[INFORMATION]", StringComparison.OrdinalIgnoreCase)
-            || System.Text.RegularExpressions.Regex.IsMatch(head, @"^\[\d+\]\[\d+\]", System.Text.RegularExpressions.RegexOptions.Multiline);
+            || Mpl2Regex().IsMatch(head);
 
         return looksLikeSubtitle ? null : "a file with no subtitle cues in it.";
     }
 
-    // Turns an error response into a sentence, using what OpenSubtitles said about it when
-    // it said anything.
+    // Turns an error response into a sentence, with whatever OpenSubtitles said about it.
     private static string DescribeFailure(HttpStatusCode status, string body, string step)
     {
         string? said = null;
@@ -958,24 +847,22 @@ public partial class OpenSubtitlesService : IDisposable
         }
         catch (JsonException)
         {
-            // An html error page, most likely. The status says enough.
+            // probably an html error page, the status is enough
         }
 
         var reason = status switch
         {
             HttpStatusCode.Unauthorized when step == "login" => "OpenSubtitles turned the account name or password down.",
-            HttpStatusCode.Unauthorized => "the OpenSubtitles sign in has expired. Try again.",
+            HttpStatusCode.Unauthorized => "The OpenSubtitles sign in has expired. Try again.",
             HttpStatusCode.Forbidden when said?.Contains("agent", StringComparison.OrdinalIgnoreCase) == true =>
                 "OpenSubtitles turned the request down for its User-Agent.",
             HttpStatusCode.Forbidden => "OpenSubtitles turned the API key down. Check it under Settings, Experimental.",
-            HttpStatusCode.NotAcceptable => "the account's downloads for today are used up.",
-            HttpStatusCode.Gone => "that subtitle has been removed from OpenSubtitles.",
+            HttpStatusCode.NotAcceptable => "The account's downloads for today are used up.",
+            HttpStatusCode.Gone => "That subtitle has been removed from OpenSubtitles.",
             HttpStatusCode.TooManyRequests => "OpenSubtitles is rate limiting the account. Wait a little and try again.",
             >= HttpStatusCode.InternalServerError => string.Create(CultureInfo.InvariantCulture, $"OpenSubtitles is having trouble ({(int)status}). Try again later."),
             _ => string.Create(CultureInfo.InvariantCulture, $"OpenSubtitles answered {(int)status}.")
         };
-
-        reason = char.ToUpperInvariant(reason[0]) + reason[1..];
 
         return string.IsNullOrWhiteSpace(said) || reason.Contains(said, StringComparison.OrdinalIgnoreCase)
             ? reason
@@ -988,9 +875,7 @@ public partial class OpenSubtitlesService : IDisposable
         return single.Length > 160 ? single[..160] + "..." : single;
     }
 
-    // Takes the extension off the name OpenSubtitles gave the file, as long as it's a
-    // subtitle format the plugin recognises. Their downloads are usually srt but not
-    // always, and saving an ass file as .srt used to break the sync that ran next.
+    // Their downloads are usually srt but not always, and an ass file saved as .srt breaks the next sync.
     private static string ResolveExtension(string? remoteFileName)
     {
         if (string.IsNullOrWhiteSpace(remoteFileName))
@@ -1002,8 +887,7 @@ public partial class OpenSubtitlesService : IDisposable
         return SubtitleFormats.IsSubtitle(extension) ? extension.ToLowerInvariant() : ".srt";
     }
 
-    // tt0903747, 0903747 and 903747 are all the same film, and the API only takes the
-    // last one without a redirect.
+    // tt0903747, 0903747 and 903747 are the same film and the API only takes the last without a redirect
     private static string? CleanImdb(string? id)
     {
         if (string.IsNullOrWhiteSpace(id))
@@ -1012,28 +896,21 @@ public partial class OpenSubtitlesService : IDisposable
         }
 
         var digits = id.Trim();
-        if (digits.StartsWith("tt", StringComparison.OrdinalIgnoreCase))
-        {
-            digits = digits[2..];
-        }
-
-        return CleanNumber(digits);
+        return CleanNumber(digits.StartsWith("tt", StringComparison.OrdinalIgnoreCase) ? digits[2..] : digits);
     }
 
     private static string? CleanNumber(string? value)
     {
-        if (string.IsNullOrWhiteSpace(value) || !long.TryParse(value.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var number) || number <= 0)
-        {
-            return null;
-        }
-
-        return number.ToString(CultureInfo.InvariantCulture);
+        return !string.IsNullOrWhiteSpace(value)
+            && long.TryParse(value.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var number)
+            && number > 0
+            ? number.ToString(CultureInfo.InvariantCulture)
+            : null;
     }
 
     private static ulong SumWords(byte[] buffer)
     {
         ulong sum = 0;
-
         for (var i = 0; i + 8 <= buffer.Length; i += 8)
         {
             sum = unchecked(sum + BitConverter.ToUInt64(buffer, i));
@@ -1080,8 +957,7 @@ public partial class OpenSubtitlesService : IDisposable
             Pick(overrides?.Password, config.OpenSubtitlesPassword));
     }
 
-    // Every request carries the key and a User-Agent naming the app and its version, which
-    // the API insists on, and asks for JSON back.
+    // key, a User-Agent naming us (the API insists), and JSON please
     private static void Prepare(HttpRequestMessage request, string? apiKey)
     {
         request.Headers.TryAddWithoutValidation("Api-Key", apiKey ?? string.Empty);
@@ -1090,8 +966,12 @@ public partial class OpenSubtitlesService : IDisposable
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
     }
 
-    private HttpClient CreateClient()
+    // Sends and reads the body. Anything 2xx comes back as OK, the callers only care about ok or not.
+    private async Task<(HttpStatusCode Status, string Body)> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
-        return _httpClientFactory.CreateClient("Lapse");
+        using var client = _httpClientFactory.CreateClient("Lapse");
+        using var response = await client.SendAsync(request, cancellationToken).ConfigureAwait(false);
+        var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+        return (response.IsSuccessStatusCode ? HttpStatusCode.OK : response.StatusCode, body);
     }
 }

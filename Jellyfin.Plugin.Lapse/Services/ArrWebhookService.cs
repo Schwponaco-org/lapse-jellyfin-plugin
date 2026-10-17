@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -14,25 +15,15 @@ using Microsoft.Extensions.Logging;
 namespace Jellyfin.Plugin.Lapse.Services;
 
 /// <summary>
-/// Turns a Radarr or Sonarr import notification into a sync.
+/// Turns a Radarr/Sonarr import webhook into a sync.
 ///
-/// Why this shape. Both apps have a Connect entry called Webhook that POSTs a JSON body
-/// to a URL of your choosing whenever something happens, so nothing here polls and nothing
-/// screen-scrapes: they push, once, when a file lands. The payload is stable across
-/// versions in the parts that matter, and the one field this needs - where the file went -
-/// is present on every import event both apps send. That is what makes it worth doing.
-///
-/// The one genuinely awkward part is timing. Radarr finishes the import and fires
-/// immediately, but Jellyfin doesn't know the file exists until its own scan picks it up,
-/// which can be minutes later. So this doesn't sync the path directly, it waits for the
-/// item to turn up in the library and syncs that. If it never turns up, it gives up
-/// quietly rather than leaving something running forever.
+/// The awkward bit is timing: they fire as soon as the import is done, but Jellyfin won't
+/// know about the file until its own scan, maybe minutes later. So we wait for the item to
+/// show up and sync that, and give up quietly if it never does.
 /// </summary>
 public class ArrWebhookService
 {
-    // How long to keep looking for the item after the notification. A library scan
-    // triggered by the import usually lands well inside this; anything slower is better
-    // left to the scheduled sync.
+    // a scan triggered by the import usually lands well inside this, slower ones get the scheduled sync
     private static readonly TimeSpan[] RetryDelays =
     {
         TimeSpan.FromSeconds(20),
@@ -48,18 +39,6 @@ public class ArrWebhookService
         ".mkv", ".mp4", ".avi", ".m4v", ".mov", ".ts", ".wmv", ".mpg", ".mpeg", ".webm"
     };
 
-    /// <summary>
-    /// Gets or sets what the last call from Radarr or Sonarr was, and when. A webhook that
-    /// silently does nothing is indistinguishable from one that was never set up, so the
-    /// settings page shows this rather than leaving people to guess from the server log.
-    /// </summary>
-    public static string? LastEvent { get; set; }
-
-    /// <summary>
-    /// Gets or sets when <see cref="LastEvent"/> arrived.
-    /// </summary>
-    public static DateTime? LastEventUtc { get; set; }
-
     private readonly ILibraryManager _libraryManager;
     private readonly LibraryService _libraryService;
     private readonly SyncQueueManager _queueManager;
@@ -68,10 +47,6 @@ public class ArrWebhookService
     /// <summary>
     /// Initializes a new instance of the <see cref="ArrWebhookService"/> class.
     /// </summary>
-    /// <param name="libraryManager">Used to find the item the file belongs to.</param>
-    /// <param name="libraryService">Used to check the item is one we may sync.</param>
-    /// <param name="queueManager">Runs the sync.</param>
-    /// <param name="logger">Logger.</param>
     public ArrWebhookService(
         ILibraryManager libraryManager,
         LibraryService libraryService,
@@ -85,15 +60,21 @@ public class ArrWebhookService
     }
 
     /// <summary>
-    /// Reads the file paths out of a Radarr or Sonarr webhook body.
-    ///
-    /// Both apps nest the imported file differently and have renamed the containers over
-    /// the years, so rather than modelling their schemas this walks the whole document and
-    /// collects every "path" that looks like a video file. It costs nothing on a payload
-    /// this size and it doesn't break when they add a field.
+    /// Gets or sets the last event type we got. Shown on the settings page, a webhook that
+    /// does nothing looks exactly like one that was never set up.
     /// </summary>
-    /// <param name="payload">The webhook body.</param>
-    /// <returns>The video file paths mentioned, in the order they appear.</returns>
+    public static string? LastEvent { get; set; }
+
+    /// <summary>
+    /// Gets or sets when <see cref="LastEvent"/> came in.
+    /// </summary>
+    public static DateTime? LastEventUtc { get; set; }
+
+    /// <summary>
+    /// Pulls the video file paths out of a webhook body. Radarr and Sonarr nest things
+    /// differently and keep renaming fields, so this just walks the whole document and grabs
+    /// every "path" that looks like a video.
+    /// </summary>
     public static List<string> ReadPaths(JsonElement payload)
     {
         var paths = new List<string>();
@@ -102,11 +83,8 @@ public class ArrWebhookService
     }
 
     /// <summary>
-    /// Says whether a webhook body is one of the "we just imported something" events, as
-    /// opposed to a grab, a rename, a health check or the Test button.
+    /// Reads the event type (lowercased), e.g. "download" or "test".
     /// </summary>
-    /// <param name="payload">The webhook body.</param>
-    /// <returns>The event type, lowercased, or null when the body doesn't name one.</returns>
     public static string? ReadEventType(JsonElement payload)
     {
         if (payload.ValueKind != JsonValueKind.Object)
@@ -126,20 +104,34 @@ public class ArrWebhookService
     }
 
     /// <summary>
-    /// Waits for a newly imported file to appear in the Jellyfin library, then syncs it.
-    /// Runs in the background: the webhook call itself answers straight away, because
-    /// Radarr and Sonarr both treat a slow webhook as a failed one.
+    /// Waits for the imported files to show up in the library, then queues them. Runs
+    /// detached from the request so anything that goes wrong is logged here.
     /// </summary>
-    /// <param name="paths">The file paths from the notification.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>Task.</returns>
     public async Task SyncWhenScannedAsync(IReadOnlyList<string> paths, CancellationToken cancellationToken = default)
     {
-        // This runs detached from the request that started it, so nobody is waiting to
-        // see an exception. Log it rather than let it vanish.
+        // a bit of slack, jellyfin's file watcher can beat the webhook
+        var since = DateTime.UtcNow.AddMinutes(-30);
+
         try
         {
-            await SyncEachAsync(paths, cancellationToken).ConfigureAwait(false);
+            foreach (var path in paths)
+            {
+                var item = await WaitForItemAsync(path, since, cancellationToken).ConfigureAwait(false);
+
+                if (item is null)
+                {
+                    _logger.LogInformation("Radarr/Sonarr reported {Path}, but Jellyfin still hasn't scanned it in. Leaving it for the scheduled sync.", path);
+                }
+                else if (!_libraryService.IsEligible(item))
+                {
+                    _logger.LogInformation("Skipping {Item} from the webhook: it's ignored, skipped, or its library is off", item.Name);
+                }
+                else
+                {
+                    _logger.LogInformation("Syncing {Item}, imported by Radarr/Sonarr", item.Name);
+                    _queueManager.EnqueueItem(item);
+                }
+            }
         }
         catch (OperationCanceledException)
         {
@@ -150,111 +142,83 @@ public class ArrWebhookService
         }
     }
 
-    private async Task SyncEachAsync(IReadOnlyList<string> paths, CancellationToken cancellationToken)
-    {
-        foreach (var path in paths)
-        {
-            var item = await WaitForItemAsync(path, cancellationToken).ConfigureAwait(false);
-
-            if (item is null)
-            {
-                _logger.LogInformation(
-                    "Radarr/Sonarr reported {Path}, but Jellyfin still hasn't scanned it in. Leaving it for the scheduled sync.",
-                    path);
-                continue;
-            }
-
-            if (!_libraryService.IsEligible(item))
-            {
-                _logger.LogInformation("Skipping {Item} from the webhook: it's ignored, skipped, or its library is off", item.Name);
-                continue;
-            }
-
-            _logger.LogInformation("Syncing {Item}, imported by Radarr/Sonarr", item.Name);
-            _queueManager.EnqueueItem(item);
-        }
-    }
-
     private static void Collect(JsonElement element, List<string> paths, int depth)
     {
-        // the payloads are shallow; a guard here just stops anything pathological
+        // payloads are shallow, this just stops anything silly
         if (depth > 8)
         {
             return;
         }
 
-        switch (element.ValueKind)
+        if (element.ValueKind == JsonValueKind.Array)
         {
-            case JsonValueKind.Object:
-                foreach (var property in element.EnumerateObject())
-                {
-                    if (property.Value.ValueKind == JsonValueKind.String
-                        && property.NameEquals("path")
-                        && property.Value.GetString() is { Length: > 0 } value
-                        && LooksLikeVideo(value)
-                        && !paths.Contains(value, StringComparer.OrdinalIgnoreCase))
-                    {
-                        paths.Add(value);
-                        continue;
-                    }
+            foreach (var entry in element.EnumerateArray())
+            {
+                Collect(entry, paths, depth + 1);
+            }
 
-                    Collect(property.Value, paths, depth + 1);
+            return;
+        }
+
+        if (element.ValueKind != JsonValueKind.Object)
+        {
+            return;
+        }
+
+        foreach (var property in element.EnumerateObject())
+        {
+            if (property.Value.ValueKind == JsonValueKind.String
+                && property.NameEquals("path")
+                && property.Value.GetString() is { Length: > 0 } value
+                && LooksLikeVideo(value))
+            {
+                if (!paths.Exists(p => string.Equals(p, value, StringComparison.OrdinalIgnoreCase)))
+                {
+                    paths.Add(value);
                 }
 
-                break;
+                continue;
+            }
 
-            case JsonValueKind.Array:
-                foreach (var entry in element.EnumerateArray())
-                {
-                    Collect(entry, paths, depth + 1);
-                }
-
-                break;
-
-            default:
-                break;
+            Collect(property.Value, paths, depth + 1);
         }
     }
 
     private static bool LooksLikeVideo(string path)
     {
-        var extension = System.IO.Path.GetExtension(path);
-        return extension.Length is > 1 and < 6
-            && Array.Exists(VideoExtensions, known => string.Equals(known, extension, StringComparison.OrdinalIgnoreCase));
+        var extension = Path.GetExtension(path);
+        return Array.Exists(VideoExtensions, known => string.Equals(known, extension, StringComparison.OrdinalIgnoreCase));
     }
 
-    private async Task<BaseItem?> WaitForItemAsync(string path, CancellationToken cancellationToken)
+    private async Task<BaseItem?> WaitForItemAsync(string path, DateTime since, CancellationToken cancellationToken)
     {
-        var item = Find(path);
-        if (item is not null)
+        if (Find(path, since) is { } item)
         {
             return item;
         }
 
-        foreach (var delay in RetryDelays)
+        for (var i = 0; i < RetryDelays.Length; i++)
         {
-            await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+            await Task.Delay(RetryDelays[i], cancellationToken).ConfigureAwait(false);
 
-            item = Find(path);
-            if (item is not null)
+            // only the last try looks through the whole library, the rest just check what was saved recently
+            var lastTry = i == RetryDelays.Length - 1;
+            if (Find(path, lastTry ? null : since) is { } found)
             {
-                return item;
+                return found;
             }
         }
 
         return null;
     }
 
-    // By the path as Radarr or Sonarr sent it, and failing that by the last two parts of
-    // it: the folder and the file. The apps and Jellyfin often see the same disk mounted in
-    // different places - /data/movies in one container, /movies in the other - and the
-    // full path then matches nothing even once the item is there.
-    private BaseItem? Find(string path)
+    // First by the exact path, then by "folder/file" since the *arr apps and Jellyfin often
+    // have the same disk mounted in different places (/data/movies vs /movies).
+    private BaseItem? Find(string path, DateTime? savedSince)
     {
-        var item = _libraryManager.FindByPath(path, isFolder: false);
-        if (item is not null)
+        if (_libraryManager.FindByPath(path, isFolder: false) is { } exact)
         {
-            return item;
+            return exact;
         }
 
         var tail = Tail(path);
@@ -263,17 +227,24 @@ public class ArrWebhookService
             return null;
         }
 
+        var query = new InternalItemsQuery
+        {
+            IncludeItemTypes = LibraryService.SyncableKinds,
+            Recursive = true,
+            IsVirtualItem = false,
+            MinDateLastSaved = savedSince
+        };
+
         BaseItem? match = null;
-        foreach (var candidate in _libraryService.GetItems())
+        foreach (var candidate in _libraryManager.GetItemList(query))
         {
             if (candidate.Path is null || !string.Equals(Tail(candidate.Path), tail, StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }
 
-            // Two items ending the same way is a guess either way, so it's left to the
-            // scheduled run rather than syncing whichever came first.
-            if (match is not null)
+            // two items ending the same way is a guess, leave it to the scheduled run
+            if (match is not null && match.Id != candidate.Id)
             {
                 _logger.LogInformation("More than one item ends in {Tail}, so the webhook can't tell which one it meant", tail);
                 return null;
@@ -284,7 +255,7 @@ public class ArrWebhookService
 
         if (match is not null)
         {
-            _logger.LogInformation("Matched {Path} to {Item} by folder and file name, since Jellyfin has it at {JellyfinPath}", path, match.Name, match.Path);
+            _logger.LogInformation("Matched {Path} to {Item} by folder and file name, Jellyfin has it at {JellyfinPath}", path, match.Name, match.Path);
         }
 
         return match;

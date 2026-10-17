@@ -7,16 +7,9 @@ using System;
 namespace Jellyfin.Plugin.Lapse.Services;
 
 /// <summary>
-/// Reads a subtitle track's title for what the release meant to flag but didn't.
-///
-/// Jellyfin only goes by the container's flags, and plenty of releases leave those unset
-/// and write "English (Forced)" or "English SDH" in the title instead. Going by the title
-/// as well is what makes a forced-only extraction find those tracks at all, and what gets
-/// the forced flag onto the extracted file where Jellyfin will see it.
-///
-/// The one trap in reading titles is the negative: "Non-Forced" and "no forced" contain
-/// the word but mean the opposite, and those are common titles for the full track that
-/// sits next to a forced one.
+/// Reads flags out of a track title, since lots of releases write "English (Forced)" or
+/// "English SDH" instead of setting the container flag. Watch out for "Non-Forced" and
+/// friends, common titles for the full track next to a forced one.
 /// </summary>
 public static class SubtitleTrackFlags
 {
@@ -32,8 +25,6 @@ public static class SubtitleTrackFlags
     /// <summary>
     /// Says whether a track title calls the track forced.
     /// </summary>
-    /// <param name="title">The title, or null.</param>
-    /// <returns>True when the title says forced and doesn't negate it.</returns>
     public static bool TitleSaysForced(string? title)
     {
         return ContainsUnnegated(title, ForcedWords);
@@ -42,8 +33,6 @@ public static class SubtitleTrackFlags
     /// <summary>
     /// Says whether a track title calls the track SDH or closed captions.
     /// </summary>
-    /// <param name="title">The title, or null.</param>
-    /// <returns>True when the title says so and doesn't negate it.</returns>
     public static bool TitleSaysHearingImpaired(string? title)
     {
         return ContainsUnnegated(title, HearingImpairedWords);
@@ -70,8 +59,7 @@ public static class SubtitleTrackFlags
 
                 var end = at + word.Length;
 
-                // Whole words only, so "Unforced" or "accessibility" can't match on a
-                // fragment.
+                // whole words only, "Unforced" shouldn't match
                 if (IsBoundary(title, at - 1) && IsBoundary(title, end) && !IsNegated(title, at))
                 {
                     return true;
@@ -89,8 +77,7 @@ public static class SubtitleTrackFlags
         return index < 0 || index >= text.Length || !char.IsLetterOrDigit(text[index]);
     }
 
-    // "Non-Forced", "non forced", "(no forced)", "not forced", "without SDH". Looks at the
-    // word right before the match, skipping the separators people put in between.
+    // "Non-Forced", "(no forced)", "without SDH": check the word right before, skipping separators
     private static bool IsNegated(string title, int matchStart)
     {
         var end = matchStart;

@@ -5,20 +5,13 @@
 namespace Jellyfin.Plugin.Lapse.Data;
 
 /// <summary>
-/// What format the candidate files get written in.
-///
-/// This exists because the engines do not read the same formats. LAPSE reads twelve,
-/// alass and ffsubsync read four, so a subtitle in one of the other eight has to be
-/// converted before the other two can say anything about it. This setting decides what
-/// that conversion produces, and it only ever applies to the candidate files: nothing in
-/// the library is converted or replaced by it.
+/// Format of the multi engine candidate files. alass/ffsubsync read fewer formats than LAPSE so
+/// some subtitles get converted for them. Only affects the candidates, never the library.
 /// </summary>
 public enum CandidateFormat
 {
     /// <summary>
-    /// Keep each candidate as close to the original as the engine that wrote it allows.
-    /// LAPSE writes the original format straight back. The other two get a converted copy
-    /// to work on and their answer comes out as srt.
+    /// As close to the original as each engine allows (LAPSE keeps the format, the others give srt).
     /// </summary>
     MatchOriginal,
 

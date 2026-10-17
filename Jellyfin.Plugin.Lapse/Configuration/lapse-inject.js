@@ -2,10 +2,8 @@
 // Copyright (C) 2026 Rasmus Stisen Jensen (rs-jensen)
 // Licensed under GPL v3 - see LICENSE for details
 
-// This runs on every page of the web client (the server adds it to index.html as that
-// page is served, see ScriptInjectionMiddleware), so unlike the dashboard script it can't
-// assume the "Dashboard" helper object is loaded - that's dashboard-only. Only ApiClient
-// is safe to use everywhere.
+// Runs on every page of the web client (added to index.html by ScriptInjectionMiddleware).
+// Unlike the dashboard script it can't rely on the "Dashboard" helper, only ApiClient.
 
 (function () {
     'use strict';
@@ -58,7 +56,7 @@
         return fetch(ApiClient.getUrl(path), options).then(function (res) {
             if (!res.ok) {
                 return res.text().then(function (text) {
-                    throw new Error(text || ('Request failed with status ' + res.status));
+                    throw new Error(errorMessage(text, res.status));
                 });
             }
 
@@ -69,6 +67,30 @@
 
             return null;
         });
+    }
+
+    // Errors come back as JSON, a quoted string or an ASP.NET problem details object. Show the
+    // sentence, not the quotes and braces.
+    function errorMessage(text, status) {
+        if (!text) {
+            return 'Request failed with status ' + status;
+        }
+
+        try {
+            var parsed = JSON.parse(text);
+
+            if (typeof parsed === 'string') {
+                return parsed;
+            }
+
+            if (parsed && (parsed.detail || parsed.title || parsed.message)) {
+                return parsed.detail || parsed.title || parsed.message;
+            }
+        } catch (e) {
+            // not JSON, so it is the sentence already
+        }
+
+        return text;
     }
 
     function lapseGet(path) {
@@ -124,16 +146,11 @@
     // Restyles what the player already renders. Nothing on disk is touched, and turning
     // the setting off puts everything straight back.
     //
-    // Only text based tracks go through these elements at all: PGS and VOBSUB are drawn
-    // as images and never match, and ASS/SSA carries per-line style tags that the player
-    // applies inline, which beats anything set here.
+    // Text tracks only. PGS/VobSub are images, and ASS styles each line inline which wins anyway.
     //
-    // Two mechanisms, because one isn't enough on its own. The stylesheet covers the cue
-    // elements that already exist and the native ::cue pseudo element, which can only be
-    // reached from CSS. The observer then stamps the same values straight onto each
-    // subtitle element as the player creates it, because Jellyfin's own subtitle
-    // appearance helper writes inline styles onto those elements, and matching it inline
-    // with a priority is the only thing that reliably wins.
+    // Two parts: the stylesheet covers existing cue elements and ::cue (CSS only). The observer
+    // stamps the same values inline on each new subtitle element, because Jellyfin's own
+    // appearance helper writes inline styles and an inline !important is the only thing that wins.
     var SUBTITLE_SELECTORS = [
         '.videoSubtitles',
         '.videoSubtitlesInner',
@@ -143,20 +160,31 @@
     ];
 
     var appearanceSettings = null;
-    var appearanceObserver = null;
+    var appearanceFetchedAt = 0;
+    var clientObserver = null;
 
-    function refreshSubtitleAppearance() {
-        // Runs on every page including the login screen, where there is no ApiClient and
-        // nobody to have settings for. Touching it there would throw outside any promise
-        // chain, so check first and let the next page load try again.
+    // Called on every navigation and whenever a video shows up. Navigation reuses the last
+    // answer for 30s (no point asking the server on every page change), a video starting
+    // passes force so a change made in the dashboard shows up, but still at most every 5s
+    // since the player can add more than one video element.
+    function refreshSubtitleAppearance(force) {
+        // no ApiClient on the login screen, and touching it there throws
         if (typeof ApiClient === 'undefined' || !ApiClient.accessToken()) {
             return;
         }
+
+        var maxAge = force === true ? 5000 : 30000;
+        if (Date.now() - appearanceFetchedAt < maxAge) {
+            return;
+        }
+
+        appearanceFetchedAt = Date.now();
 
         lapseGet('Lapse/Appearance').then(function (appearance) {
             appearanceSettings = appearance;
             applySubtitleAppearance();
         }).catch(function (err) {
+            appearanceFetchedAt = 0;
             log('could not read the subtitle appearance settings: ' + err.message);
         });
     }
@@ -212,18 +240,14 @@
                 return familyNameFor(file).toLowerCase() === String(family).toLowerCase();
             });
 
-            // Nothing matching means the font is expected to be on the device already -
-            // a system font somebody typed in - and the stylesheet asks for it by name
-            // without any of this.
+            // nothing matching = a system font someone typed in, the stylesheet just asks for it by name
             if (match.length) {
                 ensureFontFaceLoaded(preferRegular(match));
             }
         });
     }
 
-    // A family usually arrives as several files. The upright one is the one to register:
-    // the browser synthesises bold and italic from it, where registering the bold file
-    // would leave everything permanently bold.
+    // register the upright file, the browser fakes bold/italic from it (registering bold makes everything bold)
     function preferRegular(files) {
         for (var i = 0; i < files.length; i++) {
             if (/[-_]Regular\./i.test(files[i])) {
@@ -239,9 +263,7 @@
     }
 
     function fontStackOf(appearance) {
-        // Always leave a fallback behind whatever was picked, so a glyph the chosen font
-        // hasn't got - an Arabic letter in OpenDyslexic, say - still draws instead of
-        // coming out as an empty box.
+        // always keep a fallback so missing glyphs (Arabic in OpenDyslexic) still draw instead of boxes
         return appearance.FontFamily
             ? '"' + appearance.FontFamily.replace(/["\\]/g, '') + '", sans-serif'
             : '';
@@ -251,9 +273,8 @@
         return (appearance.LetterSpacingPx || 0) + 'px';
     }
 
-    // The player anchors its subtitle strip to the bottom of the window, so lifting the
-    // text is a matter of moving that strip up. Only reaches subtitles drawn as HTML: an
-    // ASS track goes through libass onto a canvas and carries its own positioning.
+    // The player anchors subtitles to the bottom, so lifting means moving that strip up. HTML
+    // subtitles only, libass draws ASS on a canvas with its own positioning.
     function positionCssFor(appearance) {
         var percent = appearance.VerticalPositionPercent || 0;
 
@@ -295,10 +316,8 @@
             '}';
     }
 
-    // A font in Jellyfin's fallback folder is on the server, not on the device, so the
-    // browser has to be told where to fetch it from before it can draw anything in it.
-    // The server already serves that folder for its own subtitle burn-in, which is what
-    // makes this a link rather than an upload.
+    // The font lives on the server, so the browser needs a URL for it. Jellyfin already serves the
+    // fallback folder for burn-in, we just link to it.
     function ensureFontFaceLoaded(fileName) {
         if (!fileName) {
             return;
@@ -319,9 +338,8 @@
 
         var family = familyNameFor(fileName);
 
-        // A stylesheet's url() carries no Authorization header, and that endpoint needs
-        // one, so the token goes in the query string - which is what the web client's own
-        // ASS renderer does with the same folder.
+        // url() can't send an Authorization header, so the token goes in the query string (the web
+        // client's own ASS renderer does the same)
         var url = ApiClient.getUrl('FallbackFont/Fonts/' + encodeURIComponent(fileName), {
             api_key: ApiClient.accessToken()
         });
@@ -335,9 +353,7 @@
             '}';
     }
 
-    // OpenDyslexic-Regular.otf is a file name; "OpenDyslexic" is what CSS asks for. The
-    // face suffixes are dropped so the regular, bold and italic files all land under one
-    // family and the browser picks between them the way it would locally.
+    // OpenDyslexic-Regular.otf -> "OpenDyslexic", so regular/bold/italic files share one family
     function familyNameFor(fileName) {
         return String(fileName)
             .replace(/\.(otf|ttf|woff2?|woff)$/i, '')
@@ -362,8 +378,7 @@
             element.style.removeProperty('font-family');
         }
 
-        // The background belongs on the inner element - putting it on the outer one paints
-        // the whole width of the video rather than a box around the words.
+        // background on the inner element, on the outer one it paints the whole video width
         if (element.classList.contains('videoSubtitlesInner')) {
             element.style.setProperty('background-color', backgroundOf(appearance), 'important');
         }
@@ -384,46 +399,60 @@
         });
     }
 
-    function startWatchingForSubtitles() {
-        if (appearanceObserver) {
+    var SUBTITLE_SELECTOR = SUBTITLE_SELECTORS.join(', ');
+
+    // Runs for every element added anywhere, so keep it cheap. Subtitle elements are only looked
+    // for while there's a style to apply.
+    function inspectAddedElement(node, styling) {
+        if (styling) {
+            if (node.matches && node.matches(SUBTITLE_SELECTOR)) {
+                stampSubtitleElement(node);
+            }
+
+            if (node.querySelectorAll) {
+                node.querySelectorAll(SUBTITLE_SELECTOR).forEach(stampSubtitleElement);
+            }
+        }
+
+        // playback starting, make sure the settings are current
+        if (node.nodeName === 'VIDEO' || (node.querySelector && node.querySelector('video'))) {
+            refreshSubtitleAppearance(true);
+        }
+
+        var sheet = node.classList && node.classList.contains('actionSheet')
+            ? node
+            : (node.querySelector ? node.querySelector('.actionSheet') : null);
+
+        if (sheet) {
+            handleActionSheetOpened(sheet);
+        }
+    }
+
+    function startWatchingTheClient() {
+        if (clientObserver) {
             return;
         }
 
-        var selector = SUBTITLE_SELECTORS.join(', ');
+        clientObserver = new MutationObserver(function (mutations) {
+            var styling = !!(appearanceSettings && appearanceSettings.Enabled);
 
-        appearanceObserver = new MutationObserver(function (mutations) {
             mutations.forEach(function (mutation) {
                 mutation.addedNodes.forEach(function (node) {
-                    if (node.nodeType !== 1) {
-                        return;
-                    }
-
-                    if (node.matches && node.matches(selector)) {
-                        stampSubtitleElement(node);
-                    }
-
-                    if (node.querySelectorAll) {
-                        node.querySelectorAll(selector).forEach(stampSubtitleElement);
-                    }
-
-                    // A video appearing means playback is starting, which is the moment
-                    // the settings need to be current - someone who just changed them in
-                    // the dashboard shouldn't have to reload the whole client first.
-                    if (node.nodeName === 'VIDEO' || (node.querySelector && node.querySelector('video'))) {
-                        refreshSubtitleAppearance();
+                    if (node.nodeType === 1) {
+                        inspectAddedElement(node, styling);
                     }
                 });
             });
         });
 
-        appearanceObserver.observe(document.body, { childList: true, subtree: true });
+        clientObserver.observe(document.body, { childList: true, subtree: true });
+        log('watching for action sheets and subtitles');
     }
 
     // --- figure out which item the open action sheet belongs to ---
 
-    // jellyfin-web has changed how it routes between versions (old hash-based routing
-    // like #!/details?id=xxx, newer versions using a real path/query string instead),
-    // so try every shape we know about rather than betting on just one.
+    // jellyfin-web has changed routing between versions (#!/details?id=x, real query strings,
+    // /details/<id>), so try all of them
     function getIdFromLocation() {
         var hash = window.location.hash || '';
         var hashQueryIndex = hash.indexOf('?');
@@ -448,9 +477,8 @@
         return null;
     }
 
-    // Set when the subtitle button on the player's control bar is pressed, so the action
-    // sheet that opens a moment later can be recognised as the subtitle track list rather
-    // than any of the other sheets the same bar opens.
+    // Set when the CC button on the player bar is pressed, so the sheet that opens right after can
+    // be told apart from the other sheets that bar opens.
     var pendingSubtitleMenu = 0;
 
     function rememberSubtitleMenuFromClick(e) {
@@ -477,9 +505,7 @@
     }
 
     function rememberCardContextFromClick(e) {
-        // the "more" button on a card is a paper-icon-button-light with data-action="menu",
-        // not a specific class - confirmed by inspecting the real rendered markup, class
-        // names alone weren't reliable enough here
+        // the card's "more" button is [data-action="menu"], class names weren't reliable
         var moreButton = e.target.closest ? e.target.closest('[data-action="menu"]') : null;
         if (!moreButton) {
             return;
@@ -522,9 +548,7 @@
     }
 
     function lookUpItem(id) {
-        // getCurrentUserId and getItem both throw synchronously on a client that is
-        // between sessions, so the whole call goes inside the promise rather than only
-        // its result.
+        // both throw synchronously between sessions, so do it all inside the promise
         return Promise.resolve().then(function () {
             return ApiClient.getItem(ApiClient.getCurrentUserId(), id);
         }).then(function (item) {
@@ -549,37 +573,23 @@
             '<div class="listItemBodyText actionSheetItemText">' + escapeHtml(label) + '</div>' +
             '</div>';
 
-        // The sheet this lives in is normally driven by Jellyfin's own actionsheet.show(),
-        // which resolves with whatever "id" the clicked .listItem carries and then acts on
-        // it - for the subtitle track picker specifically, that means feeding it straight
-        // into setSubtitleStreamIndex(). A click on one of these buttons was never meant to
-        // reach that handler at all, but without stopping it here it bubbles up to the
-        // sheet's own delegated click listener anyway, which reads our data-id, gets
-        // something that is not a track index, and Jellyfin's own code turns the subtitle
-        // off rather than doing nothing with it - "No available track, cannot apply
-        // offset" was Jellyfin's own log line for exactly that, confirmed live: opening
-        // this menu was quietly switching subtitles off on the way in, which is why
-        // nothing after it - live delay included - ever had a track left to move.
+        // Stop the click here. Otherwise it bubbles to the sheet's own handler, which reads our data-id
+        // as a track index and Jellyfin turns the subtitle OFF ("No available track, cannot apply
+        // offset"). Opening this menu used to silently switch subtitles off because of that.
         button.addEventListener('click', function (e) {
             e.stopPropagation();
 
-            // Before onClick, not after: several of these open their own overlay that
-            // listens for Escape to close itself (the player panel included). Dispatching
-            // the sheet's close-Escape afterwards would land on that new listener instead
-            // of the sheet, closing the thing this click just opened straight back down.
+            // Close before onClick: some of these open an overlay that closes on Escape, and the sheet's
+            // close would land on that instead.
             closeActionSheet(button);
             onClick(e);
         });
         return button;
     }
 
-    // Closing it ourselves now that the click is stopped before it reaches the sheet's own
-    // handler, which is what used to close it. This used to send an Escape key press, and
-    // jellyfin-web 10.11 ignores a synthetic one: the menu stayed open with the LAPSE dialog
-    // underneath its backdrop, so the first click anywhere only closed the menu. "_close"
-    // is the event jellyfin-web's own dialog helper fires on a dialog once it has finished
-    // closing, and its handler is the whole of the cleanup - backdrop, history entry, focus -
-    // the same path a cancelled menu takes, just without the slide-out.
+    // We stopped the click, so close the sheet ourselves. A synthetic Escape is ignored by
+    // jellyfin-web 10.11. "_close" is what its dialog helper fires after closing, and its handler
+    // does all the cleanup (backdrop, history, focus).
     function closeActionSheet(withinButton) {
         var sheet = withinButton.closest('.actionSheet');
         if (sheet && document.body.contains(sheet)) {
@@ -588,9 +598,7 @@
     }
 
     function addMenuButtons(sheet, context) {
-        // The scroller is where the real entries live. Different jellyfin-web versions
-        // have shuffled the wrapper markup around, so fall back to the sheet itself
-        // rather than giving up and showing nothing.
+        // the scroller holds the entries, but the wrapper markup moves around between versions
         var scroller = sheet.querySelector('.actionSheetScroller') || sheet;
 
         if (scroller.querySelector('.lapseSyncButton')) {
@@ -680,11 +688,8 @@
             return;
         }
 
-        // The subtitle list that opens from the player's own control bar. Adding the
-        // appearance entry here is the point of the whole per-user appearance: it puts
-        // the settings where somebody actually notices the subtitles are too small,
-        // which is while they're watching, rather than three menus into the dashboard
-        // where most people can't go at all.
+        // The subtitle list from the player's CC button. The appearance entry goes here because that's
+        // where people notice the subtitles are too small, not three menus deep in the dashboard.
         if (isSubtitleMenuOpening()) {
             pendingSubtitleMenu = 0;
             addSubtitleSettingsButton(sheet);
@@ -717,34 +722,9 @@
                 log('sheet closed before we could add the buttons');
             }
         }).catch(function (err) {
-            // A menu that came up without the LAPSE entries is a nuisance; an unhandled
-            // rejection out of a MutationObserver is a console full of noise on every
-            // menu, in a client that is not ours to break.
+            // a menu without our entries is a nuisance, an unhandled rejection in a MutationObserver is console spam on every menu
             log('could not add the buttons to this menu: ' + err);
         });
-    }
-
-    function startWatchingForActionSheets() {
-        var observer = new MutationObserver(function (mutations) {
-            mutations.forEach(function (mutation) {
-                mutation.addedNodes.forEach(function (node) {
-                    if (node.nodeType !== 1) {
-                        return;
-                    }
-
-                    var sheet = node.classList && node.classList.contains('actionSheet')
-                        ? node
-                        : (node.querySelector ? node.querySelector('.actionSheet') : null);
-
-                    if (sheet) {
-                        handleActionSheetOpened(sheet);
-                    }
-                });
-            });
-        });
-
-        observer.observe(document.body, { childList: true, subtree: true });
-        log('watching for action sheets');
     }
 
     // --- dialogs ---
@@ -798,9 +778,7 @@
                 return;
             }
 
-            // Supported means the engine in use can do something with the file. LAPSE
-            // reads PGS and VobSub and rewrites their timing, so those are only turned
-            // away when the engine cannot read them.
+            // Supported = the engine can do something with it (LAPSE can sync PGS/VobSub timing)
             var usable = subtitles.filter(function (s) { return s.Supported !== false; });
 
             if (usable.length === 0) {
@@ -871,8 +849,7 @@
             // settings, which is where that decision belongs.
             lapsePost('Lapse/Convert', { ItemId: itemId, SubtitlePath: path }).then(function (result) {
                 if (result.SyncedAfter && result.Sync) {
-                    // Only the first letter comes down - lowercasing the whole sentence
-                    // used to mangle the file path and the engine's name along with it.
+                    // only lowercase the first letter, the whole sentence would mangle the path and engine name
                     showLapseToast('Converted to ' + result.Format + ' and ' +
                         uncapitalize(describeSyncOutcome(result.Sync)));
                     return;
@@ -1020,9 +997,7 @@
     function doSync(itemId, subtitlePath) {
         showLapseToast('Syncing...');
 
-        // No EngineId and no Mode here on purpose. The server picks whichever engine is set
-        // as the default and runs it in that engine's configured default sync mode, so this
-        // button stays a one press job and what it does is set in one place.
+        // no EngineId or Mode on purpose, the server uses the default engine and its default mode
         lapsePost('Lapse/Sync', { ItemId: itemId, SubtitlePath: subtitlePath }).then(function (result) {
             showLapseToast(describeSyncOutcome(result));
         }).catch(function (err) {
@@ -1092,10 +1067,7 @@
             return match ? match[1].toLowerCase() : '';
         }
 
-        // srt is what people convert to almost every time, so it is the standing default
-        // and stays selected unless it is deliberately changed. This used to pick whatever
-        // the file was not, which meant the common case - an srt that wants tidying up -
-        // opened on .vtt.
+        // srt is what people want almost every time, so it's the default selection
         formatSelect.value = 'srt';
 
         overlay.querySelector('#lapseConvertCancel').addEventListener('click', function () {
@@ -1132,9 +1104,7 @@
         });
     }
 
-    // Conversion is set to carry on into a sync by default, so a toast that only mentions
-    // the file that was written leaves out the half of the job people actually care about
-    // - including the case where the sync then refused to touch anything.
+    // converting carries on into a sync by default, so the toast has to say how that went too
     function describeConvertOutcome(result) {
         var written = 'Wrote ' + result.Cues + ' cues to ' + result.OutputPath;
 
@@ -1151,10 +1121,8 @@
 
     // --- "Subtitle settings", in the player's own subtitle menu ---
     //
-    // Everything here is the calling user's own and is saved against their account, so it
-    // follows them from the TV to the phone without being set again, and changes nothing
-    // for anybody else sharing the library. That is the difference between this and the
-    // dashboard's appearance settings, which are the server-wide starting point.
+    // Saved per user on the server, so it follows them across devices and doesn't change anything
+    // for anyone else. The dashboard's appearance is just the starting point.
 
     var DYSLEXIC_PRESET = {
         Enabled: true,
@@ -1168,24 +1136,22 @@
 
     // ------------------------------------------------------------- the in-player panel
     //
-    // Everything below is about the moment somebody notices the subtitles are wrong while
-    // they are watching. Up to now that meant stopping, finding the item, using its menu,
-    // and starting the film again to see whether it worked. This puts the same tools over
-    // the picture, so the film keeps playing and you can see what each change did.
+    // In-player tools: fix subtitles while the film keeps playing instead of stopping, finding the
+    // item, fixing it and starting over.
     //
-    // The live delay is Jellyfin's own. Its player already knows how to shift a subtitle
-    // for every way it can draw one (libass for ASS, the browser's own text tracks, and
-    // its internal cue list), and reimplementing that would mean getting all three right
-    // and keeping them right. What Jellyfin does not do is remember the number: it lasts
-    // as long as the session and never touches the file. That is what "Save to file" is
-    // for, and it is the reason this panel earns its place.
+    // The live delay is Jellyfin's own (it already handles libass, text tracks and its cue list).
+    // It just doesn't remember it or touch the file, which is what "Save to file" is for.
 
-    // Jellyfin's player is a webpack module, not a global, so the only way in is to ask
-    // webpack for it. Pushing an empty chunk hands us __webpack_require__, and the module
-    // is found by what it can do rather than by an id, since ids change every build.
+    // The player is a webpack module, not a global. Pushing an empty chunk gets us
+    // __webpack_require__, and we find the module by what it does since ids change every build.
     var webpackRequire = null;
     var cachedPlaybackManager = null;
     var bridgeProbes = 0;
+
+    // When the player can't be found, when that was. Looking means turning every module
+    // in the client into text, and the delay slider asks on every tick of a drag.
+    var playbackManagerMissedAt = 0;
+    var PLAYBACK_MANAGER_RETRY_MS = 5000;
 
     function getWebpackRequire() {
         if (webpackRequire) {
@@ -1198,11 +1164,8 @@
                 return null;
             }
 
-            // The id has to be one webpack has not seen. It only runs the callback for a
-            // chunk it considers not yet loaded, and it marks every id it is handed as
-            // loaded on the way out - so reusing one means the second probe is silently
-            // ignored. A counter rather than a timestamp, because two probes in the same
-            // millisecond would collide.
+            // Needs an id webpack hasn't seen (it skips chunks it thinks are loaded and marks every id it
+            // gets). Counter, not timestamp, two probes in one ms would collide.
             bridgeProbes++;
 
             chunks.push([['lapse-bridge-' + bridgeProbes], {}, function (req) {
@@ -1223,9 +1186,7 @@
             && typeof value.getCurrentPlayer === 'function';
     }
 
-    // The manager can be the module's own exports or one named export of it, depending on
-    // how that module was written. Both shapes get looked at, and reading a property can
-    // run somebody else's getter, so none of it is allowed to throw.
+    // could be the module's exports or a named export of it, and reading properties can run getters, so nothing may throw
     function findManagerIn(exports) {
         if (!exports || typeof exports !== 'object') {
             return null;
@@ -1252,9 +1213,7 @@
         return null;
     }
 
-    // The module that defines the player, found by what its source says rather than by an
-    // id, since ids change with every build. Checked against the real bundles of Jellyfin
-    // 10.11 and 12.0, where exactly one module matches.
+    // found by its source, not its id. Checked against the 10.11 and 12.0 bundles, exactly one match each.
     var MANAGER_SOURCE_MARKER = /getPlayerSubtitleOffset\s*[:=]\s*function/;
 
     function playbackManager() {
@@ -1262,14 +1221,25 @@
             return cachedPlaybackManager;
         }
 
+        if (Date.now() - playbackManagerMissedAt < PLAYBACK_MANAGER_RETRY_MS) {
+            return null;
+        }
+
+        var found = findPlaybackManager();
+        if (!found) {
+            playbackManagerMissedAt = Date.now();
+        }
+
+        return found;
+    }
+
+    function findPlaybackManager() {
         var req = getWebpackRequire();
         if (!req) {
             return null;
         }
 
-        // A build that keeps its module cache around is the cheap case: the answer is
-        // already sitting there and nothing has to be run to find it. Jellyfin's own
-        // builds do not, hence everything below.
+        // a build that keeps its module cache is the easy case. Jellyfin's don't, hence the rest
         if (req.c) {
             for (var cached in req.c) {
                 var entry;
@@ -1288,11 +1258,8 @@
             }
         }
 
-        // Otherwise go through the module factories. Only the ones whose source mentions
-        // the method get required, so this asks webpack for one module rather than
-        // running a few thousand of them to see what comes out. By the time this runs
-        // something is playing, so that module has long since been executed and requiring
-        // it hands back what is already there.
+        // Otherwise go through the factories, but only require ones whose source mentions the method.
+        // Something is already playing, so that module has run and requiring it just returns it.
         var factories = req.m;
         if (!factories) {
             return null;
@@ -1330,11 +1297,8 @@
         return null;
     }
 
-    // The panel talks in delay, the way every other player does: a positive number means
-    // the subtitles show up later. Jellyfin's setSubtitleOffset runs the other way - it
-    // takes the amount to pull the subtitle forward - so the sign flips on the way in and
-    // on the way out. Getting this backwards would make every control do the opposite of
-    // what it says, so it lives in these two functions and nowhere else.
+    // The panel speaks delay like every other player (positive = later). Jellyfin's
+    // setSubtitleOffset is the other way round, so the sign flips here and only here.
     function delayToJellyfinOffset(delaySeconds) {
         return -delaySeconds;
     }
@@ -1343,22 +1307,14 @@
         return -offsetSeconds;
     }
 
-    // What the file itself would need, in milliseconds. SubtitleShifter adds this to every
-    // timestamp, and a positive delay means the cues have to move later, so this one keeps
-    // the panel's sign.
+    // what the file needs in ms, positive delay = cues later, so this keeps the panel's sign
     function delayToShiftMs(delaySeconds) {
         return Math.round(delaySeconds * 1000);
     }
 
-    // Every one of playbackManager's offset methods takes an optional player and falls
-    // back to its own internal "_currentPlayer" when none is given - confirmed by reading
-    // the shipped source of both Jellyfin 10.11.11 and 12.0, where all three are written
-    // as "(t=t||o._currentPlayer)...". The native "Subtitle Offset" slider under the gear
-    // menu never passes one either. Passing our own currentPlayer() result here used to
-    // move the panel's number without moving anything on screen: harmless if it happens to
-    // be the same object, but there is no reason to risk it being a different one when the
-    // manager already has a reliably correct answer of its own. So none of these pass a
-    // player - the bare calls are the ones proven to work.
+    // Don't pass a player. playbackManager's offset methods fall back to their own _currentPlayer
+    // (checked in the 10.11.11 and 12.0 sources) and the native slider doesn't pass one either.
+    // Passing ours used to move the number but nothing on screen.
     function readCurrentDelay() {
         var manager = playbackManager();
 
@@ -1376,19 +1332,9 @@
         return fallbackDelaySeconds;
     }
 
-    // Jellyfin's own player debounces setSubtitleOffset by 100ms - confirmed in the
-    // shipped source of both 10.11.11 and 12.0, where it is defined as
-    // "(0, debounce)(this._setSubtitleOffset, 100)" - and confirmed live: dragging
-    // Jellyfin's own native slider and reading getPlayerSubtitleOffset() back
-    // immediately shows the value from before the drag, same as it did here. This was
-    // read straight back in the same synchronous call to guard against a bridge that
-    // found a decoy manager wired to nothing, but that guard was racing the debounce and
-    // losing every time, which is why the slider used to change its own number without
-    // moving anything: it detected its own (correct) call as having failed and fell back
-    // to the text-track path, which has no cues to move for a subtitle rendered any other
-    // way. The verification now runs after the debounce window instead of inside it, and
-    // only logs - it does not retroactively fall back, since the primary call has already
-    // been made by the time it could get an answer either way.
+    // Jellyfin debounces setSubtitleOffset by 100ms (10.11.11 and 12.0 source). Reading it back right
+    // away gives the old value, so the old check thought the call failed and fell back to the text
+    // track path, which had nothing to move. Now we only verify after the debounce, and only log.
     var DEBOUNCE_SETTLE_MS = 150;
 
     function applyDelay(delaySeconds) {
@@ -1404,10 +1350,7 @@
 
                 manager.setSubtitleOffset(delayToJellyfinOffset(delaySeconds));
 
-                // Purely a diagnostic: logged, never acted on. Verifying synchronously and
-                // falling back on a mismatch used to be here, and it was wrong to do -
-                // it was racing the 100ms debounce and losing every time, reporting the
-                // player as broken when it had simply not caught up yet.
+                // diagnostic only, logged and never acted on (see above)
                 var wanted = delayToJellyfinOffset(delaySeconds);
                 setTimeout(function () {
                     try {
@@ -1430,9 +1373,8 @@
         return applyDelayToTextTracks(delaySeconds);
     }
 
-    // The way back when the player cannot be reached. Moves the cues the browser is
-    // holding, which covers a subtitle delivered as a text track and nothing else - an ASS
-    // track is drawn on a canvas by libass and has no cues out here to move.
+    // Fallback when the player can't be reached: moves the browser's text track cues. Does nothing
+    // for ASS, libass draws that on a canvas.
     var fallbackDelaySeconds = 0;
 
     function applyDelayToTextTracks(delaySeconds) {
@@ -1524,9 +1466,7 @@
         }
     }
 
-    // The panel is anchored to a film that is playing. When that ends - the credits run
-    // out, or somebody navigates away - it would otherwise be left floating over whatever
-    // page they landed on.
+    // close the panel when playback ends, otherwise it floats over whatever page comes next
     function watchForPlaybackEnding() {
         if (panelWatchdog) {
             clearInterval(panelWatchdog);
@@ -1705,6 +1645,18 @@
             SubtitlePath: panelContext.PlayingPath,
             OffsetMs: offsetMs
         }).then(function (shift) {
+            var moved = shift && shift.Shifted ? shift.Shifted + ' timings moved. ' : '';
+            var written = shift && shift.OutputPath;
+
+            // With a "new file" output mode the delay lands in a new file and the one on screen still has the
+            // old timings, so keep the live delay until the new file is the one playing.
+            if (written && written !== panelContext.PlayingPath) {
+                result.textContent = 'Saved into ' + baseName(written) + '. ' + moved +
+                    'It becomes a track of its own once Jellyfin picks it up; until you switch to it, ' +
+                    'the live delay stays on so what you are watching stays in sync.';
+                return;
+            }
+
             // The file now carries the delay, so the live one has to come off or the
             // subtitle would be moved twice over.
             panelDelay = 0;
@@ -1715,7 +1667,7 @@
             if (slider) { slider.value = 0; }
             if (value) { value.textContent = formatDelay(0); }
 
-            result.textContent = 'Saved. ' + (shift && shift.Shifted ? shift.Shifted + ' timings moved. ' : '') +
+            result.textContent = 'Saved. ' + moved +
                 'The live delay is back to zero because the file carries it now.';
         }).catch(function (err) {
             result.textContent = 'Could not save it: ' + err.message;
@@ -1829,7 +1781,7 @@
                 }
 
                 try {
-                    // No player passed here either - see the note above applyDelay.
+                    // no player passed here either, see applyDelay
                     manager.setSubtitleStreamIndex(parseInt(button.getAttribute('data-index'), 10));
 
                     // Switching tracks clears the player's offset, so the panel has to
@@ -1858,9 +1810,9 @@
             });
         }
 
-        var fetch = document.getElementById('lapseTrackFetch');
-        if (fetch) {
-            fetch.addEventListener('click', function () {
+        var fetchButton = document.getElementById('lapseTrackFetch');
+        if (fetchButton) {
+            fetchButton.addEventListener('click', function () {
                 openOnlineSubtitlePicker(panelContext.ItemId, panelContext.ItemName, function (outcome) {
                     var result = document.getElementById('lapseTrackResult');
                     if (result) {
@@ -1875,9 +1827,7 @@
 
     // --- "Find Subtitles Online" ---
 
-    // Lists what OpenSubtitles has for the item and lets someone pick, rather than taking
-    // whatever came top. The list is radio rows, like the multi engine picker, because this
-    // gets used with a TV remote as much as with a mouse.
+    // OpenSubtitles results to pick from. Radio rows because this gets used with a TV remote a lot.
     function openOnlineSubtitlePicker(itemId, name, done) {
         var language = (accessInfo && accessInfo.OpenSubtitlesLanguage) || '';
 
@@ -2055,13 +2005,17 @@
         document.getElementById('lapseLookBackground').addEventListener('change', preview);
 
         document.getElementById('lapseLookSave').addEventListener('click', function () {
-            saveMyAppearance(collectPanelAppearance(), 'Subtitle look saved against your account.');
-            document.getElementById('lapseLookResult').textContent = 'Saved.';
+            var result = document.getElementById('lapseLookResult');
+            result.textContent = 'Saving...';
+
+            saveMyAppearance(collectPanelAppearance(), 'Subtitle look saved against your account.').then(function (saved) {
+                if (result.isConnected) {
+                    result.textContent = saved ? 'Saved.' : 'Could not save it.';
+                }
+            });
         });
 
-        // The font picker and letter spacing live in the older, roomier dialog. They are
-        // set once and left alone, which is not what this panel is for, so they get a way
-        // in rather than a place on it.
+        // font and letter spacing live in the bigger dialog, set once and left alone
         document.getElementById('lapseLookMore').addEventListener('click', function () {
             closePlayerPanel();
             openSubtitleSettingsDialog();
@@ -2101,9 +2055,7 @@
     function addSubtitleSettingsButton(sheet) {
         var scroller = sheet.querySelector('.actionSheetScroller') || sheet;
 
-        // First in the list on purpose. Somebody who opened this menu because the
-        // subtitles are wrong should not have to read past every track to find the thing
-        // that fixes them.
+        // first in the list, people open this menu because the subtitles look wrong
         var entry = makeMenuButton('lapse-player-panel', 'Subtitle tools', 'tune', function () {
             openPlayerPanel();
         });
@@ -2120,23 +2072,12 @@
         keepSheetOnScreen(sheet);
     }
 
-    // Jellyfin works out where to put an action sheet from how tall it is, then puts it
-    // there. Anything added afterwards makes it taller than the sum it was placed on, so
-    // it grows downwards off the bottom of the screen and the last entry ends up half cut
-    // off. Nudging it back up afterwards is the cheapest fix that does not involve
-    // reimplementing its positioning.
-    // Jellyfin sizes and positions a sheet before we get anywhere near it, so entries we
-    // add afterwards make it taller than the space it was given. Different sheets in
-    // jellyfin-web are positioned differently - some with an inline "top" next to the
-    // button that opened them, others as a centred or bottom-anchored dialog with no
-    // inline position at all, which is what the "Subtitles" track picker turned out to be.
-    // Nudging the position only helps the first kind and silently does nothing for the
-    // second, which is why entries were still running off the bottom of that one.
+    // Jellyfin sizes the sheet before we add entries, so they can run off screen. Some sheets have
+    // an inline top, others (like the CC track picker) are centred dialogs with none, so nudging
+    // the position only helps some of them.
     //
-    // This sets a hard max-height and lets it scroll instead, which works whatever the
-    // sheet turns out to be positioned by. The inline nudge is kept as a second step for
-    // the anchored kind, where sliding it up half a sheet's height looks better than
-    // making the whole thing scroll for one entry's worth of overflow.
+    // so cap the height and scroll, which works however it's positioned. The nudge stays as a second
+    // step for anchored sheets where it looks nicer.
     function keepSheetOnScreen(sheet) {
         // Let the browser lay the new entries out before measuring.
         requestAnimationFrame(function () {
@@ -2146,21 +2087,12 @@
 
             var margin = 8;
 
-            // The "Subtitles" sheet from the CC button lands wherever jellyfin-web put it
-            // - which was measured to be the vertical middle of the window, not the top,
-            // since positionTo centres a sheet near the button that opened it rather than
-            // anchoring it to a corner. A budget worked out from the window's own height
-            // (as if the sheet started at the top) is wrong on a sheet like that: it is
-            // generous enough that the content never hits the cap and the scrolling this
-            // whole function exists for never engages, while the sheet still runs off the
-            // bottom because there was never really that much room below where it sat.
-            // The budget has to come from THIS sheet's own top, read fresh, not assumed.
+            // The CC sheet sits mid-window (positionTo centres near the button), so a budget from the window
+            // height is too generous and never kicks in. Measure from this sheet's own top.
             var box = sheet.getBoundingClientRect();
             var budget = window.innerHeight - box.top - margin;
 
-            // Sitting low enough that there is barely room for anything is worth pulling
-            // up first, so the list isn't squeezed into a sliver when there's headroom
-            // above to use instead.
+            // if it sits so low there's barely room, pull it up first
             var minBudget = 220;
             if (budget < minBudget) {
                 var top = parseFloat(sheet.style.top);
@@ -2178,9 +2110,7 @@
             var scroller = sheet.querySelector('.actionSheetScroller');
 
             if (scroller && scroller !== sheet) {
-                // Capping the sheet alone does nothing if the scroller inside keeps
-                // growing regardless of its parent - the header and buttons would be
-                // pushed off screen instead of the list scrolling. Both need a limit.
+                // cap the inner scroller too, or the header and buttons get pushed off instead
                 var chrome = box.height - scroller.getBoundingClientRect().height;
                 sheet.style.maxHeight = budget + 'px';
                 sheet.style.overflowY = 'hidden';
@@ -2193,11 +2123,8 @@
         });
     }
 
-    // Multi engine sync leaves several answers for the same subtitle sitting next to the
-    // video, and the only way to tell which is right is to watch. So the press that settles
-    // it goes here, in the track list you were already using to compare them: switch tracks
-    // until one lines up, open this menu, keep it. The server works out which track is on
-    // screen from the session, so nothing here has to read the menu's own selection.
+    // Multi engine answers get compared by switching tracks in the player, so "keep this one" lives
+    // in the track list. The server works out which track is on from the session.
     function addKeepCandidateButton(sheet, scroller) {
         lapseGet('Lapse/Candidates/Playing').then(function (status) {
             if (!status || !status.Playing || !status.Sets || !status.Sets.length) {
@@ -2467,24 +2394,25 @@
         });
     }
 
+    // Resolves with true once it is saved, false when it wasn't.
     function saveMyAppearance(wanted, message) {
-        lapsePost('Lapse/Appearance/Mine', wanted).then(function (saved) {
+        return lapsePost('Lapse/Appearance/Mine', wanted).then(function (saved) {
             // Applied straight away rather than on the next page load, so the effect of a
             // change is visible on the film that is playing right now.
             appearanceSettings = saved;
             applySubtitleAppearance();
             showLapseToast(message);
+            return true;
         }).catch(function (err) {
             showLapseToast('Could not save the subtitle settings: ' + err.message);
+            return false;
         });
     }
 
     // --- "Readable Subtitles" ---
     //
-    // Writes a copy of the subtitle with the font, size and letter spacing set in the file
-    // itself. Jellyfin's own subtitle appearance settings are per client and per device,
-    // and most of its clients have no font picker at all, so this is the only way to set a
-    // dyslexia-friendly font once and have the TV, the phone and the browser all honour it.
+    // Writes a copy with the font, size and spacing baked into the file, the only way to get a
+    // dyslexia font on every device since most clients have no font picker.
 
     function openRestylePopup(context) {
         showLapseToast('Checking subtitles...');
@@ -2615,9 +2543,7 @@
         written.forEach(function (file) {
             var line = file.OutputPath + ' (' + file.Cues + ' cues';
 
-            // The three ways a non-Latin subtitle comes out different from what the
-            // settings asked for. Saying so is the difference between "the font setting
-            // is broken" and "that alphabet needs a different font".
+            // the ways a non-Latin subtitle differs from what was asked for, so nobody thinks the font setting is broken
             if (file.FontSwapped) {
                 line += ', ' + file.Script + ', so it uses ' + file.FontName + ' instead';
             } else if (file.RightToLeft) {
@@ -2670,9 +2596,8 @@
 
     // --- "Extract Embedded Subtitles" ---
     //
-    // Pulls the tracks inside the video out as files beside it. Removing them from the
-    // video afterwards is the part people want for direct play, and it is the part that
-    // rewrites a library file, so it is two deliberate checkboxes rather than one.
+    // Extract embedded tracks. Removing them from the video rewrites a library file, so that's its
+    // own checkbox.
 
     function openExtractPopup(context) {
         showLapseToast('Checking subtitles...');
@@ -2837,9 +2762,7 @@
             '  </select>' +
             '</div>' +
             '<div class="lapsePreviewBox" id="lapseShiftPreview">Loading an example line...</div>' +
-            // Slider first, then the number. Dragging is how you find roughly the right
-            // offset; the box is for typing the exact one once you have. The two are the
-            // same value, so whichever you touch moves the other.
+            // slider to find it roughly, box to type it exactly, they move together
             '<div class="lapseShiftControls">' +
             '  <input type="range" id="lapseShiftSlider" class="lapseShiftSlider" min="-10000" max="10000" step="50" value="0" />' +
             '  <div class="lapseShiftScale">' +
@@ -2858,9 +2781,7 @@
             '  <button is="emby-button" type="button" class="raised" id="lapseShiftCancel"><span>Cancel</span></button>' +
             '  <button is="emby-button" type="button" class="raised button-submit" id="lapseShiftApply"><span>Apply</span></button>' +
             '</div>',
-            // Wide, because a timing line is 29 monospace characters and at the size this
-            // now renders it would otherwise sit in a scrollbox, which defeats the point
-            // of being able to read it at a glance.
+            // wide enough for a 29 char timing line without a scrollbar
             true);
 
         var select = overlay.querySelector('#lapseShiftSubtitle');
@@ -2969,9 +2890,7 @@
                 total = 0;
             }
 
-            // Written back with the same widths it came in with. ass and ssa count in
-            // centiseconds behind a single digit hour, and pushing srt's milliseconds
-            // into one of those would make a file no player will read.
+            // keep the widths, ass uses centiseconds and players reject ms there
             var ms = total % 1000;
             var fraction = frac.length === 2 ? Math.floor(ms / 10)
                 : frac.length === 1 ? Math.floor(ms / 100)
@@ -3129,9 +3048,7 @@
 
         var toast = showLapseToast('', true);
 
-        // The toast carries the Stop button, so a job that turns out to be the wrong one
-        // can be called off from wherever it was started rather than only from the
-        // dashboard.
+        // Stop button in the toast so a wrong job can be stopped from where it started
         toast.innerHTML = '<span class="lapseToastText">Starting...</span>' +
             '<button is="emby-button" type="button" class="raised lapseToastButton" id="lapseProgressStop">' +
             '<span>Stop</span></button>';
@@ -3194,10 +3111,8 @@
 
     // --- the Advanced dialog ---
 
-    // This used to load the whole plugin dashboard in an iframe, which navigated the
-    // page out from under whoever pressed it. It's a normal dialog now: everything it
-    // offers is an API call the injected script can make directly, so there was never a
-    // reason to drag the dashboard along.
+    // A normal dialog now (it used to load the whole dashboard in an iframe and navigate away).
+    // Everything here is a plain API call.
     function openAdvancedDialog(context) {
         showLapseToast('Loading...');
 
@@ -3218,10 +3133,8 @@
         });
     }
 
-    // The dialog reads top to bottom as one run: which subtitle, what to line it up
-    // against, how to write the result, and whether to translate what comes out. Every
-    // button that starts something is in the row at the bottom, so no action is hiding
-    // underneath a setting.
+    // Reads top to bottom: which subtitle, against what, how to write it, translate or not. All the
+    // action buttons sit in the bottom row.
     function showAdvancedDialog(context, subtitles, engines, providers, defaults) {
         var usableEngines = engines.filter(function (e) { return e.Installed && !e.RunCheckError; });
         if (usableEngines.length === 0) {
@@ -3249,9 +3162,7 @@
               '  <div class="fieldDescription">Tracks still inside the video file are pulled out first, so an embedded one can be picked here too.</div>' +
               '</div>';
 
-        // Syncing against another subtitle used to be a second button further down the
-        // dialog. It's the same run with a different thing to line up against, so it's a
-        // dropdown here and the Sync button does both.
+        // syncing to another subtitle is just a different reference, so it's a dropdown, not a second button
         var referenceSection = subtitles.length > 1
             ? '<div class="selectContainer">' +
               '  <label class="selectLabel">Line it up against</label>' +
@@ -3404,9 +3315,7 @@
         modeSelect.addEventListener('change', syncPenaltyVisibility);
         syncPenaltyVisibility();
 
-        // Picking Overwrite on a track that lives inside the mkv reads as "replace that
-        // track", which is not something any of these output modes can do. Saying so up
-        // front is the difference between one extracted file and a folder full of them.
+        // Overwrite on a track inside the mkv can't replace that track, say so up front
         var subtitleSelect = overlay.querySelector('#lapseAdvSubtitle');
         var embeddedNote = overlay.querySelector('#lapseAdvEmbeddedNote');
 
@@ -3600,16 +3509,14 @@
         ensureStylesheetLoaded();
         document.addEventListener('click', rememberCardContextFromClick, true);
         document.addEventListener('click', rememberSubtitleMenuFromClick, true);
-        startWatchingForActionSheets();
-        startWatchingForSubtitles();
+        startWatchingTheClient();
 
         // ApiClient isn't necessarily ready the instant the DOM is, and there's no event
         // for it, so give it a moment before the first authenticated call.
         setTimeout(refreshSubtitleAppearance, 2000);
 
-        // The client is a single page app, so moving between pages doesn't re-run any of
-        // this. Re-reading the settings on navigation is what makes a change made in the
-        // dashboard show up on the next thing played without a full reload.
+        // SPA, page changes don't rerun this. Re-read the settings on navigation (throttled) so dashboard
+        // changes show up without a reload.
         window.addEventListener('hashchange', refreshSubtitleAppearance);
         window.addEventListener('popstate', refreshSubtitleAppearance);
     }

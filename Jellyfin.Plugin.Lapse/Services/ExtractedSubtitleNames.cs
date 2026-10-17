@@ -11,44 +11,27 @@ using System.Text.RegularExpressions;
 namespace Jellyfin.Plugin.Lapse.Services;
 
 /// <summary>
-/// What an extracted subtitle is called, and how to recognise one again later.
+/// Names for extracted subtitles: Movie.eng.forced.stream8.srt. Jellyfin reads the
+/// language and flags off that like any other sidecar, and the stream index keeps two
+/// English tracks apart and makes the name fixed per track so we find it again.
 ///
-/// The name is the video's own, then the language, then forced and sdh where they apply,
-/// then the stream's index in the file: Movie.eng.forced.stream8.srt. Jellyfin reads the
-/// language and both flags off that exactly as it would off a subtitle anyone else put
-/// there, and the index keeps two English tracks from landing on the same file. It also
-/// makes the name a fixed answer for a given track, so extracting the same track twice
-/// finds the first file instead of making a second.
-///
-/// Older versions wrote Movie.eng.track8.srt, and the number in those is Jellyfin's
-/// rather than the file's. The two differ as soon as there's any subtitle file beside the
-/// video, so an old name can hold a different track than its number says. Those files
-/// are never taken as an extraction of anything: they're left exactly as they are, and
-/// the new name can't be mistaken for one of them.
+/// Old versions wrote Movie.eng.track8.srt with Jellyfin's index rather than the file's,
+/// so those can hold a different track than the number says. We leave them alone.
 /// </summary>
 public static partial class ExtractedSubtitleNames
 {
     /// <summary>
-    /// The longest file name, in bytes, the common filesystems take. ext4, btrfs, XFS and
-    /// ZFS count UTF-8 bytes; NTFS and APFS count UTF-16 units, which is never more.
+    /// Max file name length in bytes (ext4/btrfs/XFS/ZFS count UTF-8 bytes, NTFS/APFS UTF-16 units, never more).
     /// </summary>
     public const int MaxFileNameBytes = 255;
 
-    // What Jellyfin treats as a flag rather than a language when it reads a subtitle's
-    // name. A track tagged with one of these as its "language" would come out named as a
-    // flag, so those go down as und instead.
+    // Jellyfin reads these as flags, not languages, so a "language" like that becomes und
     private static readonly string[] ReservedTokens = { "forced", "foreign", "default", "sdh", "cc" };
 
     /// <summary>
-    /// Turns a track's language tag into the piece of the file name that carries it.
-    ///
-    /// The tag comes out of the video file, and a video file can say anything: a path, a
-    /// sentence, nothing. Only something shaped like a language code - letters and digits,
-    /// optionally a region after a dash - goes into a file name. Anything else is written
-    /// as und, which Jellyfin shows as an unknown language rather than trips over.
+    /// Turns a track's language tag into the file name part. The tag comes from the video
+    /// and can be anything, so only code-shaped tags get through, the rest become "und".
     /// </summary>
-    /// <param name="language">The tag.</param>
-    /// <returns>A safe, lower case tag.</returns>
     public static string LanguageTag(string? language)
     {
         var tag = language?.Trim().ToLowerInvariant();
@@ -58,8 +41,7 @@ public static partial class ExtractedSubtitleNames
             return "und";
         }
 
-        // "hi" is Hindi, but it's also the hard of hearing flag, and next to .sdh Jellyfin
-        // reads it as the flag. The three letter code means only the one thing.
+        // "hi" is Hindi but Jellyfin also reads it as the hearing impaired flag
         if (tag == "hi")
         {
             return "hin";
@@ -71,17 +53,6 @@ public static partial class ExtractedSubtitleNames
     /// <summary>
     /// Builds the path an extracted track is written to.
     /// </summary>
-    /// <param name="videoPath">The video the track comes from.</param>
-    /// <param name="streamIndex">The track's stream index.</param>
-    /// <param name="language">The track's language tag.</param>
-    /// <param name="forced">Whether the track is forced.</param>
-    /// <param name="hearingImpaired">Whether the track is SDH.</param>
-    /// <param name="extension">The extension, dot included.</param>
-    /// <returns>The path, beside the video.</returns>
-    [System.Diagnostics.CodeAnalysis.SuppressMessage(
-        "Security",
-        "CA3003:Review code for file path injection vulnerabilities",
-        Justification = "Built from Jellyfin's own resolved video path, a language tag cut down to letters, digits and dashes, an integer and a fixed extension.")]
     public static string BuildPath(
         string videoPath,
         int streamIndex,
@@ -115,18 +86,13 @@ public static partial class ExtractedSubtitleNames
     }
 
     /// <summary>
-    /// Says whether a file name is short enough for the filesystems a library lives on.
-    /// A video with a very long name already sits near the limit, and the language and
-    /// track index on the end can push its subtitle over.
+    /// Says whether the name fits (a long video name plus language and index can go over).
     /// </summary>
-    /// <param name="path">The path whose last part is checked.</param>
-    /// <returns>True when it fits.</returns>
     public static bool FitsFileSystem(string path)
     {
         var name = Path.GetFileName(path);
 
-        // The temporary file ffmpeg writes first is longer than the final name, and it
-        // has to fit too.
+        // the temp name is longer and has to fit too
         return Encoding.UTF8.GetByteCount(name) + TempSuffixLength <= MaxFileNameBytes;
     }
 
@@ -136,26 +102,18 @@ public static partial class ExtractedSubtitleNames
     public static int TempSuffixLength => ".lapse-extract-00000000".Length;
 
     /// <summary>
-    /// Gets the temporary file an extraction writes before it's moved into place. It
-    /// carries .lapse- so nothing in the plugin offers it as a subtitle, and it doesn't
-    /// end in a subtitle extension, so Jellyfin's scanner ignores it too.
+    /// Gets the temp file an extraction writes first. ".lapse-" hides it from our pickers
+    /// and the non-subtitle extension hides it from Jellyfin's scanner.
     /// </summary>
-    /// <param name="destination">Where the finished file goes.</param>
-    /// <returns>The temporary path.</returns>
     public static string TempPathFor(string destination)
     {
         return destination + ".lapse-extract-" + Guid.NewGuid().ToString("N")[..8];
     }
 
     /// <summary>
-    /// Says whether a subtitle file is one LAPSE extracted from this video, going by its
-    /// name alone: the video's name, a language tag, optional forced/sdh, a stream number.
-    /// Names from older versions don't count, so those files go on being treated exactly
-    /// as they were before.
+    /// Says whether a subtitle is one we extracted from this video, by name alone. Old
+    /// style names don't count.
     /// </summary>
-    /// <param name="videoPath">The video.</param>
-    /// <param name="subtitlePath">The subtitle file.</param>
-    /// <returns>True when it has the name an extraction gives.</returns>
     public static bool IsExtractedTrack(string? videoPath, string? subtitlePath)
     {
         if (string.IsNullOrEmpty(videoPath) || string.IsNullOrEmpty(subtitlePath))

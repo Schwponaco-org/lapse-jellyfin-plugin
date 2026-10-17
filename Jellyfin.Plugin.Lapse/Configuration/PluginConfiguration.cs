@@ -4,7 +4,6 @@
 
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using Jellyfin.Plugin.Lapse.Data;
 using Jellyfin.Plugin.Lapse.Engines;
 using MediaBrowser.Model.Plugins;
@@ -12,10 +11,16 @@ using MediaBrowser.Model.Plugins;
 namespace Jellyfin.Plugin.Lapse.Configuration;
 
 /// <summary>
-/// LAPSE settings, saved to disk as XML by Jellyfin's usual plugin config machinery.
+/// LAPSE settings. Jellyfin saves this to disk as XML, so property names can't change
+/// without breaking existing configs.
 /// </summary>
 public class PluginConfiguration : BasePluginConfiguration
 {
+    // Lookup for MovieRecords so a bulk run doesn't scan the whole list for every item.
+    // Not serialized. Rebuilt when the list length changes (records are only ever added).
+    private Dictionary<Guid, MovieSyncRecord>? _recordIndex;
+    private int _indexedCount;
+
     /// <summary>
     /// Initializes a new instance of the <see cref="PluginConfiguration"/> class.
     /// </summary>
@@ -26,13 +31,12 @@ public class PluginConfiguration : BasePluginConfiguration
     }
 
     /// <summary>
-    /// Gets how many history entries are kept. Enough to cover a bulk run over a season
-    /// and still be there the next morning, not so many that the config file balloons.
+    /// Gets how many history entries we keep. The whole config is rewritten on every save so this has to stay small.
     /// </summary>
     public static int MaxHistoryEntries => 300;
 
     /// <summary>
-    /// Gets or sets which engine to use when a sync doesn't ask for a specific one.
+    /// Gets or sets the engine used when a sync doesn't ask for a specific one.
     /// </summary>
     public string DefaultEngineId { get; set; }
 
@@ -42,88 +46,63 @@ public class PluginConfiguration : BasePluginConfiguration
     public List<EngineSettings> Engines { get; } = new();
 
     /// <summary>
-    /// Gets the per-library settings. A library with no entry here counts as enabled,
-    /// so upgrading doesn't silently stop syncing anything that used to get synced.
+    /// Gets the per-library settings. No entry means enabled.
     /// </summary>
     public List<LibraryConfig> Libraries { get; } = new();
 
     /// <summary>
-    /// Gets or sets the old single default penalty. Kept so upgrading from a version that
-    /// only had one engine doesn't throw away the value, see <see cref="MigrateLegacySettings"/>.
+    /// Gets or sets the penalty from the single engine days. Only read by <see cref="MigrateLegacySettings"/>.
     /// </summary>
     public int DefaultPenalty { get; set; }
 
     /// <summary>
-    /// Gets or sets the old single binary path override. Same deal as DefaultPenalty.
+    /// Gets or sets the binary path from the single engine days. Only read by <see cref="MigrateLegacySettings"/>.
     /// </summary>
     public string? EngineBinaryPathOverride { get; set; }
 
     /// <summary>
-    /// Gets or sets where synced subtitles get written, and whether the original is kept.
+    /// Gets or sets where synced subtitles get written and whether the original is kept.
     /// </summary>
     public OutputMode OutputMode { get; set; } = OutputMode.SidecarOnly;
 
     /// <summary>
-    /// Gets or sets what gets inserted before the extension in the sidecar output modes,
-    /// e.g. ".shifted" turns Movie.en.srt into Movie.en.shifted.srt.
+    /// Gets or sets the suffix for sidecar output, e.g. ".shifted" gives Movie.en.shifted.srt.
     /// </summary>
     public string SidecarSuffix { get; set; } = ".shifted";
 
     /// <summary>
-    /// Gets or sets what happens when the engine finishes but isn't confident about the
-    /// result. Writing the doubtful result to a sidecar is the default: it never touches
-    /// a subtitle that was already fine, and it still leaves the result there to look at.
+    /// Gets or sets what happens when the engine isn't confident. Sidecar by default so a good subtitle never gets overwritten.
     /// </summary>
     public LowConfidenceAction LowConfidenceAction { get; set; } = LowConfidenceAction.Sidecar;
 
     /// <summary>
-    /// Gets or sets a value indicating whether a subtitle the engine barely moved is left
-    /// exactly as it was. A bulk run over a whole library goes through subtitles that were
-    /// already fine, and rewriting those - new file, new backup, new timestamps - for a
-    /// shift nobody can see is churn at best. On by default.
+    /// Gets or sets a value indicating whether a subtitle the engine barely moved is left alone.
     /// </summary>
     public bool SkipAlreadyInSync { get; set; } = true;
 
     /// <summary>
-    /// Gets or sets how small the engine's answer has to be, in milliseconds, before
-    /// <see cref="SkipAlreadyInSync"/> treats the subtitle as already correct. 100ms is
-    /// under what anyone notices while reading along, and well under the drift that makes
-    /// someone go looking for a sync button in the first place.
+    /// Gets or sets the shift (ms) below which <see cref="SkipAlreadyInSync"/> counts a subtitle as already right.
     /// </summary>
     public int AlreadyInSyncToleranceMs { get; set; } = 100;
 
     /// <summary>
-    /// Gets or sets how far LAPSE's answer has to stand out from the alternatives before
-    /// it counts as confident, in standard deviations. This is passed straight to the
-    /// engine as --confidence, and the default is the engine's own internal default
-    /// (sure_sigma in its main.cpp), not a number of the plugin's invention.
+    /// Gets or sets the --confidence value passed to LAPSE (standard deviations). Default matches the engine.
     /// </summary>
     public double ConfidenceSigma { get; set; } = LapseEngine.DefaultConfidenceSigma;
 
     /// <summary>
-    /// Gets or sets the old 0-100 confidence percentage. Kept only so an upgrade can tell
-    /// a config written before <see cref="ConfidenceSigma"/> existed, see
-    /// <see cref="MigrateLegacySettings"/>. The two are on completely different scales, so
-    /// the old value is dropped rather than converted.
+    /// Gets or sets the old 0-100 confidence value. Only kept so old configs still load.
     /// </summary>
     public int SyncConfidenceThreshold { get; set; } = 50;
 
     /// <summary>
-    /// Gets or sets a value indicating whether the daily task keeps every installed
-    /// engine up to date. Engines that aren't installed are left alone either way.
+    /// Gets or sets a value indicating whether the daily task updates installed engines.
     /// </summary>
     public bool AutoUpdateEngines { get; set; } = true;
 
     /// <summary>
-    /// Gets or sets a value indicating whether tracks still inside the video file count
-    /// towards an item being synced.
-    ///
-    /// Off by default, because nothing automatic ever touches an embedded track: bulk
-    /// runs, schedules and the webhook all skip them on purpose. Counting them anyway
-    /// left every release with an external .srt and a handful of embedded tracks stuck on
-    /// "partly synced" forever, with no way to finish it short of syncing tracks nobody
-    /// asked for. Turn it on if you do sync embedded tracks by hand and want them
-    /// counted.
+    /// Gets or sets a value indicating whether embedded tracks count towards an item being synced.
+    /// Off by default since nothing automatic touches them, so items would sit on "partly synced" forever.
     /// </summary>
     public bool CountEmbeddedSubtitlesInStatus { get; set; }
 
@@ -133,403 +112,353 @@ public class PluginConfiguration : BasePluginConfiguration
     public string? GoogleTranslateApiKey { get; set; }
 
     /// <summary>
-    /// Gets or sets the DeepL API key. Free tier keys end in ":fx" and go to a different
-    /// host, which the provider works out from the key itself.
+    /// Gets or sets the DeepL API key. Free keys end in ":fx".
     /// </summary>
     public string? DeepLApiKey { get; set; }
 
     /// <summary>
-    /// Gets or sets the base URL of a self hosted Lingarr, e.g. http://lingarr:9876.
+    /// Gets or sets the Lingarr base URL, e.g. http://lingarr:9876.
     /// </summary>
     public string? LingarrBaseUrl { get; set; }
 
     /// <summary>
-    /// Gets or sets the Lingarr API key, sent as X-Api-Key. Only needed when that Lingarr
-    /// has authentication turned on.
+    /// Gets or sets the Lingarr API key (only if auth is on).
     /// </summary>
     public string? LingarrApiKey { get; set; }
 
     /// <summary>
-    /// Gets or sets the base URL of a self hosted LibreTranslate, e.g. http://libretranslate:5000.
+    /// Gets or sets the LibreTranslate base URL, e.g. http://libretranslate:5000.
     /// </summary>
     public string? LibreTranslateBaseUrl { get; set; }
 
     /// <summary>
-    /// Gets or sets the LibreTranslate API key. Only needed when that instance asks for one.
+    /// Gets or sets the LibreTranslate API key, if the instance wants one.
     /// </summary>
     public string? LibreTranslateApiKey { get; set; }
 
     /// <summary>
-    /// Gets or sets which provider a translation job uses when it doesn't name one.
-    /// MyMemory needs no setting up at all, so it's the one that works on a fresh install.
+    /// Gets or sets the provider used when a translation job doesn't pick one.
     /// </summary>
     public TranslationProvider DefaultTranslationProvider { get; set; } = TranslationProvider.MyMemory;
 
     /// <summary>
-    /// Gets or sets how subtitles are restyled during playback for anybody who hasn't set
-    /// their own. See <see cref="UserSubtitleAppearances"/>.
+    /// Gets or sets the server wide playback appearance. Users can override it.
     /// </summary>
     public SubtitleAppearance SubtitleAppearance { get; set; } = new();
 
     /// <summary>
-    /// Gets the per-user playback appearance settings, which override the server-wide ones
-    /// above for the user they belong to. One person needing large dyslexia-friendly text
-    /// is not a reason for everyone sharing the library to get it.
+    /// Gets the per-user playback appearance overrides.
     /// </summary>
     public List<UserSubtitleAppearance> UserSubtitleAppearances { get; } = new();
 
     /// <summary>
-    /// Gets or sets the default confidence threshold (0-100) for translation jobs.
+    /// Gets or sets the default confidence threshold (0-100) for translations.
     /// </summary>
     public int TranslationConfidenceThreshold { get; set; } = 70;
 
     /// <summary>
-    /// Gets or sets the language a translation job starts on when nobody names one, e.g.
-    /// "da". Only fills the box in: every job still says what it's translating into. This
-    /// is what stops the language having to be typed on a TV remote every time.
+    /// Gets or sets the target language the translate dialog starts on, e.g. "da".
     /// </summary>
     public string? TranslationDefaultTargetLanguage { get; set; }
 
     /// <summary>
-    /// Gets or sets the language translation jobs assume the subtitle is in, or null to
-    /// let the provider detect it.
+    /// Gets or sets the assumed source language, or null to let the provider detect it.
     /// </summary>
     public string? TranslationDefaultSourceLanguage { get; set; }
 
     /// <summary>
-    /// Gets or sets a value indicating whether translated files get a comment block at the
-    /// top saying who translated them, when, and how confident it was.
+    /// Gets or sets a value indicating whether translated files get a comment header at the top.
     /// </summary>
     public bool TranslationIncludeMetadataHeader { get; set; } = true;
 
-    // ------------------------------------------------------- readable subtitle styling
-    //
-    // These are the numbers the dyslexia preset writes into a restyled subtitle's ASS
-    // style line. They live here rather than in a client because a client setting has to
-    // be found and set again on every device, and most Jellyfin clients have no font
-    // picker at all - styling carried by the file itself travels with it.
+    // Readable subtitle styling. Kept server side because most clients have no font picker,
+    // and styling baked into the file works everywhere.
 
     /// <summary>
-    /// Gets or sets the font a restyled subtitle asks for. It has to be a font the player
-    /// can find, which for the web client means one in the fallback font folder.
+    /// Gets or sets the font readable subtitles ask for.
     /// </summary>
     public string SubtitleFontName { get; set; } = Data.SubtitleStyle.DyslexicFontName;
 
     /// <summary>
-    /// Gets or sets the font a restyled subtitle asks for when its text isn't in the Latin
-    /// alphabet. OpenDyslexic has no Arabic, Hebrew, Thai or CJK glyphs in it at all, so
-    /// asking for it there gives a row of empty boxes; those subtitles get this font
-    /// instead and keep the rest of the readable styling. Empty falls back to Arial, which
-    /// on most systems resolves to something with the glyphs.
+    /// Gets or sets the font used for non-Latin scripts (OpenDyslexic has no glyphs for those). Empty means Arial.
     /// </summary>
     public string? SubtitleNonLatinFontName { get; set; }
 
     /// <summary>
-    /// Gets or sets what automatic runs do about readable subtitles. Off by default.
+    /// Gets or sets what automatic runs do about readable subtitles.
     /// </summary>
     public ReadableAutomationMode ReadableAutomation { get; set; } = ReadableAutomationMode.Off;
 
     /// <summary>
-    /// Gets or sets the font size a restyled subtitle uses, against a 1080-tall script.
+    /// Gets or sets the readable font size, against a 1080 tall script.
     /// </summary>
     public int SubtitleFontSize { get; set; } = 78;
 
     /// <summary>
-    /// Gets or sets the extra space between letters. Loosened tracking is the single
-    /// change with the most evidence behind it for readability, more so than the typeface.
+    /// Gets or sets the extra letter spacing.
     /// </summary>
     public double SubtitleLetterSpacing { get; set; } = 2;
 
     /// <summary>
-    /// Gets or sets a value indicating whether restyled subtitles are bold.
+    /// Gets or sets a value indicating whether readable subtitles are bold.
     /// </summary>
     public bool SubtitleBold { get; set; }
 
     /// <summary>
-    /// Gets or sets the outline thickness drawn around the glyphs, which is what keeps
-    /// text readable over a bright scene without a background box behind it.
+    /// Gets or sets the outline thickness.
     /// </summary>
     public double SubtitleOutline { get; set; } = 3.5;
 
     /// <summary>
-    /// Gets or sets how far up from the bottom of the frame restyled subtitles sit.
+    /// Gets or sets the bottom margin.
     /// </summary>
     public int SubtitleMarginV { get; set; } = 70;
 
     /// <summary>
-    /// Gets or sets a value indicating whether lines that score below the threshold keep
-    /// their original text (true) or get flagged in the output but still translated (false).
+    /// Gets or sets a value indicating whether low confidence lines keep the original text instead of being flagged.
     /// </summary>
     public bool TranslationKeepLowConfidenceOriginal { get; set; }
 
     /// <summary>
-    /// Gets the sync history for every item we've ever synced.
+    /// Gets the sync record for every item we've synced. Look one up with <see cref="FindRecord"/>.
     /// </summary>
     public List<MovieSyncRecord> MovieRecords { get; } = new();
 
     /// <summary>
-    /// Gets the recent per-file history, newest last, so a sync can be undone. Capped at
-    /// <see cref="MaxHistoryEntries"/> - this lives in the plugin's XML config, which is
-    /// read and rewritten whole, so it must not be allowed to grow with the library.
+    /// Gets the recent per-file history (newest last) so syncs can be undone. Capped at <see cref="MaxHistoryEntries"/>.
     /// </summary>
     public List<SyncHistoryEntry> History { get; } = new();
 
     /// <summary>
-    /// Gets the ids of items and folders that are marked as skip. An item counts
-    /// as skipped if its own id is here, or any of its parent folders' ids are.
+    /// Gets the item and folder ids marked as skip. Covers everything under a skipped folder too.
     /// </summary>
     public List<Guid> SkippedItemIds { get; } = new();
 
     /// <summary>
-    /// Gets the ignore list: films, series and folders that no automatic or bulk run may
-    /// touch. Separate from the skip list on purpose - skip is a per-item "not now" you
-    /// set while working through the item list, ignore is a standing "never" that also
-    /// covers everything underneath a series or a folder.
+    /// Gets the ignore list. Unlike skip, this is a standing "never touch automatically".
     /// </summary>
     public List<IgnoreRule> IgnoreRules { get; } = new();
 
     /// <summary>
-    /// Gets or sets where a subtitle-to-subtitle result is written by default.
+    /// Gets or sets where a subtitle-to-subtitle result goes by default.
     /// </summary>
     public SubToSubPlacement SubToSubPlacement { get; set; } = SubToSubPlacement.ReferenceFolder;
 
     /// <summary>
-    /// Gets or sets the folder used when <see cref="SubToSubPlacement"/> is
-    /// <see cref="SubToSubPlacement.CustomFolder"/>.
+    /// Gets or sets the folder for <see cref="SubToSubPlacement.CustomFolder"/>.
     /// </summary>
     public string? SubToSubCustomFolder { get; set; }
 
     /// <summary>
-    /// Gets or sets the format conversions produce when nothing asks for a specific one.
-    /// srt by default: it's the format everything reads, and the one whose timestamps are
-    /// simplest to edit by hand afterwards.
+    /// Gets or sets the default conversion format.
     /// </summary>
     public string ConversionFormat { get; set; } = "srt";
 
     /// <summary>
-    /// Gets or sets a value indicating whether converting deletes the file it read.
-    /// Off by default, so a conversion adds a file and takes nothing away - if the result
-    /// is wrong, the original is still sitting there.
+    /// Gets or sets a value indicating whether converting deletes the source file.
     /// </summary>
     public bool ConversionReplaceOriginal { get; set; }
 
     /// <summary>
-    /// Gets or sets a value indicating whether a subtitle that had to be converted before
-    /// an engine could read it then gets synced, rather than the conversion being the
-    /// whole job. On by default: converting was only ever a means to syncing.
+    /// Gets or sets a value indicating whether a subtitle converted for an engine gets synced afterwards.
     /// </summary>
     public bool ConversionSyncAfter { get; set; } = true;
 
     /// <summary>
-    /// Gets or sets a value indicating whether every subtitle is converted to
-    /// <see cref="ConversionFormat"/> before it gets synced, whether or not the engine
-    /// needed it. Off by default, because with LAPSE it buys nothing: LAPSE reads eleven
-    /// formats and writes each one back as itself. Worth turning on for an engine that
-    /// reads fewer, or when the goal is simply to end up with srt files everywhere.
+    /// Gets or sets a value indicating whether every subtitle is converted before syncing,
+    /// even when the engine could read it as is.
     /// </summary>
     public bool ConvertBeforeSync { get; set; }
 
     /// <summary>
-    /// Gets or sets what an unattended run does to each subtitle it finds: sync it,
-    /// convert it, or both. Applies to the scheduled task, the per-library schedules,
-    /// auto-sync on a new item, bulk runs and the webhook.
+    /// Gets or sets what unattended runs (schedule, auto-sync, bulk, webhook) do to each subtitle.
     /// </summary>
     public AutomationAction AutomationAction { get; set; } = AutomationAction.Sync;
 
     /// <summary>
-    /// Gets or sets a value indicating whether unattended runs also translate every
-    /// subtitle they touch into <see cref="AutoTranslateLanguage"/>. Experimental, and off
-    /// by default: a library's worth of subtitles is a great deal of text to put through a
-    /// translation API, and machine translation gets things wrong without saying so.
+    /// Gets or sets a value indicating whether unattended runs also translate. Experimental.
     /// </summary>
     public bool AutoTranslateEnabled { get; set; }
 
     /// <summary>
-    /// Gets or sets the language automatic translation targets, as a code like "da".
+    /// Gets or sets the language auto translation targets, e.g. "da".
     /// </summary>
     public string? AutoTranslateLanguage { get; set; }
 
     /// <summary>
-    /// Gets or sets a value indicating whether a subtitle that already has a translation
-    /// in the target language is left alone. On by default, and worth leaving on: without
-    /// it every scheduled run retranslates the whole library and pays for it again.
+    /// Gets or sets a value indicating whether existing translations are left alone.
     /// </summary>
     public bool AutoTranslateSkipExisting { get; set; } = true;
 
     /// <summary>
-    /// Gets or sets a value indicating whether bulk, scheduled, new-item and webhook runs
-    /// leave a subtitle alone when it has been synced and nothing has written to it since.
-    /// On by default: without it a nightly schedule syncs the whole library again, every
-    /// night, to arrive at the answers it already has.
+    /// Gets or sets a value indicating whether unattended runs skip subtitles that are synced and untouched since.
     /// </summary>
     public bool SkipSyncedInUnattendedRuns { get; set; } = true;
 
     /// <summary>
-    /// Gets or sets who besides administrators may sync, shift, convert and translate the
-    /// subtitles of an item they can see. Admin only until an admin opens it up.
+    /// Gets or sets who besides admins may work on subtitles.
     /// </summary>
     public SubtitleAccessMode SubtitleAccess { get; set; } = SubtitleAccessMode.AdminsOnly;
 
     /// <summary>
-    /// Gets or sets the users allowed to work on subtitles when
-    /// <see cref="SubtitleAccess"/> is <see cref="SubtitleAccessMode.SelectedUsers"/>,
-    /// as Jellyfin user ids.
+    /// Gets or sets the user ids allowed in when access is <see cref="SubtitleAccessMode.SelectedUsers"/>.
     /// </summary>
-    [System.Diagnostics.CodeAnalysis.SuppressMessage(
-        "Usage",
-        "CA2227:Collection properties should be read only",
-        Justification = "The XML config serializer needs to be able to assign the list when it loads the file.")]
     public List<string> SubtitleAccessUserIds { get; set; } = new();
 
     /// <summary>
-    /// Gets or sets a value indicating whether a sync on an item with no subtitle at all
-    /// may go and fetch one from OpenSubtitles first. Experimental.
+    /// Gets or sets a value indicating whether a sync with no subtitle may fetch one from OpenSubtitles. Experimental.
     /// </summary>
     public bool OpenSubtitlesEnabled { get; set; }
 
     /// <summary>
-    /// Gets or sets the OpenSubtitles API key, sent as the Api-Key header.
+    /// Gets or sets the OpenSubtitles API key.
     /// </summary>
     public string? OpenSubtitlesApiKey { get; set; }
 
     /// <summary>
-    /// Gets or sets the OpenSubtitles account name. Their API hands out search results to
-    /// an API key alone, but a download needs a token that only a login can produce, so
-    /// without these two the fetch will find a subtitle and then fail to get it.
+    /// Gets or sets the OpenSubtitles username. Downloads need a login, search doesn't.
     /// </summary>
     public string? OpenSubtitlesUsername { get; set; }
 
     /// <summary>
-    /// Gets or sets the OpenSubtitles account password.
+    /// Gets or sets the OpenSubtitles password.
     /// </summary>
     public string? OpenSubtitlesPassword { get; set; }
 
     /// <summary>
-    /// Gets or sets the language to fetch subtitles in, as a two letter code.
+    /// Gets or sets the language to fetch, two letter code.
     /// </summary>
     public string OpenSubtitlesLanguage { get; set; } = "en";
 
-    // --------------------------------------------------------------- multi engine sync
-    //
-    // Experimental. When LAPSE isn't sure about a sync, run the other engines too and keep
-    // every answer side by side until somebody picks the right one. LAPSE is the only
-    // engine that scores its own answer, which is why the feature hangs off it: alass and
-    // ffsubsync hand back a number with no indication of whether it is any good, so
-    // without LAPSE there is nothing to decide "this needs a second opinion" from.
+    // Multi engine (experimental): when LAPSE isn't sure, run alass/ffsubsync too and keep
+    // the answers side by side. Only LAPSE scores itself, so it has to be the trigger.
 
     /// <summary>
-    /// Gets or sets a value indicating whether a LAPSE result it wasn't sure about sets the
-    /// other installed engines running, so there's something to compare against.
-    /// Experimental, and off until someone turns it on.
+    /// Gets or sets a value indicating whether an unsure LAPSE result runs the other engines.
     /// </summary>
     public bool MultiEngineEnabled { get; set; }
 
     /// <summary>
-    /// Gets or sets a value indicating whether alass is one of the engines that gets asked.
+    /// Gets or sets a value indicating whether alass is asked.
     /// </summary>
     public bool MultiEngineUseAlass { get; set; } = true;
 
     /// <summary>
-    /// Gets or sets a value indicating whether ffsubsync is one of the engines that gets asked.
+    /// Gets or sets a value indicating whether ffsubsync is asked.
     /// </summary>
     public bool MultiEngineUseFfsubsync { get; set; } = true;
 
     /// <summary>
-    /// Gets or sets which of LAPSE's verdicts sets the others running.
+    /// Gets or sets which LAPSE verdicts trigger the other engines.
     /// </summary>
     public MultiEngineTrigger MultiEngineTrigger { get; set; } = MultiEngineTrigger.UnsureOnly;
 
     /// <summary>
-    /// Gets or sets what format the candidate files are written in.
+    /// Gets or sets the format candidate files are written in.
     /// </summary>
     public CandidateFormat MultiEngineCandidateFormat { get; set; } = CandidateFormat.MatchOriginal;
 
     /// <summary>
-    /// Gets or sets a value indicating whether unattended runs make candidates too.
-    ///
-    /// Off by default, and worth thinking about before turning on: a bulk run over a large
-    /// library can leave a great many files to go through, since every subtitle LAPSE is
-    /// unsure about produces two or three of them.
+    /// Gets or sets a value indicating whether unattended runs make candidates too. Can leave a lot of files on a big library.
     /// </summary>
     public bool MultiEngineInBulk { get; set; }
 
     /// <summary>
-    /// Gets the candidate sets waiting for somebody to choose between them.
+    /// Gets the candidate sets waiting for someone to pick one.
     /// </summary>
     public List<SyncCandidateSet> PendingCandidates { get; } = new();
 
     /// <summary>
-    /// Gets or sets a value indicating whether the Radarr/Sonarr webhook endpoint accepts
-    /// requests. Experimental, and off until someone turns it on.
+    /// Gets or sets a value indicating whether the Radarr/Sonarr webhook is on. Experimental.
     /// </summary>
     public bool ArrWebhookEnabled { get; set; }
 
     /// <summary>
-    /// Gets or sets the shared secret the webhook URL carries. Radarr and Sonarr can't
-    /// send a Jellyfin API key, so the endpoint is anonymous and this is what stands
-    /// between it and anyone who can reach the server.
+    /// Gets or sets the shared secret in the webhook URL. The endpoint is anonymous so this is the only guard.
     /// </summary>
     public string? ArrWebhookToken { get; set; }
 
-    // ------------------------------------------------------ scheduled subtitle extraction
-    //
-    // Experimental. Writes chosen embedded tracks out as files beside the video on a
-    // schedule, so a library can have, say, every forced English track as an external
-    // subtitle without Jellyfin extracting every track of every file into its cache.
+    // Scheduled extraction (experimental): write chosen embedded tracks out as files.
 
     /// <summary>
-    /// Gets or sets a value indicating whether the scheduled extraction does anything.
-    /// The task is always there; this is what lets it touch files. Off until turned on.
+    /// Gets or sets a value indicating whether scheduled extraction is allowed to touch files.
     /// </summary>
     public bool ExtractEmbeddedEnabled { get; set; }
 
     /// <summary>
-    /// Gets or sets the libraries the scheduled extraction goes through, as Jellyfin
-    /// library ids. None picked means none gone through.
+    /// Gets or sets the libraries extraction goes through. Empty means none.
     /// </summary>
-    [System.Diagnostics.CodeAnalysis.SuppressMessage(
-        "Usage",
-        "CA2227:Collection properties should be read only",
-        Justification = "The XML config serializer needs to be able to assign the list when it loads the file.")]
     public List<Guid> ExtractLibraryIds { get; set; } = new();
 
     /// <summary>
-    /// Gets or sets the languages to extract, as typed: codes or names, separated by
-    /// commas or spaces. Empty takes every language.
+    /// Gets or sets the languages to extract (codes or names, comma or space separated). Empty means all.
     /// </summary>
     public string? ExtractLanguages { get; set; }
 
     /// <summary>
-    /// Gets or sets which tracks to take by whether they're forced.
+    /// Gets or sets which tracks to take by forced flag.
     /// </summary>
     public ExtractTrackFilter ExtractTrackFilter { get; set; } = ExtractTrackFilter.All;
 
     /// <summary>
-    /// Gets or sets a value indicating whether a track is left in the video when there's
-    /// already a subtitle file beside it in the same language, forced or not to match.
+    /// Gets or sets a value indicating whether a track is skipped when a file in that language already exists.
     /// </summary>
     public bool ExtractSkipExisting { get; set; } = true;
 
     /// <summary>
-    /// Gets or sets a value indicating whether PGS picture tracks are copied out as .sup
-    /// files as well. Jellyfin can show those, but nothing else in LAPSE can edit them.
+    /// Gets or sets a value indicating whether PGS tracks are copied out as .sup as well.
     /// </summary>
     public bool ExtractPictureSubtitles { get; set; }
 
     /// <summary>
-    /// Gets or sets a piece of path the video has to contain to be looked at, for trying
-    /// the extraction out on one film or show before letting it loose on a library.
+    /// Gets or sets a path fragment a video must contain. Handy for trying extraction on one show first.
     /// </summary>
     public string? ExtractPathFilter { get; set; }
 
     /// <summary>
-    /// Finds the settings for one engine, creating an entry if there isn't one yet.
+    /// Finds an item's sync record (the live one, not a copy). Hold <see cref="Plugin.ConfigurationLock"/>.
     /// </summary>
-    /// <param name="engineId">The engine id.</param>
-    /// <returns>That engine's settings.</returns>
+    public MovieSyncRecord? FindRecord(Guid itemId)
+    {
+        if (_recordIndex is null || _indexedCount != MovieRecords.Count)
+        {
+            var index = new Dictionary<Guid, MovieSyncRecord>(MovieRecords.Count);
+            foreach (var record in MovieRecords)
+            {
+                // first one wins, same as the FirstOrDefault this replaced
+                index.TryAdd(record.ItemId, record);
+            }
+
+            _recordIndex = index;
+            _indexedCount = MovieRecords.Count;
+        }
+
+        return _recordIndex.GetValueOrDefault(itemId);
+    }
+
+    /// <summary>
+    /// Finds an item's sync record or adds an empty one. Hold <see cref="Plugin.ConfigurationLock"/>.
+    /// </summary>
+    public MovieSyncRecord GetOrAddRecord(Guid itemId)
+    {
+        var record = FindRecord(itemId);
+        if (record is null)
+        {
+            record = new MovieSyncRecord { ItemId = itemId };
+            MovieRecords.Add(record);
+            _recordIndex![itemId] = record;
+            _indexedCount = MovieRecords.Count;
+        }
+
+        return record;
+    }
+
+    /// <summary>
+    /// Finds an engine's settings, adding an entry if there isn't one.
+    /// </summary>
     public EngineSettings GetEngineSettings(string engineId)
     {
-        var existing = Engines.FirstOrDefault(e => string.Equals(e.EngineId, engineId, StringComparison.OrdinalIgnoreCase));
+        var existing = FindEngineSettings(engineId);
         if (existing is not null)
         {
             return existing;
@@ -541,13 +470,20 @@ public class PluginConfiguration : BasePluginConfiguration
     }
 
     /// <summary>
-    /// Finds the settings for one library, creating an entry if there isn't one yet.
+    /// Finds an engine's settings without adding anything. Use this for reads, the list is
+    /// shared with the sync queue and adding to it during a save breaks the serializer.
     /// </summary>
-    /// <param name="libraryId">The CollectionFolder id.</param>
-    /// <returns>That library's settings.</returns>
+    public EngineSettings? FindEngineSettings(string engineId)
+    {
+        return Engines.Find(s => string.Equals(s.EngineId, engineId, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// Finds a library's settings, adding an entry if there isn't one.
+    /// </summary>
     public LibraryConfig GetLibraryConfig(Guid libraryId)
     {
-        var existing = Libraries.FirstOrDefault(l => l.LibraryId == libraryId);
+        var existing = FindLibraryConfig(libraryId);
         if (existing is not null)
         {
             return existing;
@@ -559,26 +495,33 @@ public class PluginConfiguration : BasePluginConfiguration
     }
 
     /// <summary>
-    /// Says whether a library is eligible for sync. Libraries the user has never touched
-    /// in the dashboard have no entry at all, and those count as enabled.
+    /// Finds a library's settings without adding anything.
     /// </summary>
-    /// <param name="libraryId">The CollectionFolder id.</param>
-    /// <returns>True if items in this library may be synced.</returns>
-    public bool IsLibraryEnabled(Guid libraryId)
+    public LibraryConfig? FindLibraryConfig(Guid libraryId)
     {
-        var existing = Libraries.FirstOrDefault(l => l.LibraryId == libraryId);
-        return existing?.Enabled ?? true;
+        return Libraries.Find(l => l.LibraryId == libraryId);
     }
 
     /// <summary>
-    /// Says whether an id or a file path is on the ignore list. Ids are matched against
-    /// the item and every one of its ancestors by the caller; paths match a file that
-    /// sits under the ignored folder, so ignoring a series folder covers every episode in
-    /// it without needing an entry each.
+    /// Says whether a library may be synced. Libraries with no entry are on.
     /// </summary>
-    /// <param name="ids">The item's own id and its ancestors' ids.</param>
-    /// <param name="path">The item's file path, if it has one.</param>
-    /// <returns>True if anything on the ignore list covers this item.</returns>
+    public bool IsLibraryEnabled(Guid libraryId)
+    {
+        return FindLibraryConfig(libraryId)?.Enabled ?? true;
+    }
+
+    /// <summary>
+    /// Gets the sidecar suffix ready for a file name, always starting with a dot.
+    /// </summary>
+    public string ResolveSidecarSuffix()
+    {
+        var suffix = string.IsNullOrWhiteSpace(SidecarSuffix) ? ".shifted" : SidecarSuffix.Trim();
+        return suffix.StartsWith('.') ? suffix : "." + suffix;
+    }
+
+    /// <summary>
+    /// Says whether an ignore rule covers an item, by id (the item and its ancestors) or by path.
+    /// </summary>
     public bool IsIgnored(IEnumerable<Guid> ids, string? path)
     {
         if (IgnoreRules.Count == 0)
@@ -586,11 +529,14 @@ public class PluginConfiguration : BasePluginConfiguration
             return false;
         }
 
-        var idSet = new HashSet<Guid>(ids);
+        return IsIgnored(IgnoreRules, ids as ICollection<Guid> ?? new HashSet<Guid>(ids), path);
+    }
 
-        foreach (var rule in IgnoreRules)
+    internal static bool IsIgnored(IReadOnlyList<IgnoreRule> rules, ICollection<Guid> ids, string? path)
+    {
+        foreach (var rule in rules)
         {
-            if (rule.ItemId.HasValue && idSet.Contains(rule.ItemId.Value))
+            if (rule.ItemId is { } id && ids.Contains(id))
             {
                 return true;
             }
@@ -604,9 +550,8 @@ public class PluginConfiguration : BasePluginConfiguration
         return false;
     }
 
-    // A rule matches the file itself or anything under it, so a folder covers its whole
-    // tree. Comparing on a trailing separator stops "/media/Movies" from also swallowing
-    // "/media/Movies Extra".
+    // Matches the path itself or anything below it. The separator check stops
+    // "/media/Movies" from also matching "/media/Movies Extra".
     private static bool CoversPath(string rulePath, string? itemPath)
     {
         if (string.IsNullOrWhiteSpace(itemPath))
@@ -616,34 +561,26 @@ public class PluginConfiguration : BasePluginConfiguration
 
         var rule = rulePath.TrimEnd('/', '\\');
 
-        if (itemPath.Equals(rule, StringComparison.OrdinalIgnoreCase))
-        {
-            return true;
-        }
-
-        return itemPath.StartsWith(rule + "/", StringComparison.OrdinalIgnoreCase)
-            || itemPath.StartsWith(rule + "\\", StringComparison.OrdinalIgnoreCase);
+        return itemPath.StartsWith(rule, StringComparison.OrdinalIgnoreCase)
+            && (itemPath.Length == rule.Length || itemPath[rule.Length] is '/' or '\\');
     }
 
     /// <summary>
-    /// Moves settings from the old single-engine days onto the LAPSE engine entry, so
-    /// upgrading doesn't silently lose a configured binary path or penalty. Only does
-    /// anything the first time, since it clears the old fields as it goes.
+    /// Moves old single engine settings onto the LAPSE entry and patches values older
+    /// versions saved. Safe to run on every start.
     /// </summary>
     public void MigrateLegacySettings()
     {
         if (!string.IsNullOrWhiteSpace(EngineBinaryPathOverride))
         {
-            var lapse = GetEngineSettings("lapse");
-            lapse.PathOverride ??= EngineBinaryPathOverride;
+            GetEngineSettings("lapse").PathOverride ??= EngineBinaryPathOverride;
             EngineBinaryPathOverride = null;
         }
 
-        // 6 is the old default, so only carry it over if it was actually changed
+        // 6 was the old default, only carry it over if someone changed it
         if (DefaultPenalty > 0 && DefaultPenalty != 6)
         {
-            var lapse = GetEngineSettings("lapse");
-            lapse.Penalty ??= DefaultPenalty;
+            GetEngineSettings("lapse").Penalty ??= DefaultPenalty;
             DefaultPenalty = 6;
         }
 
@@ -652,19 +589,12 @@ public class PluginConfiguration : BasePluginConfiguration
             SidecarSuffix = ".shifted";
         }
 
-        // Config written before SubtitleAppearance existed deserializes it as null, and
-        // every read of it assumes there's an object there.
-        if (SubtitleAppearance is null)
-        {
-            SubtitleAppearance = new SubtitleAppearance();
-        }
+        // configs from before SubtitleAppearance existed load it as null
+        SubtitleAppearance ??= new SubtitleAppearance();
 
         SyncConfidenceThreshold = Math.Clamp(SyncConfidenceThreshold, 0, 100);
 
-        // A config from before the threshold moved onto the engine's own scale
-        // deserializes this as 0, which would tell LAPSE that nothing is ever confident.
-        // The engine rejects anything at or below zero anyway, so snap it back to what
-        // the engine itself ships with.
+        // old configs load this as 0, which LAPSE refuses
         if (ConfidenceSigma <= 0)
         {
             ConfidenceSigma = LapseEngine.DefaultConfidenceSigma;
@@ -678,16 +608,11 @@ public class PluginConfiguration : BasePluginConfiguration
         ClearBadAlassEncodings();
     }
 
-    // An earlier version shipped "auto" as the default for alass's two encoding arguments,
-    // taken from the "default: auto" line in its help text. The 2.0.0 binary hands that
-    // string to encoding_rs and panics with "auto is not a known encoding label", so every
-    // alass sync failed. The descriptor no longer offers it, but anyone who pressed Save
-    // while it did has the value written into their config, where it would keep breaking
-    // them. Nothing is lost by dropping it: blank is what makes alass detect the encoding,
-    // which is what "auto" was meant to say in the first place.
+    // An old version defaulted alass' encoding args to "auto", which alass 2.0 panics on.
+    // Blank already means autodetect so just clear it.
     private void ClearBadAlassEncodings()
     {
-        var alass = Engines.FirstOrDefault(e => string.Equals(e.EngineId, "alass", StringComparison.OrdinalIgnoreCase));
+        var alass = FindEngineSettings("alass");
         if (alass is null)
         {
             return;

@@ -15,11 +15,9 @@ using Microsoft.Extensions.Logging;
 namespace Jellyfin.Plugin.Lapse.Services.Translation;
 
 /// <summary>
-/// Lingarr, self hosted. It exposes POST /api/translate/line, which takes one subtitle
-/// line plus a bit of surrounding context and hands the translation straight back, so
-/// this walks the file a line at a time. Slower than a batch API, but Lingarr's line
-/// endpoint is the one that's stable across its versions, and giving it the neighbouring
-/// lines as context measurably helps with dialogue that runs across cues.
+/// Lingarr, self hosted, via POST /api/translate/line one line at a time with the
+/// neighbouring lines as context. Slower than batching, but that endpoint is stable across
+/// versions and the context helps a lot with sentences split across cues.
 /// </summary>
 public class LingarrTranslationProvider : ITranslationProvider
 {
@@ -31,8 +29,6 @@ public class LingarrTranslationProvider : ITranslationProvider
     /// <summary>
     /// Initializes a new instance of the <see cref="LingarrTranslationProvider"/> class.
     /// </summary>
-    /// <param name="httpClientFactory">Factory to grab an HttpClient from.</param>
-    /// <param name="logger">Logger.</param>
     public LingarrTranslationProvider(IHttpClientFactory httpClientFactory, ILogger<LingarrTranslationProvider> logger)
     {
         _httpClientFactory = httpClientFactory;
@@ -89,6 +85,13 @@ public class LingarrTranslationProvider : ITranslationProvider
         {
             cancellationToken.ThrowIfCancellationRequested();
 
+            // nothing to translate, skip the request
+            if (string.IsNullOrWhiteSpace(lines[i]))
+            {
+                results.Add(new TranslatedLine { Text = lines[i] });
+                continue;
+            }
+
             var payload = new
             {
                 subtitleLine = lines[i],
@@ -118,7 +121,7 @@ public class LingarrTranslationProvider : ITranslationProvider
                     "Lingarr returned {0} for {1}: {2}",
                     (int)response.StatusCode,
                     url,
-                    Shorten(body)));
+                    TranslationBatches.Shorten(body)));
             }
 
             var translated = await ReadLineAsync(response, cancellationToken).ConfigureAwait(false);
@@ -146,13 +149,11 @@ public class LingarrTranslationProvider : ITranslationProvider
             }
             catch (System.Text.Json.JsonException ex)
             {
-                _logger.LogDebug(ex, "Lingarr returned something that didn't parse as a JSON string: {Raw}", Shorten(raw));
+                _logger.LogDebug(ex, "Lingarr returned something that didn't parse as a JSON string: {Raw}", TranslationBatches.Shorten(raw));
             }
         }
 
-        // Some builds wrap the line in an object instead. Take the text out of it rather
-        // than dropping the whole JSON document into the subtitle, which is what
-        // returning the body as-is would do.
+        // some builds wrap it in an object, dig the text out instead of pasting JSON into the subtitle
         if (raw.StartsWith('{'))
         {
             try
@@ -170,12 +171,11 @@ public class LingarrTranslationProvider : ITranslationProvider
             }
             catch (System.Text.Json.JsonException ex)
             {
-                _logger.LogDebug(ex, "Lingarr returned something that didn't parse as JSON: {Raw}", Shorten(raw));
+                _logger.LogDebug(ex, "Lingarr returned something that didn't parse as JSON: {Raw}", TranslationBatches.Shorten(raw));
             }
 
-            // An object we can't read is not a translation, and a subtitle line is a
-            // worse place for it than the log.
-            _logger.LogWarning("Lingarr answered with JSON that has no line in it: {Raw}", Shorten(raw));
+            // can't read it, log it rather than put it in the subtitle
+            _logger.LogWarning("Lingarr answered with JSON that has no line in it: {Raw}", TranslationBatches.Shorten(raw));
             return null;
         }
 
@@ -183,12 +183,8 @@ public class LingarrTranslationProvider : ITranslationProvider
     }
 
     /// <summary>
-    /// Lingarr validates both languages as .NET cultures and turns down anything that
-    /// isn't one, so "auto" - which the rest of the plugin uses to mean "nobody said" -
-    /// comes back as a 500 reading "all configured translation services were skipped, no
-    /// service supports auto->xx". Send a real code instead: the configured default, or
-    /// English, which is what the overwhelming majority of subtitles being translated
-    /// away from are in.
+    /// Lingarr checks both languages are .NET cultures, so "auto" gets a 500 ("no service
+    /// supports auto->xx"). Send the configured default or English instead.
     /// </summary>
     private static string ResolveSource(string? sourceLanguage, Configuration.PluginConfiguration config)
     {
@@ -215,11 +211,5 @@ public class LingarrTranslationProvider : ITranslationProvider
         }
 
         return result;
-    }
-
-    private static string Shorten(string text)
-    {
-        var trimmed = text.Trim();
-        return trimmed.Length > 300 ? trimmed[..300] : trimmed;
     }
 }

@@ -42,8 +42,6 @@ public class EngineParameterOption
     /// <summary>
     /// Initializes a new instance of the <see cref="EngineParameterOption"/> class.
     /// </summary>
-    /// <param name="value">The value stored in the config.</param>
-    /// <param name="label">What the dropdown shows.</param>
     public EngineParameterOption(string value, string label)
     {
         Value = value;
@@ -62,15 +60,12 @@ public class EngineParameterOption
 }
 
 /// <summary>
-/// One tunable an engine's binary actually accepts. Everything here comes from reading
-/// the engine's own source rather than from what the plugin wishes it supported, so the
-/// Advanced section of a card lists exactly the switches that engine has and nothing else.
+/// One tunable the engine binary actually accepts (read off its source), shown in the card's Advanced section.
 /// </summary>
 public class EngineParameter
 {
     /// <summary>
-    /// Gets or sets the key this is stored under in the engine's settings. Stable, since
-    /// it's what a saved config keys off - not the flag name, which upstream could rename.
+    /// Gets or sets the settings key. Stable, unlike the flag name which upstream could rename.
     /// </summary>
     public string Key { get; set; } = string.Empty;
 
@@ -85,8 +80,7 @@ public class EngineParameter
     public string Description { get; set; } = string.Empty;
 
     /// <summary>
-    /// Gets or sets the command line flag this drives, shown in the UI so it's obvious
-    /// which switch is being set. Null for parameters that map to a positional argument.
+    /// Gets or sets the flag this drives (shown in the UI). Null for positional arguments.
     /// </summary>
     public string? Flag { get; set; }
 
@@ -96,8 +90,7 @@ public class EngineParameter
     public EngineParameterKind Kind { get; set; } = EngineParameterKind.Text;
 
     /// <summary>
-    /// Gets or sets the engine's own default, as a string. An empty value means "leave the
-    /// flag off entirely and let the engine decide", which is not the same as zero.
+    /// Gets or sets the engine's default as a string. Empty means leave the flag off, which isn't the same as zero.
     /// </summary>
     public string DefaultValue { get; set; } = string.Empty;
 
@@ -122,17 +115,14 @@ public class EngineParameter
     public List<EngineParameterOption> Options { get; } = new();
 
     /// <summary>
-    /// Gets or sets a value indicating whether leaving this blank means "don't pass the
-    /// flag". Used for optional switches like an explicit audio track, where zero is a
-    /// real value and "unset" has to be distinguishable from it.
+    /// Gets or sets a value indicating whether blank means "don't pass the flag" (for things
+    /// like audio track where 0 is a real value).
     /// </summary>
     public bool BlankMeansUnset { get; set; }
 }
 
 /// <summary>
-/// The values an engine run should use for its parameters: whatever the admin saved,
-/// falling back to the engine's own documented default. Engines read their arguments
-/// through this so the fallback is in one place.
+/// Parameter values for a run: what the admin saved, else the engine default.
 /// </summary>
 public class EngineParameterValues
 {
@@ -142,8 +132,6 @@ public class EngineParameterValues
     /// <summary>
     /// Initializes a new instance of the <see cref="EngineParameterValues"/> class.
     /// </summary>
-    /// <param name="parameters">The engine's parameter definitions.</param>
-    /// <param name="saved">What the admin saved, keyed by parameter key.</param>
     public EngineParameterValues(IEnumerable<EngineParameter> parameters, IReadOnlyDictionary<string, string?>? saved)
     {
         _parameters = new Dictionary<string, EngineParameter>(StringComparer.OrdinalIgnoreCase);
@@ -169,16 +157,13 @@ public class EngineParameterValues
     }
 
     /// <summary>
-    /// Gets an empty set, so an engine can still build a command line when the plugin
-    /// instance isn't available (unit tests, or very early startup).
+    /// Gets an empty set, for when there's no plugin instance (tests, early startup).
     /// </summary>
     public static EngineParameterValues Empty { get; } = new(Array.Empty<EngineParameter>(), null);
 
     /// <summary>
     /// Gets the raw string for a parameter, falling back to the engine's default.
     /// </summary>
-    /// <param name="key">The parameter key.</param>
-    /// <returns>The value, or an empty string when neither the admin nor the engine set one.</returns>
     public string GetString(string key)
     {
         if (_values.TryGetValue(key, out var saved) && !string.IsNullOrWhiteSpace(saved))
@@ -186,8 +171,7 @@ public class EngineParameterValues
             return saved.Trim();
         }
 
-        // A saved blank on a "blank means unset" parameter is a deliberate choice to leave
-        // the flag off, so it must not fall through to the default.
+        // a saved blank on a blank-means-unset parameter means "off", not "use the default"
         if (_values.ContainsKey(key) && _parameters.TryGetValue(key, out var blankable) && blankable.BlankMeansUnset)
         {
             return string.Empty;
@@ -199,15 +183,10 @@ public class EngineParameterValues
     /// <summary>
     /// Says whether a parameter is worth putting on the command line at all.
     ///
-    /// A value that still equals the engine's own default is never passed. Leaving the
-    /// flag off produces exactly the same behaviour by definition, and it means a default
-    /// this plugin got wrong can't reach the engine unless somebody deliberately typed it.
-    /// That is not hypothetical: alass's help prints "default: auto" for its encoding
-    /// arguments, but the 2.0.0 binary rejects the literal string "auto" as an unknown
-    /// encoding label and panics. Passing a documented default is at best redundant.
+    /// Values equal to the engine default are never passed, leaving the flag off does the
+    /// same thing and a default we got wrong can't break anything. (alass' help says
+    /// "default: auto" for encodings, but 2.0.0 panics if you actually pass "auto".)
     /// </summary>
-    /// <param name="key">The parameter key.</param>
-    /// <returns>True if the flag should be passed.</returns>
     public bool ShouldPass(string key)
     {
         var value = GetString(key);
@@ -223,8 +202,6 @@ public class EngineParameterValues
     /// <summary>
     /// Gets a boolean parameter.
     /// </summary>
-    /// <param name="key">The parameter key.</param>
-    /// <returns>True when the value reads as true.</returns>
     public bool GetBool(string key)
     {
         var value = GetString(key);
@@ -235,8 +212,6 @@ public class EngineParameterValues
     /// <summary>
     /// Gets a number parameter, or null when it isn't set to anything usable.
     /// </summary>
-    /// <param name="key">The parameter key.</param>
-    /// <returns>The number, or null.</returns>
     public double? GetNumber(string key)
     {
         var value = GetString(key);
@@ -244,22 +219,43 @@ public class EngineParameterValues
     }
 
     /// <summary>
-    /// Gets an integer parameter, or null when it isn't set to anything usable.
+    /// Adds flag + number if it's worth passing (see <see cref="ShouldPass"/>).
     /// </summary>
-    /// <param name="key">The parameter key.</param>
-    /// <returns>The integer, or null.</returns>
-    public int? GetInt(string key)
+    public void AddNumber(List<string> args, string key, string flag)
     {
-        var number = GetNumber(key);
-        return number.HasValue ? (int)Math.Round(number.Value) : null;
+        if (ShouldPass(key) && GetNumber(key) is { } value)
+        {
+            args.Add(flag);
+            args.Add(Format(value));
+        }
     }
 
     /// <summary>
-    /// Formats a number the way a command line wants it: invariant, and without a
-    /// trailing ".0" on something that is really an integer.
+    /// Adds flag + value if it's worth passing (see <see cref="ShouldPass"/>).
     /// </summary>
-    /// <param name="value">The number.</param>
-    /// <returns>The text to pass on the command line.</returns>
+    public void AddText(List<string> args, string key, string flag)
+    {
+        if (ShouldPass(key))
+        {
+            args.Add(flag);
+            args.Add(GetString(key));
+        }
+    }
+
+    /// <summary>
+    /// Puts a flag on its own on a command line, when the parameter is ticked.
+    /// </summary>
+    public void AddSwitch(List<string> args, string key, string flag)
+    {
+        if (GetBool(key))
+        {
+            args.Add(flag);
+        }
+    }
+
+    /// <summary>
+    /// Formats a number for a command line: invariant, no ".0" on integers.
+    /// </summary>
     public static string Format(double value)
     {
         return Math.Abs(value - Math.Round(value)) < 0.0000001

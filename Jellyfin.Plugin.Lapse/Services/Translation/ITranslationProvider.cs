@@ -25,9 +25,7 @@ public class TranslatedLine
     public string? DetectedSourceLanguage { get; set; }
 
     /// <summary>
-    /// Gets or sets how sure the provider says it is, 0 to 1, when it reports anything at
-    /// all. Only MyMemory does; for the rest this stays null and the plugin scores the
-    /// line itself.
+    /// Gets or sets the provider's own confidence 0..1. Only MyMemory gives one, otherwise null and we score it ourselves.
     /// </summary>
     public double? Confidence { get; set; }
 }
@@ -48,9 +46,7 @@ public interface ITranslationProvider
     string DisplayName { get; }
 
     /// <summary>
-    /// Gets how much setting up this provider needs, which is what the dashboard orders
-    /// and groups the list by: 0 works with no configuration at all, 1 needs a self
-    /// hosted service pointed at, 2 needs a cloud API key.
+    /// Gets how much setup it needs: 0 none, 1 a self hosted service, 2 a cloud API key. The dashboard sorts by this.
     /// </summary>
     int Tier { get; }
 
@@ -62,17 +58,11 @@ public interface ITranslationProvider
     /// <summary>
     /// Checks the plugin has what this provider needs to work.
     /// </summary>
-    /// <returns>Null if it's configured, otherwise what's missing.</returns>
     string? GetConfigurationProblem();
 
     /// <summary>
     /// Translates a batch of lines.
     /// </summary>
-    /// <param name="lines">The lines to translate, in file order.</param>
-    /// <param name="sourceLanguage">The source language code, or null to auto-detect.</param>
-    /// <param name="targetLanguage">The language code to translate into.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>One result per input line, in the same order.</returns>
     Task<IReadOnlyList<TranslatedLine>> TranslateAsync(
         IReadOnlyList<string> lines,
         string? sourceLanguage,

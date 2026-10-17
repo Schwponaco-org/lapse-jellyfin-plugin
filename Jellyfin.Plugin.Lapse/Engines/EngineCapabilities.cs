@@ -7,47 +7,37 @@ using System.Collections.Generic;
 namespace Jellyfin.Plugin.Lapse.Engines;
 
 /// <summary>
-/// What a given engine can actually do. The dashboard uses this to grey out modes an
-/// engine doesn't support instead of letting you pick something that would just fail.
+/// What an engine can do. The dashboard greys out the rest.
 /// </summary>
 public class EngineCapabilities
 {
     /// <summary>
-    /// Gets or sets a value indicating whether the engine can do a plain constant shift.
-    /// Every engine we ship can do this, it's the baseline.
+    /// Gets or sets a value indicating whether the engine can do a plain shift (all of them can).
     /// </summary>
     public bool SupportsStandard { get; set; } = true;
 
     /// <summary>
-    /// Gets or sets a value indicating whether the engine decides for itself what shape
-    /// the problem is and handles it, rather than being told which alignment to run. Only
-    /// LAPSE does this.
+    /// Gets or sets a value indicating whether the engine works out the alignment by itself (LAPSE only).
     /// </summary>
     public bool SupportsAuto { get; set; }
 
     /// <summary>
-    /// Gets or sets a value indicating whether the engine can fit a slope and intercept
-    /// across the whole file. Only LAPSE does this one.
+    /// Gets or sets a value indicating whether it can fit a slope across the file (LAPSE only).
     /// </summary>
     public bool SupportsOls { get; set; }
 
     /// <summary>
-    /// Gets or sets a value indicating whether the engine can break the subtitle into
-    /// sections with their own timing.
+    /// Gets or sets a value indicating whether it can split the file into differently timed sections.
     /// </summary>
     public bool SupportsSplit { get; set; }
 
     /// <summary>
-    /// Gets or sets a value indicating whether split mode takes a penalty number. ffsubsync
-    /// has no split at all, and some engines could have split without a tunable penalty,
-    /// so this is tracked separately from <see cref="SupportsSplit"/>.
+    /// Gets or sets a value indicating whether split takes a penalty number (separate from <see cref="SupportsSplit"/>).
     /// </summary>
     public bool SupportsPenalty { get; set; }
 
     /// <summary>
-    /// Gets or sets the penalty this engine works best with. The scales are completely
-    /// different between engines (LAPSE uses about 6, alass uses 0-1000 with 7 as its
-    /// own default), so this travels with the engine rather than being one global setting.
+    /// Gets or sets the default penalty. Scales differ wildly (LAPSE ~6, alass 0-1000 with 7), so it's per engine.
     /// </summary>
     public int DefaultPenalty { get; set; }
 
@@ -62,10 +52,7 @@ public class EngineCapabilities
     public int MaxPenalty { get; set; }
 
     /// <summary>
-    /// Gets or sets the subtitle formats this engine reads and writes, as extensions with
-    /// a leading dot. Anything not on here has to be converted before the engine sees it.
-    /// This is what the plugin knows about the project; the installed binary gets asked
-    /// directly as well, and its answer wins. See <see cref="EngineFormats"/>.
+    /// Gets or sets the extensions it reads and writes. The installed binary's own answer wins, see <see cref="EngineFormats"/>.
     /// </summary>
     public IReadOnlyList<string> SubtitleExtensions { get; set; } = EngineFormats.Ffsubsync;
 }

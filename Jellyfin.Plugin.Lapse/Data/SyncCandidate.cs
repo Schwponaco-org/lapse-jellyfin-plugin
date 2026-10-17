@@ -57,11 +57,7 @@ public class SyncCandidate
 }
 
 /// <summary>
-/// Every answer for one subtitle, kept together until one of them is chosen.
-///
-/// Nothing in here has replaced anything. The subtitle that was synced is still sitting
-/// where it was, untouched, and stays that way until somebody keeps one of these or
-/// throws the lot away.
+/// All the answers for one subtitle, kept until one is picked. Nothing has been replaced yet.
 /// </summary>
 public class SyncCandidateSet
 {

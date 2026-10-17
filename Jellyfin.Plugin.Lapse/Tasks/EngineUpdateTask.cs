@@ -13,9 +13,7 @@ using Microsoft.Extensions.Logging;
 namespace Jellyfin.Plugin.Lapse.Tasks;
 
 /// <summary>
-/// Checks GitHub once a day for newer engine releases and installs them, for every
-/// engine that has auto-update turned on. Engines behind a custom binary path are left
-/// alone: that binary isn't the plugin's to replace.
+/// Daily engine update check. Skips engines with a custom binary path, those aren't ours to replace.
 /// </summary>
 public class EngineUpdateTask : IScheduledTask, IConfigurableScheduledTask
 {
@@ -25,8 +23,6 @@ public class EngineUpdateTask : IScheduledTask, IConfigurableScheduledTask
     /// <summary>
     /// Initializes a new instance of the <see cref="EngineUpdateTask"/> class.
     /// </summary>
-    /// <param name="updater">Does the checking and installing.</param>
-    /// <param name="logger">Logger.</param>
     public EngineUpdateTask(EngineUpdater updater, ILogger<EngineUpdateTask> logger)
     {
         _updater = updater;
@@ -65,10 +61,7 @@ public class EngineUpdateTask : IScheduledTask, IConfigurableScheduledTask
                 TimeOfDayTicks = TimeSpan.FromHours(4).Ticks
             },
 
-            // A server that isn't up at 04:00 - anything on a desktop, anything that gets
-            // shut down overnight - would never see a new engine release on the daily
-            // trigger alone, which is most of what "auto-update doesn't seem to happen"
-            // turns out to be. Running once at startup covers those.
+            // also on startup, a server that's off at 04:00 (desktops etc) would never update otherwise
             new TaskTriggerInfo
             {
                 Type = TaskTriggerInfoType.StartupTrigger

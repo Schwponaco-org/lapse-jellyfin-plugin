@@ -7,11 +7,8 @@ using System;
 namespace Jellyfin.Plugin.Lapse.Data;
 
 /// <summary>
-/// A request to do several things to one subtitle in one press: change its format, line
-/// it up, and translate it. Nothing here happens unless it's asked for, and the order is
-/// fixed because it's the only order that makes sense - convert first so the engine can
-/// read the file, sync next so the translation inherits the corrected timings, translate
-/// last.
+/// Convert, sync and translate one subtitle in one go. Fixed order: convert so the engine can read it,
+/// sync so the translation gets the right timings, translate last.
 /// </summary>
 public class PipelineRequest
 {

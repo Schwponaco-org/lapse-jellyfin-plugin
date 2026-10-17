@@ -23,7 +23,7 @@ public class ItemStatusEntry
     public string Name { get; set; } = string.Empty;
 
     /// <summary>
-    /// Gets or sets what kind of item this is - Movie, Episode, Video and so on.
+    /// Gets or sets the item kind (Movie, Episode, Video...).
     /// </summary>
     public string ItemType { get; set; } = string.Empty;
 
@@ -53,9 +53,8 @@ public class ItemStatusEntry
     public string? LastError { get; set; }
 
     /// <summary>
-    /// Gets or sets how many external subtitles the item has. Libraries that scan in
-    /// unrelated video files (phone backups, personal clips, whatever) tend to fill up
-    /// with items that have none, so the dashboard hides those by default.
+    /// Gets or sets how many external subtitles it has. The dashboard hides 0 by default, libraries
+    /// full of phone clips get noisy otherwise.
     /// </summary>
     public int SubtitleCount { get; set; }
 

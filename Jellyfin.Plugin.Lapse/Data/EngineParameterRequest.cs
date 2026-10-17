@@ -5,9 +5,7 @@
 namespace Jellyfin.Plugin.Lapse.Data;
 
 /// <summary>
-/// Body for POST /Lapse/Engines/{id}/Parameter. Sets one advanced parameter on one engine,
-/// for callers that only want to flip a single switch rather than posting the whole
-/// settings page - the low-confidence prompts that offer to turn on "force" in place.
+/// Body for POST /Lapse/Engines/{id}/Parameter, sets one parameter (e.g. turning on force from the low confidence prompt).
 /// </summary>
 public class EngineParameterRequest
 {

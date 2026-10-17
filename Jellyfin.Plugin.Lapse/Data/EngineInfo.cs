@@ -182,14 +182,8 @@ public class EngineInfo
     public string? DeploymentNote { get; set; }
 
     /// <summary>
-    /// Gets or sets the subtitle formats this engine reads, as extensions with a leading
-    /// dot. Comes from the installed binary when it can say, otherwise from what the
-    /// plugin knows about the project.
+    /// Gets or sets the extensions this engine reads (from the binary if it says, else the built-in list).
     /// </summary>
-    [System.Diagnostics.CodeAnalysis.SuppressMessage(
-        "Usage",
-        "CA2227:Collection properties should be read only",
-        Justification = "Built in one go from the engine descriptor or the runtime probe, and only ever serialized out to the dashboard.")]
     public IReadOnlyList<string> SubtitleExtensions { get; set; } = System.Array.Empty<string>();
 
     /// <summary>
@@ -228,9 +222,7 @@ public class EngineInfo
     public int Penalty { get; set; }
 
     /// <summary>
-    /// Gets or sets the penalty the engine itself ships with, which is what the settings
-    /// form quotes as the standard value. Not the same as <see cref="Penalty"/>, which is
-    /// whatever is configured right now.
+    /// Gets or sets the engine's own default penalty (not the configured one, that's <see cref="Penalty"/>).
     /// </summary>
     public int DefaultPenalty { get; set; }
 
@@ -287,17 +279,12 @@ public class EngineInfo
     public IReadOnlyList<string>? DiscoveredFlags { get; set; }
 
     /// <summary>
-    /// Gets or sets how the flags were discovered: "capabilities" when the binary answered
-    /// --capabilities, "usage" when they were read out of its usage text, null when the
-    /// binary couldn't be asked at all.
+    /// Gets or sets where the flags came from: "capabilities", "usage", or null if it couldn't be asked.
     /// </summary>
     public string? CapabilitySource { get; set; }
 
     /// <summary>
-    /// Gets or sets which voice detector the installed LAPSE binary is actually running:
-    /// "silero" for the accurate ONNX model, "libfvad" for the weaker fallback it falls
-    /// back to when the onnxruntime library or model sidecar isn't next to it, or null
-    /// when this isn't LAPSE or the binary couldn't be asked.
+    /// Gets or sets LAPSE's voice detector: "silero", "libfvad" (the weak fallback), or null.
     /// </summary>
     public string? VadBackend { get; set; }
 

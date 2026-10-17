@@ -3,8 +3,8 @@
 // Licensed under GPL v3 - see LICENSE for details
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
 using System.Text.Json;
 using System.Threading;
@@ -16,27 +16,23 @@ using Microsoft.Extensions.Logging;
 namespace Jellyfin.Plugin.Lapse.Services;
 
 /// <summary>
-/// Asks ffprobe which subtitle streams a video file holds right now.
-///
-/// Jellyfin's database already knows, most of the time, and that is what everything else
-/// in the plugin reads. It can be wrong in ways that matter the moment a track is being
-/// pulled out by number: the file was replaced by an upgrade and not rescanned yet, or the
-/// library is set to not keep embedded subtitles at all, in which case the database has
-/// none of them. ffprobe reads the same container ffmpeg is about to, so the index it
-/// gives back is the index -map 0:N will land on.
+/// Asks ffprobe which subtitle streams a video has right now. Jellyfin's DB is usually
+/// right, but not after an unscanned upgrade or when the library doesn't keep embedded
+/// subtitle info. ffprobe's index is exactly what -map 0:N will hit.
 /// </summary>
 public class EmbeddedSubtitleProbe
 {
     private static readonly TimeSpan ProbeTimeout = TimeSpan.FromMinutes(2);
+    private static readonly TimeSpan CacheFor = TimeSpan.FromMinutes(2);
+    private const int MaxCached = 256;
 
     private readonly IMediaEncoder _mediaEncoder;
     private readonly ILogger<EmbeddedSubtitleProbe> _logger;
+    private readonly ConcurrentDictionary<string, ((long Length, DateTime WriteTimeUtc) Stamp, DateTime ReadUtc, List<EmbeddedSubtitleTrack> Tracks)> _recent = new(StringComparer.Ordinal);
 
     /// <summary>
     /// Initializes a new instance of the <see cref="EmbeddedSubtitleProbe"/> class.
     /// </summary>
-    /// <param name="mediaEncoder">Used to find the ffprobe Jellyfin ships.</param>
-    /// <param name="logger">Logger.</param>
     public EmbeddedSubtitleProbe(IMediaEncoder mediaEncoder, ILogger<EmbeddedSubtitleProbe> logger)
     {
         _mediaEncoder = mediaEncoder;
@@ -58,14 +54,6 @@ public class EmbeddedSubtitleProbe
     /// <summary>
     /// Lists the subtitle streams in a video file.
     /// </summary>
-    /// <param name="videoPath">The video file.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>The streams, in container order, or null when ffprobe couldn't be run or
-    /// couldn't read the file. An empty list means it read the file and there are none.</returns>
-    [System.Diagnostics.CodeAnalysis.SuppressMessage(
-        "Security",
-        "CA3003:Review code for file path injection vulnerabilities",
-        Justification = "The video path is Jellyfin's own resolved path for an item the caller already looked up.")]
     public async Task<List<EmbeddedSubtitleTrack>?> ProbeAsync(string videoPath, CancellationToken cancellationToken = default)
     {
         if (!IsAvailable)
@@ -73,96 +61,103 @@ public class EmbeddedSubtitleProbe
             return null;
         }
 
-        var startInfo = new ProcessStartInfo
+        // extracting every track asks about the same file once per track, cache it short term
+        var stamp = Stamp(videoPath);
+        if (stamp is not null
+            && _recent.TryGetValue(videoPath, out var cached)
+            && cached.Stamp == stamp
+            && DateTime.UtcNow - cached.ReadUtc < CacheFor)
         {
-            FileName = _mediaEncoder.ProbePath,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
+            return Copy(cached.Tracks);
+        }
+
+        var arguments = new[]
+        {
+            "-v",
+            "error",
+            "-select_streams",
+            "s",
+            "-show_entries",
+            "stream=index,codec_name:stream_tags=language,title:stream_disposition=forced,hearing_impaired",
+            "-of",
+            "json",
+
+            // file: so a name like "concat:..." isn't read as a protocol
+            FfmpegPaths.AsFileUrl(videoPath)
         };
 
-        ProcessOutput.ReadAsUtf8(startInfo);
-
-        startInfo.ArgumentList.Add("-v");
-        startInfo.ArgumentList.Add("error");
-        startInfo.ArgumentList.Add("-select_streams");
-        startInfo.ArgumentList.Add("s");
-        startInfo.ArgumentList.Add("-show_entries");
-        startInfo.ArgumentList.Add("stream=index,codec_name:stream_tags=language,title:stream_disposition=forced,hearing_impaired");
-        startInfo.ArgumentList.Add("-of");
-        startInfo.ArgumentList.Add("json");
-
-        // file: stops a name that happens to look like a protocol ("concat:...", or
-        // anything with a colon early on) from being read as one.
-        startInfo.ArgumentList.Add(FfmpegPaths.AsFileUrl(videoPath));
-
-        using var process = new Process { StartInfo = startInfo };
-
+        ProcessResult result;
         try
         {
-            process.Start();
+            result = await ProcessRunner.RunAsync(_mediaEncoder.ProbePath, arguments, ProbeTimeout, cancellationToken).ConfigureAwait(false);
         }
         catch (System.ComponentModel.Win32Exception ex)
         {
             _logger.LogWarning(ex, "Could not start ffprobe to look at {Video}", videoPath);
             return null;
         }
-
-        var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
-        var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
-
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeoutCts.CancelAfter(ProbeTimeout);
-
-        try
+        catch (TimeoutException)
         {
-            await process.WaitForExitAsync(timeoutCts.Token).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            FfmpegPaths.TryKill(process);
-            cancellationToken.ThrowIfCancellationRequested();
-
             _logger.LogWarning("ffprobe took too long reading {Video}", videoPath);
             return null;
         }
 
-        string stdout;
-        string stderr;
-
-        try
+        if (result.ExitCode != 0)
         {
-            stdout = await stdoutTask.ConfigureAwait(false);
-            stderr = await stderrTask.ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
+            _logger.LogWarning("ffprobe could not read {Video}: {Error}", videoPath, result.Stderr.Trim());
             return null;
         }
 
-        if (process.ExitCode != 0)
-        {
-            _logger.LogWarning("ffprobe could not read {Video}: {Error}", videoPath, stderr.Trim());
-            return null;
-        }
-
-        var tracks = Parse(stdout);
+        var tracks = Parse(result.Stdout);
         if (tracks is null)
         {
             _logger.LogWarning("ffprobe's answer for {Video} didn't parse", videoPath);
+            return null;
         }
 
-        return tracks;
+        if (stamp is not null)
+        {
+            if (_recent.Count >= MaxCached)
+            {
+                _recent.Clear();
+            }
+
+            _recent[videoPath] = (stamp.Value, DateTime.UtcNow, tracks);
+        }
+
+        return Copy(tracks);
+    }
+
+    // callers fill in blanks, so hand out copies, not the cached objects
+    private static List<EmbeddedSubtitleTrack> Copy(List<EmbeddedSubtitleTrack> tracks)
+    {
+        return tracks.ConvertAll(t => new EmbeddedSubtitleTrack
+        {
+            Index = t.Index,
+            Codec = t.Codec,
+            Language = t.Language,
+            Title = t.Title,
+            ForcedFlag = t.ForcedFlag,
+            HearingImpairedFlag = t.HearingImpairedFlag
+        });
+    }
+
+    private static (long Length, DateTime WriteTimeUtc)? Stamp(string path)
+    {
+        try
+        {
+            var info = new FileInfo(path);
+            return info.Exists ? (info.Length, info.LastWriteTimeUtc) : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
     }
 
     /// <summary>
-    /// Reads ffprobe's JSON answer. Public so it can be checked against real ffprobe
-    /// output without starting a process.
+    /// Parses ffprobe's JSON. Public for the tests.
     /// </summary>
-    /// <param name="json">What ffprobe printed.</param>
-    /// <returns>The subtitle streams, or null when it wasn't the JSON expected.</returns>
     public static List<EmbeddedSubtitleTrack>? Parse(string json)
     {
         var result = new List<EmbeddedSubtitleTrack>();
@@ -173,8 +168,7 @@ public class EmbeddedSubtitleProbe
 
             if (!document.RootElement.TryGetProperty("streams", out var streams))
             {
-                // A file with no subtitle streams at all comes back as "{}" or with an
-                // empty list, depending on the ffprobe build. Both mean none.
+                // no subtitle streams comes back as "{}" or an empty list depending on the build
                 return result;
             }
 
@@ -185,8 +179,7 @@ public class EmbeddedSubtitleProbe
 
             foreach (var stream in streams.EnumerateArray())
             {
-                // TryGetInt32 throws rather than failing on anything that isn't a number, so
-                // the kind is checked first.
+                // TryGetInt32 throws on non-numbers, check the kind first
                 if (stream.ValueKind != JsonValueKind.Object
                     || !stream.TryGetProperty("index", out var indexElement)
                     || indexElement.ValueKind != JsonValueKind.Number
@@ -203,7 +196,7 @@ public class EmbeddedSubtitleProbe
 
                 if (stream.TryGetProperty("tags", out var tags) && tags.ValueKind == JsonValueKind.Object)
                 {
-                    // Matroska tag names come back in whatever case the muxer wrote them.
+                    // tag name case depends on the muxer
                     foreach (var tag in tags.EnumerateObject())
                     {
                         if (tag.Name.Equals("language", StringComparison.OrdinalIgnoreCase))

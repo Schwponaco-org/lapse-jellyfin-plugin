@@ -4,20 +4,14 @@
 
 using System;
 using System.IO;
-using System.Linq;
 using Jellyfin.Plugin.Lapse.Data;
 using Microsoft.Extensions.Logging;
 
 namespace Jellyfin.Plugin.Lapse.Services;
 
 /// <summary>
-/// Puts a sync back the way it was.
-///
-/// Two shapes, because there are two ways a sync can land. When it replaced a subtitle
-/// there is a .bak sitting next to it and undoing means copying that back over. When it
-/// wrote a new file next to the original - which is what the default output mode does -
-/// nothing was replaced, so undoing means deleting the file it added and leaving the
-/// original alone.
+/// Undoes syncs. If it replaced a subtitle, copy the .bak back. If it wrote a new file
+/// next to the original (the default), just delete that file.
 /// </summary>
 public class SyncHistoryService
 {
@@ -26,19 +20,14 @@ public class SyncHistoryService
     /// <summary>
     /// Initializes a new instance of the <see cref="SyncHistoryService"/> class.
     /// </summary>
-    /// <param name="logger">Logger.</param>
     public SyncHistoryService(ILogger<SyncHistoryService> logger)
     {
         _logger = logger;
     }
 
     /// <summary>
-    /// Says whether an entry can still be undone. An entry whose backup has since been
-    /// deleted, or whose output file is gone, is not offered as revertable rather than
-    /// failing when somebody presses the button.
+    /// Says whether an entry can still be undone (its backup or output file is still there).
     /// </summary>
-    /// <param name="entry">The history entry.</param>
-    /// <returns>True if a revert would do something.</returns>
     public static bool CanRevert(SyncHistoryEntry entry)
     {
         if (entry.Reverted || entry.Superseded || string.IsNullOrEmpty(entry.OutputPath))
@@ -57,16 +46,9 @@ public class SyncHistoryService
     /// <summary>
     /// Undoes one sync.
     /// </summary>
-    /// <param name="id">The history entry id.</param>
-    /// <returns>A line saying what happened, or null when there was no such entry.</returns>
-    [System.Diagnostics.CodeAnalysis.SuppressMessage(
-        "Security",
-        "CA3003:Review code for file path injection vulnerabilities",
-        Justification = "The paths are the plugin's own record of files it wrote itself, looked up by an opaque id. Nothing from the request reaches the filesystem.")]
     public string? Revert(Guid id)
     {
-        // The queue adds history and records from its own thread while this runs, and
-        // the configuration can't be written out while a list in it is being changed.
+        // the queue adds to these lists from its own thread
         lock (Plugin.ConfigurationLock)
         {
             return RevertLocked(id);
@@ -74,12 +56,9 @@ public class SyncHistoryService
     }
 
     /// <summary>
-    /// Adds an entry to the history, marks any earlier entry for the same file as
-    /// superseded, and trims the list to its limit. Callers hold
-    /// <see cref="Plugin.ConfigurationLock"/>.
+    /// Adds a history entry, marks earlier entries for the same file superseded and trims
+    /// the list. Hold <see cref="Plugin.ConfigurationLock"/>.
     /// </summary>
-    /// <param name="config">The configuration to add to.</param>
-    /// <param name="entry">The new entry.</param>
     public static void Append(Configuration.PluginConfiguration config, SyncHistoryEntry entry)
     {
         foreach (var earlier in config.History)
@@ -89,8 +68,7 @@ public class SyncHistoryService
                 continue;
             }
 
-            // Two runs that wrote the same file, or backed up to the same .bak, share the
-            // one thing an undo works on. Only the newest of them still has it intact.
+            // same output or same .bak means only the newest can still be undone
             if (SamePath(earlier.OutputPath, entry.OutputPath) || SamePath(earlier.BackupPath, entry.BackupPath))
             {
                 earlier.Superseded = true;
@@ -110,14 +88,10 @@ public class SyncHistoryService
         return !string.IsNullOrEmpty(a) && string.Equals(a, b, StringComparison.Ordinal);
     }
 
-    [System.Diagnostics.CodeAnalysis.SuppressMessage(
-        "Security",
-        "CA3003:Review code for file path injection vulnerabilities",
-        Justification = "The paths are the plugin's own record of files it wrote itself, looked up by an opaque id. Nothing from the request reaches the filesystem.")]
     private string? RevertLocked(Guid id)
     {
         var config = Plugin.Instance!.Configuration;
-        var entry = config.History.FirstOrDefault(h => h.Id == id);
+        var entry = config.History.Find(h => h.Id == id);
 
         if (entry is null)
         {
@@ -142,10 +116,8 @@ public class SyncHistoryService
             }
             else
             {
-                // A backup is named after the file it was taken from, so that name is
-                // where it belongs - which isn't always the file that was written. Making
-                // a subtitle readable can replace a .srt with an .ass, and putting the
-                // original back then means restoring the .srt and removing the .ass.
+                // The backup's name says where it belongs, which isn't always the written
+                // file: readable can replace a .srt with an .ass, so restore the .srt and drop the .ass.
                 var original = StripBackupSuffix(entry.BackupPath!) ?? entry.OutputPath!;
 
                 File.Copy(entry.BackupPath!, original, overwrite: true);
@@ -176,8 +148,7 @@ public class SyncHistoryService
         }
     }
 
-    // Both suffixes the plugin appends when it copies a file out of the way before writing
-    // over it: an engine's .bak, and the readable restyle's own.
+    // engine .bak and the readable restyle's own backup
     private static string? StripBackupSuffix(string backupPath)
     {
         foreach (var suffix in new[] { ".bak", ReadableSubtitleService.BackupExtension })
@@ -191,17 +162,11 @@ public class SyncHistoryService
         return null;
     }
 
-    // The item's record still claims that subtitle is synced, which after a revert it
-    // isn't. Dropping the claim puts the item back to unsynced in the status list rather
-    // than leaving it looking done when the file on disk says otherwise. The record is
-    // kept against the subtitle that was read, which for a run that wrote a new file
-    // beside it isn't the output, so both are cleared.
+    // After an undo the record shouldn't call the subtitle synced anymore. Both the input
+    // and the output path get cleared since a sidecar run records both.
     private static void ForgetSyncedSubtitle(SyncHistoryEntry entry)
     {
-        var record = Plugin.Instance!.Configuration.MovieRecords
-            .FirstOrDefault(r => r.ItemId == entry.ItemId);
-
-        record?.SyncedSubtitles.RemoveAll(s =>
+        Plugin.Instance!.Configuration.FindRecord(entry.ItemId)?.SyncedSubtitles.RemoveAll(s =>
             SamePath(s.Path, entry.OutputPath) || SamePath(s.Path, entry.InputPath));
     }
 }

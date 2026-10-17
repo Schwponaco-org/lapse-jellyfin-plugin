@@ -23,9 +23,7 @@ public class ShiftRequest
     public string SubtitlePath { get; set; } = string.Empty;
 
     /// <summary>
-    /// Gets or sets how far to move it, in seconds. Negative makes subtitles appear
-    /// earlier. Ignored when <see cref="OffsetMs"/> is set, which is what the context
-    /// menu's shift dialog uses.
+    /// Gets or sets the offset in seconds (negative = earlier). Ignored if <see cref="OffsetMs"/> is set.
     /// </summary>
     public double OffsetSeconds { get; set; }
 
@@ -44,7 +42,6 @@ public class ShiftRequest
     /// <summary>
     /// Gets the offset to actually apply, in seconds.
     /// </summary>
-    /// <returns>The offset in seconds.</returns>
     public double ResolveOffsetSeconds()
     {
         return OffsetMs.HasValue ? OffsetMs.Value / 1000.0 : OffsetSeconds;

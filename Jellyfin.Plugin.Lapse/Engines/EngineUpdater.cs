@@ -5,7 +5,6 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.Lapse.Data;
@@ -14,9 +13,7 @@ using Microsoft.Extensions.Logging;
 namespace Jellyfin.Plugin.Lapse.Engines;
 
 /// <summary>
-/// Keeps installed engines up to date against their GitHub releases. Doing the check
-/// here rather than in the controller means the scheduled task and the dashboard button
-/// take exactly the same path.
+/// Keeps installed engines up to date. The scheduled task and the dashboard button both come through here.
 /// </summary>
 public class EngineUpdater
 {
@@ -29,11 +26,6 @@ public class EngineUpdater
     /// <summary>
     /// Initializes a new instance of the <see cref="EngineUpdater"/> class.
     /// </summary>
-    /// <param name="registry">The known engines.</param>
-    /// <param name="runner">Used to check whether an engine is installed at all.</param>
-    /// <param name="installer">Does the actual downloading.</param>
-    /// <param name="releaseClient">Asks GitHub what the latest release is.</param>
-    /// <param name="logger">Logger.</param>
     public EngineUpdater(
         EngineRegistry registry,
         EngineRunner runner,
@@ -49,13 +41,8 @@ public class EngineUpdater
     }
 
     /// <summary>
-    /// Works out where an engine stands: what's installed, what's published, and whether
-    /// those differ.
+    /// Works out what's installed vs what's published.
     /// </summary>
-    /// <param name="engine">The engine to check.</param>
-    /// <param name="force">True to ignore the cached answer from GitHub.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>The update status.</returns>
     public async Task<EngineUpdateStatus> CheckAsync(IEngine engine, bool force = false, CancellationToken cancellationToken = default)
     {
         var installedPath = _runner.ResolvePath(engine);
@@ -64,75 +51,57 @@ public class EngineUpdater
             ? await ResolveInstalledVersionAsync(engine, cancellationToken).ConfigureAwait(false)
             : null;
 
-        var settings = Plugin.Instance!.Configuration.GetEngineSettings(engine.Descriptor.Id);
+        var config = Plugin.Instance!.Configuration;
+        var settings = config.FindEngineSettings(engine.Descriptor.Id);
 
         var status = new EngineUpdateStatus
         {
             EngineId = engine.Descriptor.Id,
             InstalledVersion = installedVersion,
-            AutoUpdate = Plugin.Instance!.Configuration.AutoUpdateEngines,
-            LastCheckedUtc = settings.LastUpdateCheckUtc
+            AutoUpdate = config.AutoUpdateEngines,
+            LastCheckedUtc = settings?.LastUpdateCheckUtc
         };
 
         var latest = await _releaseClient.GetLatestTagAsync(engine.Descriptor.GitHubRepo, force, cancellationToken).ConfigureAwait(false);
         status.LatestVersion = latest;
 
-        if (latest is not null)
+        // runs for every engine on every page load, only save when the answer changed
+        if (latest is not null && !string.Equals(settings?.LatestKnownVersion, latest, StringComparison.Ordinal))
         {
-            // The dashboard runs this for every engine on every load, so only write the
-            // config back when the answer actually moved. Saving three times a page load
-            // to record the same tag would be a file write for nothing.
-            var changed = !string.Equals(settings.LatestKnownVersion, latest, StringComparison.Ordinal);
-
-            settings.LatestKnownVersion = latest;
-            status.LastCheckedUtc = settings.LastUpdateCheckUtc;
-
-            if (changed)
+            lock (Plugin.ConfigurationLock)
             {
+                settings = config.GetEngineSettings(engine.Descriptor.Id);
+                settings.LatestKnownVersion = latest;
                 settings.LastUpdateCheckUtc = DateTime.UtcNow;
-                status.LastCheckedUtc = settings.LastUpdateCheckUtc;
                 Plugin.Instance!.SaveConfiguration();
             }
+
+            status.LastCheckedUtc = settings.LastUpdateCheckUtc;
         }
 
         status.VersionUnknown = installed && installedVersion is null;
+        // No updates for a custom binary path (installing writes somewhere else, so the
+        // button looked dead). An unknown version counts as out of date, otherwise engines
+        // installed while GitHub was down could never be updated from the dashboard.
         status.UpdateAvailable = installed
-
-            // A binary behind a path override is not ours to replace. Offering an update
-            // for one was worse than saying nothing: installing writes to the managed
-            // path, which is not the file being run, so the button appeared to do nothing
-            // and the same update kept being offered afterwards.
-            && string.IsNullOrWhiteSpace(settings.PathOverride)
+            && string.IsNullOrWhiteSpace(settings?.PathOverride)
             && engine.Descriptor.GetDownloadForThisMachine() is not null
             && latest is not null
-
-            // An engine we can't put a version on is treated as out of date rather than
-            // as up to date. Saying "already on an unknown version" and refusing to do
-            // anything is the worst of both, and it's what this used to do: the version
-            // was only ever recorded at install time, so any engine installed before that
-            // existed - or installed while GitHub was unreachable - could never be updated
-            // again from the dashboard.
             && (installedVersion is null || GitHubReleaseClient.IsNewer(installedVersion, latest));
 
         return status;
     }
 
     /// <summary>
-    /// Works out which version of an engine is on disk. The release tag recorded at
-    /// install time is the first choice, since that's the thing a release compares
-    /// against, but a binary that got there some other way can still be asked what it is,
-    /// and an answer from the binary is better than no answer at all.
+    /// Works out the installed version: the tag recorded at install, or failing that whatever the binary says.
     /// </summary>
-    /// <param name="engine">The engine.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>The version, or null when neither source knows.</returns>
     public async Task<string?> ResolveInstalledVersionAsync(IEngine engine, CancellationToken cancellationToken = default)
     {
-        var settings = Plugin.Instance!.Configuration.GetEngineSettings(engine.Descriptor.Id);
+        var recorded = Plugin.Instance!.Configuration.FindEngineSettings(engine.Descriptor.Id)?.InstalledVersion;
 
-        if (!string.IsNullOrWhiteSpace(settings.InstalledVersion))
+        if (!string.IsNullOrWhiteSpace(recorded))
         {
-            return settings.InstalledVersion;
+            return recorded;
         }
 
         var runtime = await _runner.GetRuntimeInfoAsync(engine, cancellationToken).ConfigureAwait(false);
@@ -141,20 +110,19 @@ public class EngineUpdater
             return null;
         }
 
-        // Write it down so the next check doesn't have to start the binary again, and so
-        // the card has something to show before any probing has happened.
-        settings.InstalledVersion = runtime.Version;
-        Plugin.Instance!.SaveConfiguration();
+        // remember it so we don't have to start the binary again next time
+        lock (Plugin.ConfigurationLock)
+        {
+            Plugin.Instance!.Configuration.GetEngineSettings(engine.Descriptor.Id).InstalledVersion = runtime.Version;
+            Plugin.Instance!.SaveConfiguration();
+        }
+
         return runtime.Version;
     }
 
     /// <summary>
     /// Replaces an engine's binary with the newest release.
     /// </summary>
-    /// <param name="engine">The engine to update.</param>
-    /// <param name="force">True to reinstall even when the versions look the same.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>What happened, as a line to show the user.</returns>
     public async Task<string> UpdateAsync(IEngine engine, bool force = false, CancellationToken cancellationToken = default)
     {
         var status = await CheckAsync(engine, force: true, cancellationToken).ConfigureAwait(false);
@@ -175,12 +143,8 @@ public class EngineUpdater
     }
 
     /// <summary>
-    /// Runs the update check for every engine that is installed and has auto-update
-    /// turned on. One engine failing doesn't stop the others.
+    /// Updates every installed engine if auto-update is on. One failing doesn't stop the rest.
     /// </summary>
-    /// <param name="progress">Progress reporter, 0 to 100.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>One line per engine describing what happened.</returns>
     public async Task<IReadOnlyDictionary<string, string>> RunAutoUpdatesAsync(
         IProgress<double>? progress = null,
         CancellationToken cancellationToken = default)
@@ -194,7 +158,7 @@ public class EngineUpdater
             cancellationToken.ThrowIfCancellationRequested();
 
             var engine = engines[i];
-            var settings = Plugin.Instance!.Configuration.GetEngineSettings(engine.Descriptor.Id);
+            var settings = Plugin.Instance!.Configuration.FindEngineSettings(engine.Descriptor.Id);
 
             if (!autoUpdate)
             {
@@ -204,7 +168,7 @@ public class EngineUpdater
             {
                 results[engine.Descriptor.Id] = "not installed";
             }
-            else if (!string.IsNullOrWhiteSpace(settings.PathOverride))
+            else if (!string.IsNullOrWhiteSpace(settings?.PathOverride))
             {
                 // a hand built binary behind a path override isn't ours to replace
                 results[engine.Descriptor.Id] = "skipped, using a custom binary path";
@@ -216,11 +180,7 @@ public class EngineUpdater
                     results[engine.Descriptor.Id] = await UpdateAsync(engine, force: false, cancellationToken).ConfigureAwait(false);
                 }
 
-                // Deliberately broad, short of cancellation. One engine that cannot be
-                // written (a read-only volume, a permissions problem, a half-extracted
-                // archive) used to throw straight out of the loop and take every engine
-                // after it down with it, so a single bad install quietly stopped the
-                // nightly update for everything else.
+                // broad on purpose, one broken engine used to stop the nightly update for all the others
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
                     _logger.LogWarning(ex, "Auto-update failed for {Engine}", engine.Descriptor.DisplayName);

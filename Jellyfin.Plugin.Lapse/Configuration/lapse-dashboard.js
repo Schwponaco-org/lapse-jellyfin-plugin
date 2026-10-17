@@ -5,7 +5,8 @@
 (function () {
     'use strict';
 
-    var queuePollHandle = null;
+    var queuePollTimer = null;
+    var queuePolling = false;
     var queueWasRunning = false;
     var allItems = [];
     var allEngines = [];
@@ -20,15 +21,10 @@
     var ignoreSearchPending = false;
     var ignoreSearchFetched = false;
 
-    // Fallback text for the rare case a low-confidence result can't be turned into a
-    // one-click prompt (no engine id to act on). Normally confirmForceRetry below offers
-    // the checkbox directly instead of just describing where it lives.
+    // fallback text when there's no engine id to build the one-click prompt (confirmForceRetry) from
     var FORCE_HINT = 'If you are sure the subtitle belongs to this video, turn on ' +
         '"Sync even when the engine is unsure" under Settings, Engines, and run it again.';
 
-    // The one way to get a low-confidence result written instead of skipped: turn on the
-    // engine's own "sync even when unsure" and run it again. Offered right where the skip
-    // happens, rather than leaving FORCE_HINT to describe where to go looking for it.
     // Tests what's typed in, not only what's saved, so a key can be checked before it's
     // relied on. Blank boxes fall back to the saved values on the server.
     function testOpenSubtitles(view) {
@@ -51,6 +47,7 @@
         });
     }
 
+    // Offer "sync even when unsure" right where the skip happened, it's the only way to get a doubtful result written.
     function confirmForceRetry(message, engineId, view, retry) {
         if (!engineId) {
             Dashboard.alert(message + '\n\n' + FORCE_HINT);
@@ -250,7 +247,7 @@
         return fetch(ApiClient.getUrl(path), options).then(function (res) {
             if (!res.ok) {
                 return res.text().then(function (text) {
-                    throw new Error(text || ('Request failed with status ' + res.status));
+                    throw new Error(errorMessage(text, res.status));
                 });
             }
 
@@ -261,6 +258,29 @@
 
             return null;
         });
+    }
+
+    // Errors come back as JSON (quoted string, or ASP.NET problem details). Show the sentence, not the quotes and braces.
+    function errorMessage(text, status) {
+        if (!text) {
+            return 'Request failed with status ' + status;
+        }
+
+        try {
+            var parsed = JSON.parse(text);
+
+            if (typeof parsed === 'string') {
+                return parsed;
+            }
+
+            if (parsed && (parsed.detail || parsed.title || parsed.message)) {
+                return parsed.detail || parsed.title || parsed.message;
+            }
+        } catch (e) {
+            // not JSON, so it is the sentence already
+        }
+
+        return text;
     }
 
     function lapseGet(path) {
@@ -281,10 +301,7 @@
         return div.innerHTML;
     }
 
-    // Two ids for the same thing, compared without caring how they were written. Guids
-    // reach the browser dashed from some endpoints and undashed from others depending on
-    // how the server serialised them, and a plain === between the two forms silently
-    // matches nothing.
+    // guids come back dashed from some endpoints and undashed from others, === between them never matches
     function sameId(a, b) {
         if (!a || !b) {
             return false;
@@ -327,10 +344,8 @@
     var NAV_STORAGE_KEY = 'lapse-active-panel';
     var showPanel = null;
 
-    // One panel at a time, picked from the sidebar. Settings is a fold-out group so the
-    // first thing anyone sees is four everyday actions rather than eleven config screens.
-    // The panel someone was last on is remembered, except that a fresh visit always lands
-    // on the dashboard rather than wherever they happened to stop configuring.
+    // One panel at a time from the sidebar, Settings folds out so the first view isn't eleven config
+    // screens. Remembers the last panel, but a fresh visit lands on the dashboard.
     function setUpNavigation(view) {
         var items = Array.prototype.slice.call(view.querySelectorAll('.lapseNavItem'));
         if (items.length === 0) {
@@ -387,11 +402,8 @@
 
     // --- diagnostics ---
 
-    // The single most common "the plugin doesn't work" report is the context menu entries
-    // not appearing. Only say so when it is genuinely not going to work: the server now
-    // answers whether injection can happen rather than whether it happens to have
-    // happened, so a page opened from an already-loaded web client no longer gets a
-    // warning about something that is working fine.
+    // Missing context menu entries is the #1 "doesn't work" report. Only warn when it really won't
+    // work, the server checks whether injection CAN happen, not whether it already did.
     function refreshDiagnostics(view) {
         return lapseGet('Lapse/Diagnostics').then(function (diagnostics) {
             currentDiagnostics = diagnostics;
@@ -426,9 +438,7 @@
             '</button>';
     }
 
-    // One bar showing the whole library at a glance, in the same colours as the tiles
-    // under it. Proportions are the point, so anything above zero gets a sliver rather
-    // than rounding away to nothing.
+    // proportions bar, anything above zero gets at least a sliver
     function progressBar(counts) {
         var order = [
             { key: 'Synced', cls: 'synced', label: 'Synced' },
@@ -469,9 +479,7 @@
         return Math.round(minutes / (60 * 24)) + ' d ago';
     }
 
-    // The status list is already loaded for the Sync status panel, so the counts come off
-    // that rather than making the server walk the library a second time to produce numbers
-    // the browser can add up in a loop.
+    // counted from the status list we already have, not another trip over the whole library
     function countStatuses() {
         var counts = {
             Synced: 0, PartiallySynced: 0, Pending: 0, Failed: 0,
@@ -500,9 +508,7 @@
             return;
         }
 
-        // Nothing installed means nothing works yet, and a wall of zeroes would say that
-        // badly. One button, one engine, no choices to make. Anyone who wants a different
-        // engine can go to Engines, which is where that decision belongs.
+        // nothing installed: one button for LAPSE instead of a wall of zeroes
         if (!overview.AnyEngineInstalled) {
             container.innerHTML = '' +
                 '<div class="lapseEmptyState">' +
@@ -530,9 +536,7 @@
             engineProblem = '<div class="lapseEngineError">' + escapeHtml(engine.RunCheckError) + '</div>';
         }
 
-        // An update is worth acting on where it is noticed, so the dashboard offers the
-        // button itself rather than sending people to Settings, Engines to press the same
-        // thing.
+        // offer the update button right here instead of sending people to Settings > Engines
         var updateAvailable = !!(engine && overview.ActiveEngineReady && !engine.RunCheckError && engine.UpdateAvailable);
         if (updateAvailable) {
             engineProblem = '<div class="lapseEngineVersion">' +
@@ -562,9 +566,7 @@
             ? '<div class="lapseActivityEmpty">Nothing has been synced yet. ' +
               'Press Sync on any item\'s three-dot menu, or run a bulk sync.</div>'
             : '<div class="lapseActivityList">' + overview.Recent.map(function (entry) {
-                // Every row that still has a backup on disk gets an undo. This plugin
-                // edits files in someone's library; being able to take one back without
-                // going to a shell is the difference between trying it and not.
+                // undo on every row that still has a backup, no shell needed
                 var revert = entry.CanRevert
                     ? '<button is="emby-button" type="button" class="raised lapseSmallButton lapseBtnRevert"' +
                       ' data-id="' + escapeHtml(entry.Id) + '">Undo</button>'
@@ -755,9 +757,7 @@
         return '<span class="lapseVersionBadge lapseVersionBadge-unknown">version unknown</span>';
     }
 
-    // LAPSE quietly falls back to a weaker built-in voice detector when the Silero model
-    // files that ship alongside the binary went missing, and syncs worse from then on with
-    // nothing in the normal output to say so. This is the one place that tells on it.
+    // LAPSE silently falls back to a weaker voice detector when the Silero files are missing, this is the only place that says so
     function vadNotice(engine) {
         if (engine.Id !== 'lapse' || !engine.Installed || engine.VadBackend !== 'libfvad') {
             return '';
@@ -769,9 +769,7 @@
             'will be less accurate than it should be. Reinstall to fetch them.</div>';
     }
 
-    // "Sync even when the engine is unsure" used to live only inside the collapsed
-    // Advanced panel, which meant nobody found it without being told where to look.
-    // It stays off by default, just no longer buried.
+    // "sync even when unsure" used to be buried in Advanced where nobody found it. Still off by default.
     function forceControl(engine) {
         if (!engine.Installed) {
             return '';
@@ -799,9 +797,7 @@
         return '';
     }
 
-    // What the binary itself said it understands. ffsubsync alone lists about fifty flags,
-    // which told nobody anything useful and swamped the card, so this is a tooltip rather
-    // than a wall of text.
+    // what the binary says it understands, as a tooltip (ffsubsync alone lists ~50 flags)
     function discoveredFlagsTooltip(engine) {
         if (!engine.Installed || !engine.DiscoveredFlags || !engine.DiscoveredFlags.length) {
             return '';
@@ -930,9 +926,7 @@
             '</div>';
     }
 
-    // One box under the cards covering all three engines, rather than a line of formats
-    // inside each card. The question people actually have is "which of these reads my
-    // files", and that is a comparison, so it wants them side by side.
+    // one box comparing all engines' formats side by side, that's the actual question people have
     function renderEngineFormats(view) {
         var box = view.querySelector('#lapseEngineFormats');
         if (!box) {
@@ -975,10 +969,7 @@
             subFormatsHtml();
     }
 
-    // Three formats share the .sub extension and the name says nothing about which one you
-    // have, so LAPSE reads the file instead. Worth spelling out, because it's the one place
-    // where two files with the same extension behave differently - and where one of them
-    // needs a frame rate before its numbers mean anything.
+    // MicroDVD, MPL2 and SubViewer 2 all use .sub, LAPSE sniffs which. Only MicroDVD needs a frame rate.
     function subFormatsHtml() {
         var kinds = [
             ['MicroDVD', '{450}{487}text', 'Yes, frames mean nothing without one'],
@@ -1085,9 +1076,7 @@
 
             var updateNote = engineUpdateNote(engine);
 
-            // No paragraph of prose here on purpose. Anyone on this page knows what these
-            // do; the card only has to say which one it is, whether it works, and what
-            // version. The detail that actually varies lives in Advanced.
+            // no prose on purpose, just which engine, whether it works and what version. Details are in Advanced.
             return '' +
                 '<div class="' + cardClasses + '" data-id="' + escapeHtml(engine.Id) + '">' +
                 '  <div class="lapseEngineCardTop">' +
@@ -1313,9 +1302,7 @@
             var daySelect = row.querySelector('.lapseScheduleDay');
             var timeInput = row.querySelector('.lapseScheduleTime');
 
-            // New items and a schedule are one choice between two, so ticking either one
-            // unticks the other rather than leaving both on and letting the schedule redo
-            // work that was already done as the files arrived.
+            // new items OR schedule, ticking one unticks the other
             autoSyncCheck.addEventListener('change', function () {
                 if (autoSyncCheck.checked) {
                     scheduleCheck.checked = false;
@@ -1332,9 +1319,7 @@
                 syncRowState();
             });
 
-            // Nothing about the schedule is shown until there is one, and the day only
-            // means anything for the frequencies that repeat on one - "every day" has no
-            // day to pick, so it never gets offered one.
+            // schedule fields only when there's a schedule, and no day picker for daily
             function syncRowState() {
                 var scheduled = scheduleCheck.checked && enabledCheck.checked;
                 var needsDay = scheduled && frequencySelect.value !== 'Daily';
@@ -1355,9 +1340,7 @@
                 row.classList.toggle('lapseLibraryRowDisabled', !enabledCheck.checked);
             }
 
-            // Turning the library off takes new-item and schedule sync with it, rather
-            // than leaving them ticked-but-inert. Otherwise turning the library back on
-            // later quietly brings a setting back that nobody re-chose.
+            // turning a library off clears new-item and schedule too, so turning it back on doesn't bring them back unasked
             enabledCheck.addEventListener('change', function () {
                 if (!enabledCheck.checked) {
                     autoSyncCheck.checked = false;
@@ -1430,9 +1413,7 @@
         });
     }
 
-    // Only the libraries that are turned on, because those are the only ones the status
-    // list has any items from - offering a disabled library here just gives you a filter
-    // that can never match anything.
+    // enabled libraries only, the status list has nothing from the others
     function renderLibraryFilter(view) {
         var select = view.querySelector('#lapseItemLibraryFilter');
         var previous = select.value;
@@ -1609,10 +1590,7 @@
                     stopButton.disabled = !!snapshot.Cancelling;
                 }
             } else if (queueWasRunning) {
-                // Only on the tick where a job finished. Doing it whenever the queue is
-                // idle meant Lapse/Status - which walks every item in every enabled
-                // library and stats its subtitles - ran every two seconds for as long as
-                // this page was open.
+                // only when a job just finished. Doing it every idle tick ran Lapse/Status (whole library) every 2s.
                 refreshItemList(view);
                 refreshOverview(view);
             }
@@ -1625,21 +1603,30 @@
         });
     }
 
-    function startQueuePolling(view) {
-        if (queuePollHandle) {
-            return;
-        }
+    // 2s while a job runs, 10s idle. Idle polling only exists to notice jobs started elsewhere.
+    function scheduleQueuePoll(view, delay) {
+        clearTimeout(queuePollTimer);
 
-        queuePollHandle = setInterval(function () {
-            refreshQueue(view);
-        }, 2000);
+        queuePollTimer = setTimeout(function () {
+            refreshQueue(view).then(function () {
+                if (queuePolling) {
+                    scheduleQueuePoll(view, queueWasRunning ? 2000 : 10000);
+                }
+            });
+        }, delay);
+    }
+
+    // Called when the page opens and whenever a job has just been started, so the next
+    // look comes round quickly rather than whenever the idle poll would have.
+    function startQueuePolling(view) {
+        queuePolling = true;
+        scheduleQueuePoll(view, 2000);
     }
 
     function stopQueuePolling() {
-        if (queuePollHandle) {
-            clearInterval(queuePollHandle);
-            queuePollHandle = null;
-        }
+        queuePolling = false;
+        clearTimeout(queuePollTimer);
+        queuePollTimer = null;
     }
 
     // --- item status list ---
@@ -1666,9 +1653,7 @@
         }
     }
 
-    // Status comes back in PascalCase and the pill classes are lower case, so the two are
-    // mapped rather than lowercased blindly - "partiallysynced" would read as a typo in
-    // the stylesheet.
+    // status is PascalCase, pill classes are lower case, map them ("partiallysynced" reads like a typo)
     function statusPillClass(status) {
         switch (status) {
             case 'Synced': return 'lapseStatusPill-synced';
@@ -1686,9 +1671,7 @@
         allItems = items || [];
         items = allItems;
 
-        // libraries that scan in unrelated video files (phone backups, personal clips,
-        // whatever) fill up with items that have no external subtitle at all, so hide
-        // those unless the user asks for everything
+        // libraries with phone clips etc fill up with items without subtitles, hide those unless asked
         var includeAll = view.querySelector('#lapseIncludeAll').checked;
         var shown = includeAll ? items : items.filter(function (i) { return i.HasExternalSubtitle; });
 
@@ -1761,44 +1744,59 @@
                 'Showing the first ' + capped.length + ' of ' + shown.length + '. Narrow it down with the search or the filters.</div>';
         }
 
-        container.querySelectorAll('.lapseItemRow').forEach(function (row) {
+    }
+
+    // redrawn on every keystroke (up to 500 rows), so one delegated listener instead of four per row
+    function wireItemListActions(view) {
+        view.querySelector('#lapseItemList').addEventListener('click', function (e) {
+            var button = e.target.closest ? e.target.closest('button') : null;
+            var row = button ? button.closest('.lapseItemRow') : null;
+
+            if (!row) {
+                return;
+            }
+
             var itemId = row.getAttribute('data-id');
             var name = row.getAttribute('data-name');
 
-            row.querySelector('.lapseBtnSync').addEventListener('click', function () {
+            if (button.classList.contains('lapseBtnSync')) {
                 quickSync(view, itemId, name);
-            });
-            row.querySelector('.lapseBtnAdvanced').addEventListener('click', function () {
+            } else if (button.classList.contains('lapseBtnAdvanced')) {
                 openAdvancedDialog(view, itemId, name);
-            });
-            row.querySelector('.lapseBtnSkip').addEventListener('click', function () {
-                var isSkipping = !row.querySelector('.lapseBtnSkip').textContent.trim().startsWith('Un-skip');
-                lapsePost('Lapse/Skip', { ItemId: itemId, Skip: isSkipping }).then(function () {
-                    refreshItemList(view);
-                    refreshOverview(view);
-                });
-            });
-            row.querySelector('.lapseBtnIgnore').addEventListener('click', function () {
-                var isIgnored = row.classList.contains('lapseItemRow-ignored');
-                var request = isIgnored
-                    ? lapseDelete('Lapse/Ignore?itemId=' + encodeURIComponent(itemId))
-                        .then(function (result) {
-                            // Nothing came off, so this item is covered by a rule on its
-                            // series or its folder and the row will still be greyed out.
-                            if (result && result.Removed === 0) {
-                                Dashboard.alert('This one is not on the list itself - it is ' +
-                                    'covered by a rule on its series or its folder. Take that ' +
-                                    'rule off under Settings, Ignore list.');
-                            }
-                        })
-                    : lapsePost('Lapse/Ignore', { ItemId: itemId });
+            } else if (button.classList.contains('lapseBtnSkip')) {
+                toggleSkipItem(view, itemId, button.textContent.trim().indexOf('Un-skip') !== 0);
+            } else if (button.classList.contains('lapseBtnIgnore')) {
+                toggleIgnoreItem(view, itemId, row.classList.contains('lapseItemRow-ignored'));
+            }
+        });
+    }
 
-                request.then(function () {
-                    return Promise.all([refreshItemList(view), refreshIgnoreRules(view), refreshOverview(view)]);
-                }).catch(function (err) {
-                    Dashboard.alert('Could not change the ignore list: ' + err.message);
-                });
-            });
+    function toggleSkipItem(view, itemId, skip) {
+        lapsePost('Lapse/Skip', { ItemId: itemId, Skip: skip }).then(function () {
+            return Promise.all([refreshItemList(view), refreshOverview(view)]);
+        }).catch(function (err) {
+            Dashboard.alert('Could not change that: ' + err.message);
+        });
+    }
+
+    function toggleIgnoreItem(view, itemId, isIgnored) {
+        var request = isIgnored
+            ? lapseDelete('Lapse/Ignore?itemId=' + encodeURIComponent(itemId))
+                .then(function (result) {
+                    // Nothing came off, so this item is covered by a rule on its series or
+                    // its folder and the row will still be greyed out.
+                    if (result && result.Removed === 0) {
+                        Dashboard.alert('This one is not on the list itself - it is ' +
+                            'covered by a rule on its series or its folder. Take that ' +
+                            'rule off under Settings, Ignore list.');
+                    }
+                })
+            : lapsePost('Lapse/Ignore', { ItemId: itemId });
+
+        request.then(function () {
+            return Promise.all([refreshItemList(view), refreshIgnoreRules(view), refreshOverview(view)]);
+        }).catch(function (err) {
+            Dashboard.alert('Could not change the ignore list: ' + err.message);
         });
     }
 
@@ -1806,9 +1804,7 @@
         return lapseGet('Lapse/Status').then(function (items) {
             renderItemList(view, items);
 
-            // The dashboard's counts are derived from this list, so it has to be redrawn
-            // whenever the list changes. Doing it here rather than in renderItemList keeps
-            // it off the path that runs on every keystroke in the search box.
+            // the counts come from this list, so redraw them here, not in renderItemList (that runs per keystroke)
             renderOverview(view);
         });
     }
@@ -1854,9 +1850,7 @@
         });
     }
 
-    // Mode is deliberately left out: the server fills it in from whatever that engine's
-    // default sync mode is set to, so this button and the one in the item context menu
-    // both do the same thing.
+    // no Mode, the server uses the engine's default, same as the context menu button
     function runSync(view, itemId, name, subtitlePath) {
         attemptSync(view, name, { ItemId: itemId, SubtitlePath: subtitlePath });
     }
@@ -2381,8 +2375,9 @@
 
         var isSkipped = option.textContent.indexOf('(skipped)') !== -1;
         lapsePost('Lapse/Skip', { ItemId: option.value, Skip: !isSkipped }).then(function () {
-            refreshFolders(view);
-            refreshItemList(view);
+            return Promise.all([refreshFolders(view), refreshItemList(view)]);
+        }).catch(function (err) {
+            Dashboard.alert('Could not change that: ' + err.message);
         });
     }
 
@@ -2440,11 +2435,8 @@
     // Searches the sync status list, which covers films, episodes and loose videos.
     // Adding a whole series is done by ignoring its folder.
     //
-    // That list is normally already loaded, but this panel can't rely on it: the load on
-    // pageshow can still be running behind a large library, or it can have failed, and
-    // either way searching an empty array used to answer "nothing matches that" - which
-    // reads as a dead button. So an empty list is fetched here first, and only then is
-    // the answer a real one.
+    // The list may still be loading on a big library (or failed), and searching an empty array said
+    // "nothing matches", which looked like a dead button. Fetch it first if it's empty.
     function searchForIgnore(view) {
         var container = view.querySelector('#lapseIgnoreSearchResults');
         var term = (view.querySelector('#lapseIgnoreSearch').value || '').trim().toLowerCase();
@@ -2520,9 +2512,7 @@
 
     // --- subtitle to subtitle sync ---
 
-    // Suggest a name for the third file: the input's own name with the configured sidecar
-    // suffix dropped in, which is the same shape the sidecar output modes produce. Only
-    // ever a suggestion - the field is free text and an edited one is left alone.
+    // suggest input name + sidecar suffix, only a suggestion, an edited name is left alone
     function suggestSubToSubOutput(inputPath) {
         if (!inputPath) {
             return '';
@@ -2663,19 +2653,13 @@
 
     // --- settings: output, translation, appearance, engines ---
 
-    // `options.hideRecommended` drops the badge without changing which entry is the
-    // default - the conversion panel wants the sensible choice pre-picked but not
-    // labelled, since every option there is a legitimate one to want.
+    // `options.hideRecommended` drops the badge but keeps the default picked
     //
-    // The picked row is marked with a class as well as the radio's own state. A radio
-    // dot is easy to lose in a list of four multi-line options, so the class is what
-    // draws the accent bar and the tint that make the current choice obvious.
+    // class on the picked row too, a radio dot is easy to miss in a list of multi-line options
     function renderRadioGroup(container, name, modes, selected, onChange, options) {
         var showRecommended = !(options && options.hideRecommended);
 
-        // Nothing matching means the stored value is gone or was never set, so the entry
-        // marked recommended stands in - otherwise the group renders with no dot at all
-        // and saving would quietly write whatever `selectedRadio`'s fallback is.
+        // no match = value gone or never set, use the recommended one so a dot always shows
         var hasSelection = modes.some(function (mode) { return mode.value === selected; });
         if (!hasSelection) {
             var fallback = modes.filter(function (mode) { return mode.recommended; })[0] || modes[0];
@@ -2764,20 +2748,15 @@
         var row = view.querySelector('#lapseAlreadyInSyncToleranceRow');
         var value = parseInt(view.querySelector('#lapseAlreadyInSyncTolerance').value, 10) || 0;
 
-        // Zero still works - it means only an exact zero offset is left alone - so the
-        // slider stays readable rather than being hidden when the box is unticked.
+        // zero still means something (only an exact 0 offset is left alone), so the slider stays visible
         row.classList.toggle('lapseDimmed', !on);
         view.querySelector('#lapseAlreadyInSyncTolerance').disabled = !on;
         view.querySelector('#lapseAlreadyInSyncToleranceValue').textContent = value + 'ms';
     }
 
-    // No "Recommended" badges in here. Which format you want depends on what is going to
-    // read the file, so the badge was telling people their own answer was the wrong one.
-    // The sensible entry is still the one that comes pre-picked.
-    // srt on a fresh install, and srt again whenever the stored value is blank or is
-    // something this list doesn't offer. Leaving that to renderRadioGroup's generic
-    // fallback meant an unrecognised stored format landed on whichever entry happened to
-    // be first in the array rather than on the one this plugin actually defaults to.
+    // No Recommended badges, the right format depends on what reads the file. srt is still pre-picked
+    // on a fresh install or when the stored value is blank/unknown (the generic fallback would
+    // just pick the first entry).
     function conversionFormat(stored) {
         var value = String(stored || '').trim().replace(/^\./, '').toLowerCase();
         var known = CONVERSION_FORMATS.some(function (f) { return f.value === value; });
@@ -2908,7 +2887,7 @@
         }
 
         container.innerHTML = pickable.map(function (user) {
-            var checked = allowed.some(function (id) { return sameUserId(id, user.Id); });
+            var checked = allowed.some(function (id) { return sameId(id, user.Id); });
 
             return '' +
                 '<label class="emby-checkbox-label lapseStackedCheck">' +
@@ -2919,12 +2898,6 @@
                 '</span>' +
                 '</label>';
         }).join('');
-    }
-
-    // Ids come back without dashes, but a config written by hand might have them.
-    function sameUserId(left, right) {
-        return String(left || '').replace(/-/g, '').toLowerCase() ===
-            String(right || '').replace(/-/g, '').toLowerCase();
     }
 
     function updateAccessPanel(view) {
@@ -3042,9 +3015,7 @@
 
     // --- scheduled extraction of embedded subtitles ---
 
-    // Called both when the settings arrive and when the library list does, whichever is
-    // second. keepTicks holds on to what's ticked on the page, so reloading the libraries
-    // after saving the libraries table doesn't throw away an unsaved choice here.
+    // runs when the settings or the libraries arrive, whichever is second. keepTicks keeps unsaved ticks on a reload.
     function renderExtractLibraries(view, keepTicks) {
         var container = view.querySelector('#lapseExtractLibraries');
         if (!container) {
@@ -3133,9 +3104,7 @@
     var extractPollTimer = null;
     var lastExtractStart = null;
 
-    // waitFor is the start time of the run that was showing when a new one was asked
-    // for. Jellyfin's scheduler takes a moment to pick the task up, so until a newer run
-    // shows up the line says it's starting rather than repeating the old one.
+    // waitFor = start time of the run on screen when a new one was asked for, show "starting" until a newer run appears
     function refreshExtractStatus(view, waitFor, triesLeft) {
         return lapseGet('Lapse/Extraction').then(function (status) {
             var line = view.querySelector('#lapseExtractStatus');
@@ -3300,9 +3269,7 @@
         }
     }
 
-    // The provider fields are rendered per provider, so they only exist once the provider
-    // list has loaded. Saving any other part of the page before then must not read them
-    // as empty and wipe someone's API keys, so fall back to what the server last told us.
+    // provider fields only exist once the provider list loaded, don't save them as empty and wipe API keys
     function inputValue(view, selector, savedValue) {
         var input = view.querySelector(selector);
         return input ? input.value : (savedValue || null);
@@ -3332,9 +3299,7 @@
         return rgb + alpha.toString(16).padStart(2, '0').toUpperCase();
     }
 
-    // The sliders each show their own value, and the font section says whether the font
-    // the style names is actually somewhere the player can find it - a style asking for a
-    // font that isn't installed still renders, just in something else.
+    // each slider shows its value, and the font section says whether the player can actually find the font
     function updateReadableLabels(view) {
         view.querySelector('#lapseStyleFontSizeValue').textContent =
             view.querySelector('#lapseStyleFontSize').value;
@@ -3389,9 +3354,7 @@
         strip.textContent = parts.join(' ');
     }
 
-    // The multi engine panel is the one place where "you can't turn this on yet" needs
-    // saying out loud, since it depends on which engines are installed and on which one is
-    // the default - none of which is visible from this page.
+    // explain why multi engine can't be turned on yet, it depends on things not visible on this page
     function renderMultiEngine(view, status) {
         var strip = view.querySelector('#lapseMultiEngineStatus');
         var toggle = view.querySelector('#lapseMultiEngineEnabled');
@@ -3568,9 +3531,7 @@
         updateAppearancePreview(view);
     }
 
-    // Everything on this page saves through the same endpoint, so each save reads the
-    // current form state for all of it rather than sending a partial object that would
-    // blank out whatever the user didn't touch.
+    // one endpoint for the whole page, so always send everything (a partial object would blank the rest)
     function collectSettings(view) {
         var saved = currentSettings || {};
 
@@ -3702,9 +3663,7 @@
 
     // --- deep link from the context menu's old "Advanced" button ---
 
-    // The context menu opens its own dialog now rather than dragging this page along, but
-    // a browser tab left open on the old URL still lands here, so the deep link keeps
-    // working.
+    // the context menu has its own dialog now, but old bookmarked deep links still land here
     function getDeepLinkParams() {
         var hash = window.location.hash || '';
         var hashQueryIndex = hash.indexOf('?');
@@ -3766,9 +3725,7 @@
     document.querySelector('#LapseConfigPage').addEventListener('pageshow', function (e) {
         var view = e.target;
 
-        // pageshow fires again every time the page is navigated back to, and the view
-        // element is the same one. Without this the listeners below get added a second
-        // time, and every button then fires its request twice.
+        // pageshow fires again on every visit with the same view, without this every button fires twice
         if (view.lapseWired) {
             refreshEverything(view);
             startQueuePolling(view);
@@ -3807,8 +3764,14 @@
                 Dashboard.alert('Could not save: ' + err.message);
             });
         });
+        wireItemListActions(view);
+
+        var searchTimer = null;
         view.querySelector('#lapseItemSearch').addEventListener('input', function () {
-            renderItemList(view, allItems);
+            clearTimeout(searchTimer);
+            searchTimer = setTimeout(function () {
+                renderItemList(view, allItems);
+            }, 150);
         });
         view.querySelector('#lapseItemLibraryFilter').addEventListener('change', function () {
             renderItemList(view, allItems);
@@ -3912,11 +3875,9 @@
             testOpenSubtitles(view);
         });
         view.querySelector('#btnSaveMultiEngine').addEventListener('click', function () {
+            // Saving reads the settings back, and drawing those redraws this panel's
+            // status strip and waiting list too.
             saveSettings(view, 'Multi engine settings saved.');
-
-            // Turning it on can change what the status strip has to say about it, and the
-            // waiting list is what the person is most likely looking at next.
-            refreshMultiEngine(view);
         });
         view.querySelector('#btnSaveAppearance').addEventListener('click', function () {
             saveSettings(view, 'Subtitle appearance saved.');

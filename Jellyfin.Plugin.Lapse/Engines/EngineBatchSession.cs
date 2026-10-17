@@ -15,36 +15,26 @@ using Microsoft.Extensions.Logging;
 namespace Jellyfin.Plugin.Lapse.Engines;
 
 /// <summary>
-/// One LAPSE process kept running for a whole queue job, fed one sync at a time.
+/// One warm LAPSE process for a whole queue job, fed one sync at a time.
 ///
-/// LAPSE 2.2.3 added --batch: rather than syncing the file named on its command line, it
-/// reads jobs from stdin, one line each with the same arguments, and answers every line
-/// with one line of JSON. Starting the binary loads onnxruntime and the Silero model,
-/// which is nothing for one press of Sync and real time across a library of a few
-/// thousand subtitles, so the unattended runs keep one process warm instead of starting
-/// one per file.
-///
-/// Anything this can't carry goes back to the ordinary one process per run: a build
-/// without --batch, an engine other than LAPSE, a path the job line has no way to hold (it
-/// has no escapes, so a double quote or a line break can't be passed), or a process that
-/// died part way through a job. The caller gets the same answer either way.
+/// LAPSE 2.2.3+ has --batch: jobs come in on stdin one per line, answers go out as one
+/// JSON line each. Loading onnxruntime and Silero is nothing for one Sync press but adds up
+/// over a few thousand subtitles. Anything this can't carry (no --batch, not LAPSE, a path
+/// with a quote or newline, a crashed process) falls back to one process per run.
 /// </summary>
 public sealed class EngineBatchSession : IDisposable
 {
-    // The answer comes down stdout and the reason for a failure down stderr, two pipes
-    // read separately, so the answer can arrive while the last of the reason is still in
-    // flight. A failed job waits until stderr has been quiet this long, within the limit.
+    // Answer on stdout, reason on stderr, read separately, so the reason can still be in
+    // flight. A failed job waits for stderr to go quiet (up to the limit).
     private static readonly TimeSpan StderrQuiet = TimeSpan.FromMilliseconds(60);
     private static readonly TimeSpan StderrLimit = TimeSpan.FromMilliseconds(750);
 
-    // Closing stdin ends the engine's read loop and it exits on its own. This is how long
-    // it gets to do that before it's killed.
+    // closing stdin makes it exit by itself, this is how long before we kill it
     private static readonly TimeSpan ExitGrace = TimeSpan.FromSeconds(5);
 
     private static readonly char[] Uncarriable = { '"', '\n', '\r' };
 
-    // No BOM: a byte order mark in front of the first job would become part of its first
-    // path, and that file doesn't exist.
+    // no BOM, it'd end up glued to the first job's first path
     private static readonly UTF8Encoding Utf8 = new(encoderShouldEmitUTF8Identifier: false);
 
     private readonly ILogger _logger;
@@ -59,28 +49,22 @@ public sealed class EngineBatchSession : IDisposable
     private bool _disposed;
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="EngineBatchSession"/> class. Nothing
-    /// is started until the first job arrives.
+    /// Initializes a new instance of the <see cref="EngineBatchSession"/> class. Starts nothing until the first job.
     /// </summary>
-    /// <param name="logger">Logger.</param>
     public EngineBatchSession(ILogger logger)
     {
         _logger = logger;
     }
 
     /// <summary>
-    /// Gets how many jobs this session has answered, across however many processes it
-    /// took.
+    /// Gets how many jobs this session answered (across however many processes).
     /// </summary>
     public int JobsAnswered { get; private set; }
 
     /// <summary>
-    /// Says whether a set of arguments can go down a job line. The engine splits a line on
-    /// whitespace outside double quotes and drops the quotes, with no way to escape one, so
-    /// a quote in a path would cut it in two. An empty argument would vanish altogether.
+    /// Says whether these args fit on a job line. The engine splits on whitespace outside
+    /// quotes with no escaping, so no quotes, newlines or empty args.
     /// </summary>
-    /// <param name="args">The arguments a one-shot run would get.</param>
-    /// <returns>True if the line would reach the engine intact.</returns>
     public static bool CanCarry(IReadOnlyList<string> args)
     {
         foreach (var arg in args)
@@ -95,11 +79,8 @@ public sealed class EngineBatchSession : IDisposable
     }
 
     /// <summary>
-    /// Builds the line one job is sent as. Every argument goes in quotes, which carries
-    /// spaces and tabs in paths without having to think about which ones have them.
+    /// Builds a job line, every arg quoted so spaces in paths just work.
     /// </summary>
-    /// <param name="args">The arguments.</param>
-    /// <returns>The job line, without its line break.</returns>
     public static string BuildJobLine(IReadOnlyList<string> args)
     {
         var builder = new StringBuilder();
@@ -118,17 +99,8 @@ public sealed class EngineBatchSession : IDisposable
     }
 
     /// <summary>
-    /// Runs one job through the warm process, starting it first if it isn't running or the
-    /// binary on disk has changed since it was started.
+    /// Runs one job, (re)starting the process if needed. Null means run it the normal way instead.
     /// </summary>
-    /// <param name="binaryPath">The LAPSE binary.</param>
-    /// <param name="args">The arguments a one-shot run would get.</param>
-    /// <param name="prepare">Sets up the environment, same as for a one-shot run.</param>
-    /// <param name="cancellationToken">Cancellation token. Cancelling stops the process,
-    /// the same as it stops a one-shot run, and the next job starts a fresh one.</param>
-    /// <returns>What the job printed, shaped like a one-shot run's output with an exit code
-    /// of 1 for a job the engine couldn't do, or null when this job has to be run on its
-    /// own instead.</returns>
     public async Task<(string Stdout, string Stderr, int ExitCode)?> TryRunAsync(
         string binaryPath,
         IReadOnlyList<string> args,
@@ -174,7 +146,7 @@ public sealed class EngineBatchSession : IDisposable
             }
             catch (IOException ex)
             {
-                // The pipe broke, which means the process is gone.
+                // broken pipe = process is gone
                 _logger.LogWarning(ex, "LAPSE's batch process went away, running this job on its own instead");
                 Stop();
                 return null;
@@ -192,9 +164,8 @@ public sealed class EngineBatchSession : IDisposable
 
             JobsAnswered++;
 
-            // {"error":true} is the whole of what the engine sends back for a job it
-            // couldn't do. Why is on stderr, which is worth waiting a moment for: it's
-            // what tells a damaged file from one with too few cues to judge.
+            // a failed job just says {"error":true}, the why is on stderr so wait a moment
+            // for it (it's what tells "damaged" from "too few cues")
             var failed = !reply.Contains("\"verdict\"", StringComparison.Ordinal);
             var stderr = await TakeStderrAsync(wait: failed).ConfigureAwait(false);
 
@@ -242,14 +213,9 @@ public sealed class EngineBatchSession : IDisposable
         _gate.Dispose();
     }
 
-    [System.Diagnostics.CodeAnalysis.SuppressMessage(
-        "Security",
-        "CA3003:Review code for file path injection vulnerabilities",
-        Justification = "The path is the plugin's own engine binary or an admin-set override, the same one a one-shot run starts.")]
     private Process? EnsureStarted(string binaryPath, Action<ProcessStartInfo> prepare)
     {
-        // Size as well as time: an archive unpacks with the times it was packed with, so
-        // two builds can share one.
+        // size too, unpacked archives keep their packing time so two builds can share one
         var info = new FileInfo(binaryPath);
         var stamp = (info.LastWriteTimeUtc, info.Exists ? info.Length : -1);
 
@@ -262,9 +228,7 @@ public sealed class EngineBatchSession : IDisposable
                 return _process;
             }
 
-            // Gone, or the engine was updated underneath it. The installer swaps files by
-            // renaming, so the old process would carry on happily running the old build
-            // for the rest of a long job; starting again picks up the new one.
+            // gone, or updated underneath us (rename swap, the old process would keep the old build)
             Stop();
         }
 
@@ -292,7 +256,7 @@ public sealed class EngineBatchSession : IDisposable
         }
         catch (System.ComponentModel.Win32Exception ex)
         {
-            // The one-shot run that follows reports this properly, with the engine name.
+            // the normal run after this reports it properly
             _logger.LogDebug(ex, "Could not start LAPSE in batch mode");
             process.Dispose();
             return null;
@@ -310,8 +274,7 @@ public sealed class EngineBatchSession : IDisposable
 
     private void OnStderr(object sender, DataReceivedEventArgs e)
     {
-        // A process that was just stopped can still hand over a last line or two, and
-        // those belong to a job that has already been answered.
+        // late lines from a process we already stopped belong to an old job
         if (e.Data is null || !ReferenceEquals(sender, _process))
         {
             return;
@@ -346,8 +309,7 @@ public sealed class EngineBatchSession : IDisposable
                 await Task.Delay(15).ConfigureAwait(false);
             }
 
-            // Quiet from the start can also mean the reason hasn't arrived yet, so give it
-            // one settle period whatever happened above.
+            // quiet from the start can also mean it hasn't arrived yet, give it one more beat
             await Task.Delay(StderrQuiet).ConfigureAwait(false);
         }
 
@@ -373,8 +335,7 @@ public sealed class EngineBatchSession : IDisposable
         {
             if (!process.HasExited)
             {
-                // LAPSE decodes in-process, but kill the tree anyway in case a build
-                // ever starts a helper.
+                // tree, in case a build ever starts a helper
                 process.Kill(entireProcessTree: true);
             }
         }
