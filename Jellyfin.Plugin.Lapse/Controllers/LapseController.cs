@@ -2333,10 +2333,8 @@ public class LapseController : ControllerBase
             return BadRequest("That subtitle doesn't belong to this item, or the item doesn't exist");
         }
 
-        var (shiftPath, shiftError) = await ResolveToFileAsync(
-            GetVisibleItem(request.ItemId)!,
-            match,
-            cancellationToken).ConfigureAwait(false);
+        var item = GetVisibleItem(request.ItemId)!;
+        var (shiftPath, shiftError) = await ResolveToFileAsync(item, match, cancellationToken).ConfigureAwait(false);
 
         if (shiftPath is null)
         {
@@ -2346,7 +2344,11 @@ public class LapseController : ControllerBase
         try
         {
             var shifted = await _subtitleShifter
-                .ShiftAsync(shiftPath, request.ResolveOffsetSeconds(), request.OutputMode, cancellationToken)
+                .ShiftAsync(
+                    shiftPath,
+                    request.ResolveOffsetSeconds(),
+                    EngineRunner.ResolveOutputMode(request.OutputMode, item.Path, shiftPath),
+                    cancellationToken)
                 .ConfigureAwait(false);
 
             // Nudging a synced subtitle by hand leaves it synced, just more so. Without

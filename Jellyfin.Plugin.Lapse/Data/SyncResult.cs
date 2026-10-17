@@ -126,6 +126,13 @@ public class SyncResult
     public string? OutputPath { get; set; }
 
     /// <summary>
+    /// Gets or sets a value indicating whether the result was written over a copy LAPSE
+    /// extracted from the video. Undoing it then means deleting the file, since the track
+    /// it came from is still in the video.
+    /// </summary>
+    public bool ReplacedExtractedCopy { get; set; }
+
+    /// <summary>
     /// Gets or sets the format the subtitle was in before the plugin converted it so an
     /// engine could read it, or null when no conversion was needed. Worth surfacing,
     /// since it explains why the result has a different extension from the file that was

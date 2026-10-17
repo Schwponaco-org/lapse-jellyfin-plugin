@@ -57,6 +57,17 @@ public class EngineTests
         Assert.Equal(expected, EngineRunner.IsOwnTrack(video, subtitle));
     }
 
+    [Theory]
+    [InlineData("/m/Film.eng.stream2.srt", OutputMode.SidecarOnly, OutputMode.OverwriteNoBackup)]
+    [InlineData("/m/Film.eng.stream2.srt", OutputMode.SidecarWithBackup, OutputMode.OverwriteWithBackup)]
+    [InlineData("/m/Film.eng.stream2.srt", OutputMode.OverwriteWithBackup, OutputMode.OverwriteWithBackup)]
+    [InlineData("/m/Film.en.srt", OutputMode.SidecarOnly, OutputMode.SidecarOnly)]
+    [InlineData("/m/Film.eng.stream2.shifted.srt", OutputMode.SidecarOnly, OutputMode.SidecarOnly)]
+    public void WritesOverAnExtractedCopyInsteadOfAddingASidecar(string subtitle, OutputMode requested, OutputMode expected)
+    {
+        Assert.Equal(expected, EngineRunner.ResolveOutputMode(requested, "/m/Film.mkv", subtitle));
+    }
+
     [Fact]
     public void RecognisesItsOwnSidecars()
     {
