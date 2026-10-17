@@ -1268,9 +1268,11 @@ public class SyncQueueManager : IDisposable
             BackupPath = result.BackupPath,
 
             // Nothing was replaced, so undoing this means taking away the file it added
-            // rather than restoring anything over the top of it.
+            // rather than restoring anything over the top of it. The same goes for an
+            // extracted copy that was written over: its original is still in the video.
             WroteNewFile = result.BackupPath is null
-                && !string.Equals(result.OutputPath, result.InputPath, StringComparison.Ordinal),
+                && (result.ReplacedExtractedCopy
+                    || !string.Equals(result.OutputPath, result.InputPath, StringComparison.Ordinal)),
 
             // The short version. The item's own record carries the full explanation, and
             // a paragraph here pushed the item's name off its row in the activity list.

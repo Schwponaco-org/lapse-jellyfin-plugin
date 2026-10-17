@@ -311,6 +311,33 @@ public class EngineRunner
     }
 
     /// <summary>
+    /// Gets the output mode for one subtitle. A track LAPSE extracted from the video is
+    /// written over rather than given a sidecar: the original is still inside the video,
+    /// so a sidecar would leave Jellyfin showing the same track twice, once embedded and
+    /// once as the untouched copy, next to the synced one.
+    /// </summary>
+    /// <param name="requested">What the request asked for, if anything.</param>
+    /// <param name="videoPath">The video the subtitle belongs to.</param>
+    /// <param name="subtitlePath">The subtitle about to be written.</param>
+    /// <returns>The output mode.</returns>
+    public static OutputMode ResolveOutputMode(OutputMode? requested, string? videoPath, string subtitlePath)
+    {
+        var mode = ResolveOutputMode(requested);
+
+        if (!ExtractedSubtitleNames.IsExtractedTrack(videoPath, subtitlePath))
+        {
+            return mode;
+        }
+
+        return mode switch
+        {
+            OutputMode.SidecarOnly => OutputMode.OverwriteNoBackup,
+            OutputMode.SidecarWithBackup => OutputMode.OverwriteWithBackup,
+            _ => mode
+        };
+    }
+
+    /// <summary>
     /// Checks whether an engine's binary can actually start, not just whether the file is
     /// there. A downloaded binary can still be broken, most commonly a missing shared
     /// library on whatever system it ended up on.
@@ -490,7 +517,7 @@ public class EngineRunner
             outputFormat ??= convertTo;
         }
 
-        var resolvedOutputMode = ResolveOutputMode(outputMode);
+        var resolvedOutputMode = ResolveOutputMode(outputMode, referencePath, subtitlePath);
         var destination = string.IsNullOrWhiteSpace(destinationOverride)
             ? ResolveDestination(subtitlePath, resolvedOutputMode, outputFormat)
             : destinationOverride;
@@ -705,6 +732,8 @@ public class EngineRunner
 
             result.OutputPath = destination;
             result.InputPath = subtitlePath;
+            result.ReplacedExtractedCopy = string.Equals(destination, subtitlePath, StringComparison.Ordinal)
+                && ExtractedSubtitleNames.IsExtractedTrack(referencePath, subtitlePath);
             result.ConvertedFrom = convertedInput is null ? null : SubtitleFormats.GetName(subtitlePath);
             return result;
         }

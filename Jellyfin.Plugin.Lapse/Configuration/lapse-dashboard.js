@@ -78,7 +78,7 @@
         {
             value: 'SidecarOnly',
             label: 'Write a new file',
-            note: 'Leaves the original alone. Jellyfin picks the new file up as an extra subtitle track on its next scan. The safe choice.'
+            note: 'Leaves the original alone. Jellyfin picks the new file up as an extra subtitle track on its next scan. The safe choice. A track pulled out of the video is written over instead, since the original is still inside the video.'
         },
         {
             value: 'SidecarWithBackup',
