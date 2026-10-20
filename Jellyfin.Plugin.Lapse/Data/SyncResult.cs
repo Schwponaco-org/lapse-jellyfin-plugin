@@ -106,6 +106,12 @@ public class SyncResult
     public string? OutputPath { get; set; }
 
     /// <summary>
+    /// Gets or sets a value indicating whether the result went over a copy we extracted from the
+    /// video. Undo deletes it then, the original track is still in the video.
+    /// </summary>
+    public bool ReplacedExtractedCopy { get; set; }
+
+    /// <summary>
     /// Gets or sets the format before we converted it for the engine, or null. Explains a different extension.
     /// </summary>
     public string? ConvertedFrom { get; set; }

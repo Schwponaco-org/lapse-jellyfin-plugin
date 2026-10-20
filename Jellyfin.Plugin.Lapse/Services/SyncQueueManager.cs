@@ -1123,9 +1123,11 @@ public class SyncQueueManager : IDisposable
             InputPath = result.InputPath,
             BackupPath = result.BackupPath,
 
-            // nothing replaced means undo = delete the new file
+            // nothing replaced means undo = delete the new file. Same for an extracted copy
+            // we wrote over, its original is still in the video
             WroteNewFile = result.BackupPath is null
-                && !string.Equals(result.OutputPath, result.InputPath, StringComparison.Ordinal),
+                && (result.ReplacedExtractedCopy
+                    || !string.Equals(result.OutputPath, result.InputPath, StringComparison.Ordinal)),
 
             // keep it short, a paragraph here pushed the name off the row
             Detail = DescribeForHistory(result)

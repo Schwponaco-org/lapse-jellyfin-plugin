@@ -139,7 +139,11 @@ public partial class LapseController
         try
         {
             var shifted = await _subtitleShifter
-                .ShiftAsync(path, request.ResolveOffsetSeconds(), request.OutputMode, cancellationToken)
+                .ShiftAsync(
+                    path,
+                    request.ResolveOffsetSeconds(),
+                    EngineRunner.ResolveOutputMode(request.OutputMode, item.Path, path),
+                    cancellationToken)
                 .ConfigureAwait(false);
 
             // still synced after a nudge, don't let the newer write time make it look replaced

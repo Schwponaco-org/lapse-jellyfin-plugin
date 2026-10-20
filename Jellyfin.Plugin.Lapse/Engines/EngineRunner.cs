@@ -228,6 +228,28 @@ public class EngineRunner
     }
 
     /// <summary>
+    /// Gets the output mode for one subtitle. A track we extracted from the video gets written
+    /// over instead of getting a sidecar, the original is still inside the video and a sidecar
+    /// would have Jellyfin list the same track three times.
+    /// </summary>
+    public static OutputMode ResolveOutputMode(OutputMode? requested, string? videoPath, string subtitlePath)
+    {
+        var mode = ResolveOutputMode(requested);
+
+        if (!ExtractedSubtitleNames.IsExtractedTrack(videoPath, subtitlePath))
+        {
+            return mode;
+        }
+
+        return mode switch
+        {
+            OutputMode.SidecarOnly => OutputMode.OverwriteNoBackup,
+            OutputMode.SidecarWithBackup => OutputMode.OverwriteWithBackup,
+            _ => mode
+        };
+    }
+
+    /// <summary>
     /// Says whether a subtitle was extracted from the video it's being synced against:
     /// same folder, starts with the video's name and has the ".stream8" (or older ".track8")
     /// marker an extraction adds, possibly with a sidecar suffix after it.
@@ -348,7 +370,7 @@ public class EngineRunner
             outputFormat ??= convertTo;
         }
 
-        var resolvedOutputMode = ResolveOutputMode(outputMode);
+        var resolvedOutputMode = ResolveOutputMode(outputMode, referencePath, subtitlePath);
         var destination = string.IsNullOrWhiteSpace(destinationOverride)
             ? ResolveDestination(subtitlePath, resolvedOutputMode, outputFormat)
             : destinationOverride;
@@ -537,6 +559,8 @@ public class EngineRunner
 
             result.OutputPath = destination;
             result.InputPath = subtitlePath;
+            result.ReplacedExtractedCopy = string.Equals(destination, subtitlePath, StringComparison.Ordinal)
+                && ExtractedSubtitleNames.IsExtractedTrack(referencePath, subtitlePath);
             result.ConvertedFrom = convertedInput is null ? null : SubtitleFormats.GetName(subtitlePath);
             return result;
         }
