@@ -140,7 +140,6 @@ public partial class LapseEngine : IEngine
         // a track extracted from this video must go against the audio, and the runner asks
         // for --force on the retry after "too few cues"
         AddIfSupported(args, runtime, "--no-embedded", values.GetBool("noEmbedded") || options.IgnoreEmbedded);
-        AddIfSupported(args, runtime, "--full-scan", values.GetBool("fullScan"));
         AddIfSupported(args, runtime, "--no-cache", values.GetBool("noCache"));
         AddIfSupported(args, runtime, "--force", values.GetBool("force") || options.ForceAnyway);
 
@@ -328,16 +327,6 @@ public partial class LapseEngine : IEngine
             Label = "Ignore embedded subtitles",
             Description = "Always listen to the audio instead of lining up against a subtitle track already inside the video. Slower, but right when the embedded track is itself out of sync.",
             Flag = "--no-embedded",
-            Kind = EngineParameterKind.Boolean,
-            DefaultValue = "false"
-        });
-
-        descriptor.Parameters.Add(new EngineParameter
-        {
-            Key = "fullScan",
-            Label = "Listen to the whole file",
-            Description = "Decode all the audio instead of sampling the first stretch of it. Slower, and worth it on films that open with a long silent or musical passage.",
-            Flag = "--full-scan",
             Kind = EngineParameterKind.Boolean,
             DefaultValue = "false"
         });

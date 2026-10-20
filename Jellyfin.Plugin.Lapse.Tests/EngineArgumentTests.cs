@@ -62,16 +62,16 @@ public class EngineArgumentTests
     public void LapseOnlyPassesFlagsTheInstalledBuildKnows()
     {
         var engine = new LapseEngine();
-        var values = Values(engine, ("fps", "25"), ("fullScan", "true"), ("encoding", "utf8"));
+        var values = Values(engine, ("fps", "25"), ("noCache", "true"), ("encoding", "utf8"));
 
         var old = engine.BuildArguments(Options(engine, Runtime("--output"), values));
-        var current = engine.BuildArguments(Options(engine, Runtime("--output", "--fps", "--full-scan", "--encoding", "--json", "--no-backup"), values));
+        var current = engine.BuildArguments(Options(engine, Runtime("--output", "--fps", "--no-cache", "--encoding", "--json", "--no-backup"), values));
 
         Assert.DoesNotContain("--fps", old);
-        Assert.DoesNotContain("--full-scan", old);
+        Assert.DoesNotContain("--no-cache", old);
         Assert.DoesNotContain("--encoding", old);
         Assert.Contains("--fps", current);
-        Assert.Contains("--full-scan", current);
+        Assert.Contains("--no-cache", current);
         Assert.Contains("--no-backup", current);
         Assert.Contains("--json", current);
         Assert.Equal("utf8", current[current.ToList().IndexOf("--encoding") + 1]);
