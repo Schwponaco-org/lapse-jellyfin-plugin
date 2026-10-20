@@ -20,6 +20,8 @@ public static class TestHost
 
     public static string Root { get; } = Path.Combine(Path.GetTempPath(), "lapse-tests-" + Guid.NewGuid().ToString("N")[..8]);
 
+    public static IApplicationPaths ApplicationPaths { get; } = new Paths(Root);
+
     public static Plugin Plugin
     {
         get
@@ -29,7 +31,7 @@ public static class TestHost
                 if (Plugin.Instance is null)
                 {
                     Directory.CreateDirectory(Root);
-                    _ = new Plugin(new Paths(Root), new Xml(), NullLogger<Plugin>.Instance);
+                    _ = new Plugin(ApplicationPaths, new Xml(), NullLogger<Plugin>.Instance);
                 }
 
                 return Plugin.Instance!;

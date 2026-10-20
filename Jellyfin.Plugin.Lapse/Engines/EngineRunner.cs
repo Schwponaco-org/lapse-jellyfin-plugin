@@ -690,6 +690,7 @@ public class EngineRunner
 
     // Strict on purpose. The offset has to be one the engine reported (null isn't zero),
     // and a stretch or split changes timing across the whole file however small the shift.
+    // So does --snap, it moves cues onto cuts even when the offset itself is zero.
     private static bool IsAlreadyInSync(SyncResult result)
     {
         var config = Plugin.Instance?.Configuration;
@@ -698,7 +699,7 @@ public class EngineRunner
             return false;
         }
 
-        if (result.Slope is not null || result.Mode == SyncMode.Split)
+        if (result.Slope is not null || result.Mode == SyncMode.Split || result.Snapped > 0)
         {
             return false;
         }
