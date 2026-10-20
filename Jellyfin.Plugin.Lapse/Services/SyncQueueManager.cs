@@ -321,7 +321,10 @@ public class SyncQueueManager : IDisposable
         if (result.AlreadyInSync)
         {
             var tolerance = Plugin.Instance?.Configuration.AlreadyInSyncToleranceMs ?? 100;
-            return $"Already in sync (the engine would have moved it {result.OffsetMs}ms, which is inside the "
+            var moved = result.PartOffsetsMs is { Count: > 1 } split
+                ? "moved its parts " + string.Join(", ", split.Select(o => o + "ms"))
+                : $"moved it {result.OffsetMs}ms";
+            return $"Already in sync (the engine would have {moved}, which is inside the "
                 + $"{tolerance}ms tolerance), so the file was left exactly as it was.";
         }
 
@@ -1138,7 +1141,12 @@ public class SyncQueueManager : IDisposable
     {
         var parts = new List<string>();
 
-        if (result.OffsetMs is not null and not 0)
+        // a split file's one offset_ms only covers one part, 2.3.0 says where each went
+        if (result.PartOffsetsMs is { Count: > 1 } split)
+        {
+            parts.Add("moved " + string.Join(" then ", split.Select(o => o + "ms")));
+        }
+        else if (result.OffsetMs is not null and not 0)
         {
             parts.Add($"moved {result.OffsetMs}ms");
         }

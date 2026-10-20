@@ -32,4 +32,9 @@ public interface IEngine
     /// Reads whatever the engine printed and works out what happened.
     /// </summary>
     SyncResult ParseResult(string stdout, string stderr, int exitCode, SyncMode requestedMode, int requestedPenalty);
+
+    /// <summary>
+    /// Gets environment variables the engine needs set from its parameters. Most need none.
+    /// </summary>
+    IReadOnlyDictionary<string, string> GetEnvironment(EngineParameterValues values) => new Dictionary<string, string>();
 }

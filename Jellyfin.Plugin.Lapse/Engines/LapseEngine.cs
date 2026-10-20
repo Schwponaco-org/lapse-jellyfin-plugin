@@ -16,7 +16,8 @@ namespace Jellyfin.Plugin.Lapse.Engines;
 ///
 /// lapse &lt;video_or_subtitle&gt; &lt;subtitle&gt; [auto|ols|nosplit|split] [penalty]
 ///       [--output PATH] [--confidence N] [--audio-track N] [--sub-track N]
-///       [--fps N] [--snap [ms]] [--encoding NAME]
+///       [--fps N] [--snap [ms]] [--encoding NAME] [--from VIDEO] [--min-shift ms]
+///       [--whisper MODEL]
 ///       [--no-backup] [--no-sidecar] [--no-embedded] [--full-scan] [--no-cache]
 ///       [--force] [--strict] [--dry-run] [--json] [--quiet]
 ///
@@ -137,13 +138,40 @@ public partial class LapseEngine : IEngine
             values.AddText(args, "encoding", "--encoding");
         }
 
-        // a track extracted from this video must go against the audio, and the runner asks
-        // for --force on the retry after "too few cues"
-        AddIfSupported(args, runtime, "--no-embedded", values.GetBool("noEmbedded") || options.IgnoreEmbedded);
+        // only once the model and whisper-cli are really there, see WhisperSetup
+        if (runtime.HasFlag("--whisper") && WhisperSetup.Check(values).Usable)
+        {
+            values.AddText(args, WhisperSetup.ModelKey, "--whisper");
+        }
+
+        var fromCopy = options.FromVideoPath is not null && runtime.HasFlag("--from");
+        if (fromCopy)
+        {
+            args.Add("--from");
+            args.Add(options.FromVideoPath!);
+        }
+
+        // A track extracted from this video must go against the audio, and so must a move
+        // between copies, the point there is comparing speech with speech. The runner asks
+        // for --force on the retry after "too few cues".
+        AddIfSupported(args, runtime, "--no-embedded", values.GetBool("noEmbedded") || options.IgnoreEmbedded || fromCopy);
         AddIfSupported(args, runtime, "--no-cache", values.GetBool("noCache"));
         AddIfSupported(args, runtime, "--force", values.GetBool("force") || options.ForceAnyway);
 
         return args;
+    }
+
+    /// <inheritdoc />
+    public IReadOnlyDictionary<string, string> GetEnvironment(EngineParameterValues values)
+    {
+        var environment = new Dictionary<string, string>();
+
+        if (WhisperSetup.Check(values) is { Usable: true, Cli: { } cli })
+        {
+            environment[WhisperSetup.CliVariable] = cli;
+        }
+
+        return environment;
     }
 
     /// <inheritdoc />
@@ -240,11 +268,13 @@ public partial class LapseEngine : IEngine
         descriptor.Modes.Add(new EngineModeOption(
             SyncMode.Split,
             "Split",
-            "Gives different parts of the file different timing. For discs cut around ad breaks, or a film joined from two rips."));
+            "Gives different parts of the file different timing. For discs cut around ad breaks, or a film joined from two rips. "
+            + "When the video has chapters, LAPSE takes them as likely places for a cut."));
         descriptor.Modes.Add(new EngineModeOption(
             SyncMode.Ols,
             "Framerate fix",
-            "Stretches the file so it drifts less as it plays. For a subtitle made for a 25fps release played against a 23.976fps one, where the gap grows from nothing to minutes by the end."));
+            "Stretches the file so it drifts less as it plays. For a subtitle made for a 25fps release played against a 23.976fps one, where the gap grows from nothing to minutes by the end. "
+            + "A drift that isn't one of the usual framerate pairs is searched for as well."));
 
         descriptor.Parameters.Add(new EngineParameter
         {
@@ -284,14 +314,15 @@ public partial class LapseEngine : IEngine
         descriptor.Parameters.Add(new EngineParameter
         {
             Key = "snap",
-            Label = "Snap cue starts onto picture cuts (ms)",
+            Label = "Snap cues onto picture cuts (ms)",
             Description = "A subtitler writing to picture puts a line up on the cut, so a file moved by "
                 + "one number can be right to within a few frames and still read late all the way through. "
                 + "This pulls a cue start that lands within the given window onto the cut itself, and moves "
-                + "the cue's end with it so the line stays up just as long. The cuts come from the keyframes "
-                + "already in the video, which costs an index read and no decoding. Blank leaves it off; 120 "
-                + "is the engine's own window. It does nothing when the reference is another subtitle rather "
-                + "than a video, or when the video was encoded without scene detection.",
+                + "the cue's end with it so the line stays up just as long. From LAPSE 2.3.0 an end that then "
+                + "sits next to a cut goes onto it too, so a line doesn't hang over into the next shot. The cuts "
+                + "come from the keyframes already in the video, so nothing has to be decoded. Blank leaves it "
+                + "off, 120 is the engine's own window. It does nothing when the reference is another subtitle "
+                + "rather than a video, or when the video was encoded without scene detection.",
             Flag = "--snap",
             Kind = EngineParameterKind.Number,
             Minimum = 0,
@@ -323,6 +354,39 @@ public partial class LapseEngine : IEngine
 
         descriptor.Parameters.Add(new EngineParameter
         {
+            Key = WhisperSetup.ModelKey,
+            Label = "Whisper model",
+            Description = "Voice detection hears a voice, not whether it says anything, so songs, crowds "
+                + "and shouting over gunfire all count as speech. Point this at a whisper.cpp model and LAPSE "
+                + "only trusts the stretches whisper hears words in, which makes the right answer stand out "
+                + "more on a busy soundtrack. Keep the file's own name (ggml-base.en.bin for English, "
+                + "ggml-base.bin for anything else). The first sync of a film transcribes it, about two "
+                + "minutes for a two hour film on a recent machine and a lot longer on a small server without "
+                + "a GPU, after that it's cached. Blank leaves it off.",
+            Flag = "--whisper",
+            Kind = EngineParameterKind.Text,
+            BlankMeansUnset = true,
+            IsPath = true,
+            Since = "2.3.0"
+        });
+
+        descriptor.Parameters.Add(new EngineParameter
+        {
+            Key = WhisperSetup.CliKey,
+            Label = "whisper-cli program",
+            Description = "LAPSE doesn't ship whisper.cpp, it runs whisper-cli. Blank looks for it on the "
+                + "server's PATH, which the official Jellyfin image doesn't have it on. Build it from the "
+                + "whisper.cpp repo, put it somewhere Jellyfin can read and point this at it. Only used when "
+                + "a whisper model is set.",
+            Kind = EngineParameterKind.Text,
+            BlankMeansUnset = true,
+            IsPath = true,
+            Since = "2.3.0",
+            RequiresFlag = "--whisper"
+        });
+
+        descriptor.Parameters.Add(new EngineParameter
+        {
             Key = "noEmbedded",
             Label = "Ignore embedded subtitles",
             Description = "Always listen to the audio instead of lining up against a subtitle track already inside the video. Slower, but right when the embedded track is itself out of sync.",
@@ -335,7 +399,7 @@ public partial class LapseEngine : IEngine
         {
             Key = "noCache",
             Label = "Do not reuse the speech cache",
-            Description = "The engine saves where it found speech so other tracks for the same video start from the answer. Turn this off only when you suspect a stale cache.",
+            Description = "The engine saves where it found speech, and from 2.3.0 the timings of the subtitle tracks inside the video, so other subtitles for the same video start from the answer. Turn this on only when you suspect a stale cache.",
             Flag = "--no-cache",
             Kind = EngineParameterKind.Boolean,
             DefaultValue = "false"
@@ -433,6 +497,20 @@ public partial class LapseEngine : IEngine
                 result.Snapped = (int)snapped.Value;
             }
 
+            // 2.3.0 says where each part went, the single offset_ms only covers one of them
+            if (parts is > 1 && ReadOffsets(root) is { Count: > 1 } offsets)
+            {
+                result.PartOffsetsMs = offsets;
+            }
+
+            var ignored = ReadDouble(root, "ignored_cues");
+            if (ignored is > 0)
+            {
+                result.IgnoredCues = (int)ignored.Value;
+            }
+
+            result.Reference = ReadString(root, "reference");
+
             if (!written)
             {
                 result.Error = ReadString(root, "why") ?? "The engine decided not to write anything.";
@@ -449,6 +527,7 @@ public partial class LapseEngine : IEngine
     private static string DescribeReport(JsonElement root, string verdict)
     {
         var cues = ReadDouble(root, "cues");
+        var ignored = ReadDouble(root, "ignored_cues");
         var coverage = ReadDouble(root, "coverage");
         var reference = ReadString(root, "reference");
 
@@ -456,12 +535,24 @@ public partial class LapseEngine : IEngine
 
         if (reference is not null)
         {
-            parts.Add("matched against " + (reference == "vad" ? "the audio" : reference));
+            parts.Add("matched against " + reference switch
+            {
+                "vad" => "the audio",
+                "vad+whisper" => "the audio, where whisper heard words",
+                "embedded" => "a subtitle track inside the video",
+                "subtitle" => "the reference subtitle",
+                _ => reference
+            });
         }
 
         if (cues.HasValue)
         {
             parts.Add(EngineParameterValues.Format(cues.Value) + " cues");
+        }
+
+        if (ignored is > 0)
+        {
+            parts.Add(EngineParameterValues.Format(ignored.Value) + " of them left out of the measuring (sound effects, credits)");
         }
 
         if (coverage is < 1.0)
@@ -470,6 +561,25 @@ public partial class LapseEngine : IEngine
         }
 
         return string.Join(", ", parts);
+    }
+
+    private static List<int>? ReadOffsets(JsonElement root)
+    {
+        if (!root.TryGetProperty("offsets", out var element) || element.ValueKind != JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        var offsets = new List<int>();
+        foreach (var value in element.EnumerateArray())
+        {
+            if (value.ValueKind == JsonValueKind.Number)
+            {
+                offsets.Add((int)Math.Round(value.GetDouble()));
+            }
+        }
+
+        return offsets;
     }
 
     private static string? ReadString(JsonElement root, string name)

@@ -96,8 +96,17 @@ public partial class LapseController
             CapabilitySource = runtime.Source,
             VadBackend = vadBackend,
             SupportsOutputFlag = runtime.SupportsOutputFlag,
-            SupportsNoBackupFlag = runtime.SupportsNoBackupFlag
+            SupportsNoBackupFlag = runtime.SupportsNoBackupFlag,
+            SupportsFromFlag = runtime.HasFlag("--from")
         };
+
+        // only worth a word when this engine has whisper settings and a build that takes them
+        if (installed && descriptor.Parameters.Exists(p => p.Key == WhisperSetup.ModelKey) && runtime.HasFlag("--whisper"))
+        {
+            var whisper = WhisperSetup.Check(values);
+            info.WhisperProblem = whisper.Problem;
+            info.WhisperReady = whisper.Usable;
+        }
 
         foreach (var mode in descriptor.Modes)
         {
@@ -118,7 +127,15 @@ public partial class LapseController
                 Minimum = parameter.Minimum,
                 Maximum = parameter.Maximum,
                 Step = parameter.Step,
-                BlankMeansUnset = parameter.BlankMeansUnset
+                BlankMeansUnset = parameter.BlankMeansUnset,
+                Since = parameter.Since,
+                IsPath = parameter.IsPath,
+
+                // An older build refuses flags it doesn't know, so the runner leaves those off.
+                // Worth saying on the card, or the setting just looks broken.
+                Supported = !installed || !runtime.Probed
+                    || (parameter.RequiresFlag ?? parameter.Flag) is not { } needed
+                    || runtime.HasFlag(needed)
             };
 
             foreach (var option in parameter.Options)

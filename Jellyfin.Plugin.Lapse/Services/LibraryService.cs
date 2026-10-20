@@ -4,7 +4,9 @@
 
 using System;
 using System.Collections.Generic;
+using System.IO;
 using Jellyfin.Data.Enums;
+using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Plugin.Lapse.Data;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
@@ -236,6 +238,110 @@ public class LibraryService
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Finds other copies of a film or episode that a subtitle could be moved from: the other
+    /// versions Jellyfin groups with it, and items in any library with the same IMDb, TMDb or
+    /// TVDb id. Only real files, and for a user only what they can see.
+    /// </summary>
+    public List<(Video Copy, bool IsVersion)> FindOtherCopies(BaseItem item, User? user)
+    {
+        var found = new List<(Video Copy, bool IsVersion)>();
+        if (item is not Video video || string.IsNullOrEmpty(video.Path))
+        {
+            return found;
+        }
+
+        var paths = new HashSet<string>(StringComparer.Ordinal) { video.Path };
+
+        void Add(BaseItem? candidate, bool isVersion)
+        {
+            if (candidate is Video copy && !copy.IsVirtualItem && !string.IsNullOrEmpty(copy.Path)
+                && File.Exists(copy.Path) && paths.Add(copy.Path))
+            {
+                found.Add((copy, isVersion));
+            }
+        }
+
+        // We can be handed either end of a version group, so start from the primary. The
+        // versions come with the item, a user who can see one can see them all.
+        var primary = Guid.TryParse(video.PrimaryVersionId, out var primaryId) && _libraryManager.GetItemById(primaryId) is Video main
+            ? main
+            : FindLocalPrimary(video) ?? video;
+
+        Add(primary, true);
+
+        foreach (var linked in primary.GetLinkedAlternateVersions())
+        {
+            Add(linked, true);
+        }
+
+        foreach (var id in primary.GetLocalAlternateVersionIds())
+        {
+            Add(_libraryManager.GetItemById(id), true);
+        }
+
+        var ids = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var provider in new[] { MetadataProvider.Imdb, MetadataProvider.Tmdb, MetadataProvider.Tvdb })
+        {
+            var value = item.GetProviderId(provider);
+            if (!string.IsNullOrWhiteSpace(value) && value != "0")
+            {
+                ids[provider.ToString()] = value;
+            }
+        }
+
+        if (ids.Count == 0)
+        {
+            return found;
+        }
+
+        var query = new InternalItemsQuery
+        {
+            IncludeItemTypes = new[] { item.GetBaseItemKind() },
+            HasAnyProviderId = ids,
+            IsVirtualItem = false,
+            Recursive = true
+        };
+
+        foreach (var other in _libraryManager.GetItemList(query))
+        {
+            if (user is null || other.IsVisibleStandalone(user))
+            {
+                Add(other, false);
+            }
+        }
+
+        return found;
+    }
+
+    // A version found next to the main file ("Film - TV.mkv" beside "Film - Bluray.mkv") has
+    // no PrimaryVersionId pointing back, only the main item lists it. So look at the videos
+    // in the same folder.
+    private Video? FindLocalPrimary(Video video)
+    {
+        var folder = Path.GetDirectoryName(video.Path);
+        if (string.IsNullOrEmpty(folder) || !Directory.Exists(folder))
+        {
+            return null;
+        }
+
+        foreach (var file in Directory.EnumerateFiles(folder))
+        {
+            if (string.Equals(file, video.Path, StringComparison.Ordinal) || SubtitleFormats.IsSubtitle(file))
+            {
+                continue;
+            }
+
+            if (_libraryManager.FindByPath(file, false) is Video candidate
+                && Array.Exists(candidate.LocalAlternateVersions, path => string.Equals(path, video.Path, StringComparison.Ordinal)))
+            {
+                return candidate;
+            }
+        }
+
+        return null;
     }
 
     private sealed record LibraryIdSnapshot(HashSet<Guid> Ids, DateTime ReadUtc);

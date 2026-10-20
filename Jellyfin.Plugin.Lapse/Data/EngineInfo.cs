@@ -89,6 +89,22 @@ public class EngineParameterInfo
     public bool BlankMeansUnset { get; set; }
 
     /// <summary>
+    /// Gets or sets the engine release that added this, or null.
+    /// </summary>
+    public string? Since { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether the installed build takes the flag. True when
+    /// nothing is installed yet, there is nothing to warn about then.
+    /// </summary>
+    public bool Supported { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether the value is a file on the server.
+    /// </summary>
+    public bool IsPath { get; set; }
+
+    /// <summary>
     /// Gets the choices for a select parameter, as value/label pairs.
     /// </summary>
     public List<EngineModeInfo> Options { get; } = new();
@@ -297,6 +313,22 @@ public class EngineInfo
     /// Gets or sets a value indicating whether the installed binary takes --no-backup.
     /// </summary>
     public bool SupportsNoBackupFlag { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether the installed binary can move a subtitle from
+    /// one copy of a film to another (--from, LAPSE 2.3.0).
+    /// </summary>
+    public bool SupportsFromFlag { get; set; }
+
+    /// <summary>
+    /// Gets or sets why the whisper settings won't be used, or null when they're fine or not set.
+    /// </summary>
+    public string? WhisperProblem { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether syncs will listen for words with whisper.
+    /// </summary>
+    public bool WhisperReady { get; set; }
 
     /// <summary>
     /// Gets or sets the reason there's no download for this machine, when there isn't one.

@@ -647,6 +647,7 @@
             }
 
             addChooseSubtitleButton(scroller, context.id);
+            addMoveFromCopyButton(scroller, context);
         }
 
         keepSheetOnScreen(scroller.closest('.actionSheet') || scroller);
@@ -680,6 +681,36 @@
             keepSheetOnScreen(scroller.closest('.actionSheet') || scroller);
         }).catch(function (err) {
             log('could not check for waiting subtitles on ' + itemId + ': ' + err);
+        });
+    }
+
+    // Only on an item with another copy to take a subtitle from (another version, or the same
+    // film in another library), so most menus don't grow an entry that could do nothing.
+    function addMoveFromCopyButton(scroller, context) {
+        lapseGet('Lapse/Items/' + context.id + '/Copies').then(function (list) {
+            var copies = (list && list.Copies) || [];
+
+            if (!copies.length || !document.body.contains(scroller) || scroller.querySelector('.lapseCopyButton')) {
+                return;
+            }
+
+            var button = makeMenuButton('lapse-move-from-copy', 'Move Subtitles from Another Copy', 'content_copy', function () {
+                openMoveFromCopyPopup(context, list);
+            });
+
+            button.classList.add('lapseCopyButton');
+
+            // next to the other sync entries rather than at the bottom
+            var reference = scroller.querySelector('[data-id="lapse-sync-all-subtitles"]');
+            if (reference && reference.parentNode === scroller) {
+                scroller.insertBefore(button, reference.nextSibling);
+            } else {
+                scroller.appendChild(button);
+            }
+
+            keepSheetOnScreen(scroller.closest('.actionSheet') || scroller);
+        }).catch(function (err) {
+            log('could not look for other copies of ' + context.id + ': ' + err);
         });
     }
 
@@ -888,8 +919,14 @@
 
     function describeResult(result) {
         var parts = [];
+        var split = result.PartOffsetsMs && result.PartOffsetsMs.length > 1 ? result.PartOffsetsMs : null;
 
-        if (result.OffsetMs != null && result.OffsetMs !== 0) {
+        // LAPSE 2.3.0 says where each part went, older builds give one number for the lot
+        if (split) {
+            parts.push('split into ' + split.length + ' parts, moved ' + split.map(function (o) {
+                return o + 'ms';
+            }).join(' then '));
+        } else if (result.OffsetMs != null && result.OffsetMs !== 0) {
             parts.push('offset ' + result.OffsetMs + 'ms');
         }
 
@@ -897,8 +934,16 @@
             parts.push('stretched by ' + (result.Slope * 100).toFixed(3) + '%');
         }
 
-        if (result.Mode === 'Split' && result.Penalty != null) {
+        if (!split && result.Mode === 'Split' && result.Penalty != null) {
             parts.push('split into ' + result.Penalty + ' parts');
+        }
+
+        if (result.Snapped) {
+            parts.push(result.Snapped + (result.Snapped === 1 ? ' line' : ' lines') + ' snapped onto picture cuts');
+        }
+
+        if (result.Reference === 'vad+whisper') {
+            parts.push('checked with whisper');
         }
 
         if (parts.length === 0 && result.EngineOutput) {
@@ -916,14 +961,22 @@
         return parts.join(', ') || 'done';
     }
 
+    // "moved it 20ms", or for a split file every part, which LAPSE 2.3.0 reports
+    function wouldHaveMoved(result) {
+        var parts = result.PartOffsetsMs && result.PartOffsetsMs.length > 1 ? result.PartOffsetsMs : null;
+        return parts
+            ? 'moved its parts ' + parts.map(function (o) { return o + 'ms'; }).join(', ')
+            : 'moved it ' + (result.OffsetMs || 0) + 'ms';
+    }
+
     function describeSyncOutcome(result) {
         if (!result.Success) {
             return 'Sync failed: ' + result.Error;
         }
 
         if (result.AlreadyInSync) {
-            return 'Already in sync, so nothing was changed. The engine would have moved it ' +
-                (result.OffsetMs || 0) + 'ms, which is inside the tolerance set under File output.';
+            return 'Already in sync, so nothing was changed. The engine would have ' + wouldHaveMoved(result) +
+                ', which is inside the tolerance set under File output.';
         }
 
         if (result.CandidateCount > 0) {
@@ -3107,6 +3160,120 @@
             clearInterval(progressPollHandle);
             progressPollHandle = null;
         }
+    }
+
+    // --- "Move Subtitles from Another Copy" ---
+
+    function openMoveFromCopyPopup(context, list) {
+        if (!list.CanMove) {
+            showLapseToast(list.Problem || 'Moving a subtitle between copies needs LAPSE 2.3.0 or newer.');
+            return;
+        }
+
+        // copies with something to move first, that's nearly always the one wanted
+        var copies = list.Copies.slice().sort(function (a, b) {
+            return (b.SubtitleCount > 0) - (a.SubtitleCount > 0);
+        });
+
+        var overlay = openOverlay(
+            '<h3>Move Subtitles from Another Copy</h3>' +
+            '<div class="fieldDescription lapseDialogIntro">For a subtitle that fits another copy (a TV recording, another cut, ' +
+            'a PAL release) but not this one. LAPSE listens to both copies and moves every line the way the ' +
+            'speech around it moved, so a scene that was cut or a copy that runs faster is no problem. The ' +
+            'result is a new file named after this video, nothing that is already there gets replaced.</div>' +
+            '<div class="selectContainer">' +
+            '  <label class="selectLabel">The copy the subtitle fits</label>' +
+            '  <select is="emby-select" id="lapseCopySource" class="emby-select-withcolor emby-select">' +
+            copies.map(function (c) {
+                return '<option value="' + escapeHtml(c.ItemId) + '">' + escapeHtml(c.Name) + '</option>';
+            }).join('') +
+            '  </select>' +
+            '  <div class="fieldDescription" id="lapseCopyDetail"></div>' +
+            '</div>' +
+            '<div class="selectContainer">' +
+            '  <label class="selectLabel">Subtitle</label>' +
+            '  <select is="emby-select" id="lapseCopySubtitle" class="emby-select-withcolor emby-select"></select>' +
+            '</div>' +
+            '<div class="lapseDialogButtons">' +
+            '  <button is="emby-button" type="button" class="raised" id="lapseCopyCancel"><span>Cancel</span></button>' +
+            '  <button is="emby-button" type="button" class="raised button-submit" id="lapseCopyMove" disabled><span>Move</span></button>' +
+            '</div>');
+
+        var sourceSelect = overlay.querySelector('#lapseCopySource');
+        var subtitleSelect = overlay.querySelector('#lapseCopySubtitle');
+        var moveButton = overlay.querySelector('#lapseCopyMove');
+
+        function loadSubtitles() {
+            var wanted = sourceSelect.value;
+            var copy = copies.filter(function (c) { return c.ItemId === wanted; })[0];
+            overlay.querySelector('#lapseCopyDetail').textContent = copy
+                ? copy.Detail + ', ' + copy.SubtitleCount + (copy.SubtitleCount === 1 ? ' subtitle' : ' subtitles')
+                : '';
+
+            subtitleSelect.innerHTML = '<option value="">Loading...</option>';
+            moveButton.disabled = true;
+
+            lapseGet('Lapse/Items/' + wanted + '/Subtitles').then(function (subtitles) {
+                // the list may have been switched again while this was loading
+                if (sourceSelect.value !== wanted) {
+                    return;
+                }
+
+                var usable = subtitles.filter(function (s) { return s.Supported !== false; });
+                if (!usable.length) {
+                    subtitleSelect.innerHTML = '<option value="">That copy has no subtitle LAPSE can read</option>';
+                    return;
+                }
+
+                subtitleSelect.innerHTML = subtitleOptionsHtml(usable);
+                moveButton.disabled = false;
+            }).catch(function (err) {
+                subtitleSelect.innerHTML = '<option value="">Could not list its subtitles: ' + escapeHtml(err.message) + '</option>';
+            });
+        }
+
+        sourceSelect.addEventListener('change', loadSubtitles);
+        loadSubtitles();
+
+        overlay.querySelector('#lapseCopyCancel').addEventListener('click', function () {
+            overlay.remove();
+        });
+
+        moveButton.addEventListener('click', function () {
+            var request = {
+                ItemId: context.id,
+                SourceItemId: sourceSelect.value,
+                SubtitlePath: subtitleSelect.value
+            };
+
+            overlay.remove();
+            showLapseToast('Moving it across. LAPSE listens to both copies, so give it a minute...');
+
+            lapsePost('Lapse/SyncFromCopy', request).then(function (result) {
+                showLapseToast(describeMoveOutcome(result));
+            }).catch(function (err) {
+                showLapseToast('Could not move it: ' + err.message);
+            });
+        });
+    }
+
+    function describeMoveOutcome(result) {
+        if (!result.Success) {
+            return 'Could not move it: ' + result.Error;
+        }
+
+        if (result.Skipped) {
+            return 'LAPSE could not line the two copies up well enough (' + describeResult(result) +
+                '), so nothing was written. Check that both really are the same film.';
+        }
+
+        if (result.Unconfirmed) {
+            return 'LAPSE was not sure about this one (' + describeResult(result) + '). It was written as ' +
+                baseName(result.OutputPath || '') + ' for you to check, and is not counted as synced.';
+        }
+
+        return 'Moved! Written as ' + baseName(result.OutputPath || '') + ': ' + describeResult(result) +
+            '. It shows up as a subtitle track once Jellyfin has had a look at the folder.';
     }
 
     // --- the Advanced dialog ---

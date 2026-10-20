@@ -1322,6 +1322,13 @@
     margin-top: .15em;
 }
 
+/* a setting the installed engine is too old for */
+.lapseNeedsUpdate {
+    opacity: .9;
+    border-left: 2px solid var(--lapse-accent, #00A4DC);
+    padding-left: .6em;
+}
+
 .lapseEngineLinks {
     margin-top: .8em;
     font-size: .85em;

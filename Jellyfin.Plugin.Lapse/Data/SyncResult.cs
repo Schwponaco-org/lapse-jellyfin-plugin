@@ -2,6 +2,8 @@
 // Copyright (C) 2026 Rasmus Stisen Jensen (rs-jensen)
 // Licensed under GPL v3 - see LICENSE for details
 
+using System.Collections.Generic;
+
 namespace Jellyfin.Plugin.Lapse.Data;
 
 /// <summary>
@@ -43,6 +45,24 @@ public class SyncResult
     /// Gets or sets how many cues --snap moved onto a picture cut, when the engine reports it.
     /// </summary>
     public int? Snapped { get; set; }
+
+    /// <summary>
+    /// Gets or sets the offset each part of a split file got, in order, when the engine
+    /// reports them (LAPSE 2.3.0+). Null for a file that wasn't split.
+    /// </summary>
+    public IReadOnlyList<int>? PartOffsetsMs { get; set; }
+
+    /// <summary>
+    /// Gets or sets how many lines were kept out of the measuring (sound effects, music,
+    /// credit and advert lines). They still get moved with the rest.
+    /// </summary>
+    public int? IgnoredCues { get; set; }
+
+    /// <summary>
+    /// Gets or sets what LAPSE lined the subtitle up against: "vad" (the audio), "vad+whisper",
+    /// "embedded" or "subtitle". Null for engines that don't say.
+    /// </summary>
+    public string? Reference { get; set; }
 
     /// <summary>
     /// Gets or sets how much of the subtitle sits on speech, 0..1. Below ~0.5 usually means wrong content. Newer LAPSE only.

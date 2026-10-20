@@ -769,6 +769,16 @@
             'will be less accurate than it should be. Reinstall to fetch them.</div>';
     }
 
+    // A whisper model that's set but can't run is silently left off, so the card says why
+    function whisperNotice(engine) {
+        if (!engine.Installed || !engine.WhisperProblem) {
+            return '';
+        }
+
+        return '<div class="lapseEngineNotice">The whisper settings are not being used. ' +
+            escapeHtml(engine.WhisperProblem) + ' Syncs carry on with voice detection alone until that is sorted.</div>';
+    }
+
     // "sync even when unsure" used to be buried in Advanced where nobody found it. Still off by default.
     function forceControl(engine) {
         if (!engine.Installed) {
@@ -814,6 +824,12 @@
         var id = 'lapseParam-' + parameter.Key;
         var flagNote = parameter.Flag ? ' <code class="lapseFlag">' + escapeHtml(parameter.Flag) + '</code>' : '';
 
+        // the setting is kept, the runner just leaves the flag off until the engine is updated
+        var versionNote = parameter.Supported === false
+            ? '<div class="fieldDescription lapseParamNote lapseNeedsUpdate">Needs LAPSE ' +
+              escapeHtml(parameter.Since || 'a newer build') + ' or newer. The installed build leaves this off until you update it.</div>'
+            : '';
+
         if (parameter.Kind === 'Boolean') {
             return '' +
                 '<label class="emby-checkbox-label lapseStackedCheck">' +
@@ -821,7 +837,8 @@
                 '   data-kind="Boolean"' + (parameter.Value === 'true' ? ' checked' : '') + ' />' +
                 '  <span>' + escapeHtml(parameter.Label) + flagNote + '</span>' +
                 '</label>' +
-                '<div class="fieldDescription lapseParamNote">' + escapeHtml(parameter.Description) + '</div>';
+                '<div class="fieldDescription lapseParamNote">' + escapeHtml(parameter.Description) + '</div>' +
+                versionNote;
         }
 
         if (parameter.Kind === 'Select') {
@@ -836,6 +853,7 @@
                 }).join('') +
                 '  </select>' +
                 '  <div class="fieldDescription lapseParamNote">' + escapeHtml(parameter.Description) + '</div>' +
+                versionNote +
                 '</div>';
         }
 
@@ -850,13 +868,24 @@
             ? ' placeholder="leave blank to let the engine choose"'
             : (parameter.DefaultValue ? ' placeholder="' + escapeHtml(parameter.DefaultValue) + '"' : '');
 
+        var input = '<input is="emby-input" id="' + id + '" type="' + (parameter.Kind === 'Number' ? 'number' : 'text') + '"' +
+            ' class="lapseParamInput" data-key="' + escapeHtml(parameter.Key) + '" data-kind="' + parameter.Kind + '"' +
+            attributes + (parameter.IsPath ? ' placeholder="off"' : placeholder) + ' value="' + escapeHtml(parameter.Value || '') + '" />';
+
+        // a file on the server, same browse button as the binary path override
+        if (parameter.IsPath) {
+            input = '<div class="lapsePathRow">' + input +
+                '<button is="paper-icon-button-light" type="button" class="lapseBtnBrowseParam" data-for="' + id + '"' +
+                ' data-label="' + escapeHtml(parameter.Label) + '" title="Browse">' +
+                '<span class="material-icons search" aria-hidden="true"></span></button></div>';
+        }
+
         return '' +
             '<div class="inputContainer">' +
             '  <label class="inputLabel inputLabelUnfocused" for="' + id + '">' + escapeHtml(parameter.Label) + flagNote + '</label>' +
-            '  <input is="emby-input" id="' + id + '" type="' + (parameter.Kind === 'Number' ? 'number' : 'text') + '"' +
-            '   class="lapseParamInput" data-key="' + escapeHtml(parameter.Key) + '" data-kind="' + parameter.Kind + '"' +
-            attributes + placeholder + ' value="' + escapeHtml(parameter.Value || '') + '" />' +
+            input +
             '  <div class="fieldDescription lapseParamNote">' + escapeHtml(parameter.Description) + '</div>' +
+            versionNote +
             '</div>';
     }
 
@@ -963,10 +992,21 @@
             'rather than text. LAPSE can still move their timing, because timing is timing, but ' +
             'converting, translating and shifting by hand all need words and cannot touch them. ' +
             'Those need OCR first, with something like Subtitle Edit.</p>' +
+            (broadcastFormats(withFormats)
+                ? '<p>.stl (EBU STL) and .scc (Scenarist) are the broadcast formats LAPSE 2.3.0 reads. Jellyfin ' +
+                  'cannot show either of them, so the plugin leaves them out of its subtitle lists. Convert them to ' +
+                  '.srt first, Subtitle Edit can do it.</p>'
+                : '') +
             '<p>Whatever a file is read as, it is written back in the encoding it arrived in, so a ' +
             'Windows-1252 subtitle stays Windows-1252. To force a mixed library onto one encoding ' +
             'instead, use Write every result in one encoding under the engine\'s advanced settings.</p>' +
             subFormatsHtml();
+    }
+
+    function broadcastFormats(engines) {
+        return engines.some(function (e) {
+            return (e.SubtitleExtensions || []).some(function (f) { return f === '.stl' || f === '.scc'; });
+        });
     }
 
     // MicroDVD, MPL2 and SubViewer 2 all use .sub, LAPSE sniffs which. Only MicroDVD needs a frame rate.
@@ -1092,6 +1132,7 @@
                 whyLink +
                 problem +
                 vadNotice(engine) +
+                whisperNotice(engine) +
                 forceControl(engine) +
                 '  <div class="lapseEngineActions">' + actions + '</div>' +
                 engineAdvancedHtml(engine) +
@@ -1136,6 +1177,12 @@
 
             card.querySelector('.lapseBtnBrowsePath').addEventListener('click', function () {
                 browseForPath(card.querySelector('.lapseSettingPath'), true, 'Select the engine binary');
+            });
+
+            card.querySelectorAll('.lapseBtnBrowseParam').forEach(function (button) {
+                button.addEventListener('click', function () {
+                    browseForPath(card.querySelector('#' + button.getAttribute('data-for')), true, button.getAttribute('data-label'));
+                });
             });
 
             var uninstall = card.querySelector('.lapseBtnUninstall');
@@ -1902,8 +1949,14 @@
 
     function describeResult(result) {
         var parts = [];
+        var split = result.PartOffsetsMs && result.PartOffsetsMs.length > 1 ? result.PartOffsetsMs : null;
 
-        if (result.OffsetMs != null && result.OffsetMs !== 0) {
+        // LAPSE 2.3.0 says where each part went, older builds give one number for the lot
+        if (split) {
+            parts.push('split into ' + split.length + ' parts, moved ' + split.map(function (o) {
+                return o + 'ms';
+            }).join(' then '));
+        } else if (result.OffsetMs != null && result.OffsetMs !== 0) {
             parts.push('offset ' + result.OffsetMs + 'ms');
         }
 
@@ -1911,8 +1964,16 @@
             parts.push('stretched by ' + (result.Slope * 100).toFixed(3) + '%');
         }
 
-        if (result.Mode === 'Split' && result.Penalty != null) {
+        if (!split && result.Mode === 'Split' && result.Penalty != null) {
             parts.push('split into ' + result.Penalty + ' parts');
+        }
+
+        if (result.Snapped) {
+            parts.push(result.Snapped + (result.Snapped === 1 ? ' line' : ' lines') + ' snapped onto picture cuts');
+        }
+
+        if (result.Reference === 'vad+whisper') {
+            parts.push('checked with whisper');
         }
 
         if (parts.length === 0 && result.EngineOutput) {
@@ -1929,6 +1990,14 @@
         return parts.join(', ') || 'done';
     }
 
+    // "moved it 20ms", or for a split file every part, which LAPSE 2.3.0 reports
+    function wouldHaveMoved(result) {
+        var parts = result.PartOffsetsMs && result.PartOffsetsMs.length > 1 ? result.PartOffsetsMs : null;
+        return parts
+            ? 'moved its parts ' + parts.map(function (o) { return o + 'ms'; }).join(', ')
+            : 'moved it ' + (result.OffsetMs || 0) + 'ms';
+    }
+
     function showSyncResultAlert(name, result, view, retry) {
         if (!result.Success) {
             Dashboard.alert(name + ': sync failed - ' + result.Error);
@@ -1937,7 +2006,7 @@
 
         if (result.AlreadyInSync) {
             Dashboard.alert(name + ': already in sync, so the file was left exactly as it was.\n\n' +
-                'The engine would have moved it ' + (result.OffsetMs || 0) + 'ms, which is inside the ' +
+                'The engine would have ' + wouldHaveMoved(result) + ', which is inside the ' +
                 'tolerance set under File output.');
             return;
         }
@@ -2004,6 +2073,112 @@
 
     function configuredProviders() {
         return allProviders.filter(function (p) { return p.Configured; });
+    }
+
+    // Only shown when the item has another copy to take a subtitle from. Loaded after the
+    // dialog opens, so a slow lookup never holds the rest of it up.
+    function fillCopySection(view, overlay, itemId, name) {
+        var box = overlay.querySelector('#lapseAdvCopies');
+
+        lapseGet('Lapse/Items/' + itemId + '/Copies').then(function (list) {
+            var copies = (list && list.Copies) || [];
+            if (!copies.length || !document.body.contains(box)) {
+                return;
+            }
+
+            copies.sort(function (a, b) {
+                return (b.SubtitleCount > 0) - (a.SubtitleCount > 0);
+            });
+
+            box.innerHTML =
+                '<hr class="lapseDialogRule" />' +
+                '<h4 class="lapseSubHeading">From another copy</h4>' +
+                (list.CanMove
+                    ? '<div class="selectContainer">' +
+                      '  <label class="selectLabel">The copy the subtitle fits</label>' +
+                      '  <select is="emby-select" id="lapseAdvCopySource" class="emby-select-withcolor emby-select">' +
+                      copies.map(function (c) {
+                          return '<option value="' + escapeHtml(c.ItemId) + '">' + escapeHtml(c.Name) + '</option>';
+                      }).join('') +
+                      '  </select>' +
+                      '  <div class="fieldDescription" id="lapseAdvCopyDetail"></div>' +
+                      '</div>' +
+                      '<div class="selectContainer">' +
+                      '  <label class="selectLabel">Subtitle</label>' +
+                      '  <select is="emby-select" id="lapseAdvCopySubtitle" class="emby-select-withcolor emby-select"></select>' +
+                      '</div>' +
+                      '<div class="fieldDescription lapseTightNote">For a subtitle that fits the other copy but not this one. ' +
+                      'LAPSE lines the two soundtracks up, so a cut scene or a copy that runs faster is no problem, and writes ' +
+                      'the result as a new file named after this video.</div>' +
+                      '<button is="emby-button" type="button" class="raised lapseSmallButton" id="lapseAdvMoveCopy" disabled><span>Move it across</span></button>'
+                    : '<div class="fieldDescription">' + escapeHtml(list.Problem || '') + '</div>');
+
+            box.classList.remove('hide');
+
+            if (!list.CanMove) {
+                return;
+            }
+
+            var sourceSelect = box.querySelector('#lapseAdvCopySource');
+            var subtitleSelect = box.querySelector('#lapseAdvCopySubtitle');
+            var moveButton = box.querySelector('#lapseAdvMoveCopy');
+
+            function loadSubtitles() {
+                var wanted = sourceSelect.value;
+                var copy = copies.filter(function (c) { return c.ItemId === wanted; })[0];
+                box.querySelector('#lapseAdvCopyDetail').textContent = copy
+                    ? copy.Detail + ', ' + copy.SubtitleCount + (copy.SubtitleCount === 1 ? ' subtitle' : ' subtitles')
+                    : '';
+
+                subtitleSelect.innerHTML = '<option value="">Loading...</option>';
+                moveButton.disabled = true;
+
+                lapseGet('Lapse/Items/' + wanted + '/Subtitles').then(function (subtitles) {
+                    if (sourceSelect.value !== wanted) {
+                        return;
+                    }
+
+                    var usable = subtitles.filter(function (s) { return s.Supported !== false; });
+                    subtitleSelect.innerHTML = usable.length
+                        ? subtitleOptionsHtml(usable)
+                        : '<option value="">That copy has no subtitle LAPSE can read</option>';
+                    moveButton.disabled = usable.length === 0;
+                }).catch(function (err) {
+                    subtitleSelect.innerHTML = '<option value="">Could not list its subtitles: ' + escapeHtml(err.message) + '</option>';
+                });
+            }
+
+            sourceSelect.addEventListener('change', loadSubtitles);
+            loadSubtitles();
+
+            moveButton.addEventListener('click', function () {
+                var request = {
+                    ItemId: itemId,
+                    SourceItemId: sourceSelect.value,
+                    SubtitlePath: subtitleSelect.value
+                };
+
+                overlay.remove();
+                Dashboard.showLoadingMsg();
+
+                lapsePost('Lapse/SyncFromCopy', request).then(function (result) {
+                    Dashboard.hideLoadingMsg();
+                    Dashboard.alert(name + ': ' + (!result.Success
+                        ? 'could not move it - ' + result.Error
+                        : result.Skipped
+                            ? 'LAPSE could not line the two copies up well enough (' + describeResult(result) + '), so nothing was written.'
+                            : result.Unconfirmed
+                                ? 'LAPSE was not sure (' + describeResult(result) + '). It was written as ' + fileNameOf(result.OutputPath || '') + ' for you to check.'
+                                : 'moved across as ' + fileNameOf(result.OutputPath || '') + ', ' + describeResult(result) + '.'));
+                    return Promise.all([refreshItemList(view), refreshOverview(view)]);
+                }).catch(function (err) {
+                    Dashboard.hideLoadingMsg();
+                    Dashboard.alert('Could not move it: ' + err.message);
+                });
+            });
+        }).catch(function () {
+            // nothing to offer then, the rest of the dialog works without it
+        });
     }
 
     function showAdvancedDialog(view, itemId, name, subtitles) {
@@ -2138,6 +2313,7 @@
             '    <button is="emby-button" type="button" class="raised button-submit" id="lapseAdvSync" ' + (subtitles.length === 0 ? 'disabled' : '') + '><span>Sync</span></button>' +
             '  </div>' +
             multiTrackHtml +
+            '  <div id="lapseAdvCopies" class="hide"></div>' +
             translationHtml +
             '  <hr class="lapseDialogRule" />' +
             '  <div class="inputContainer">' +
@@ -2155,6 +2331,8 @@
         var penaltyContainer = overlay.querySelector('#lapseAdvPenaltyContainer');
         var penaltyInput = overlay.querySelector('#lapseAdvPenalty');
         var penaltyNote = overlay.querySelector('#lapseAdvPenaltyNote');
+
+        fillCopySection(view, overlay, itemId, name);
 
         function currentEngine() {
             return findEngine(engineSelect.value) || startEngine;
@@ -2634,7 +2812,7 @@
                 Dashboard.alert('Sync failed: ' + result.Error);
             } else if (result.AlreadyInSync) {
                 Dashboard.alert('Already in sync, so the input was left exactly as it was. The engine ' +
-                    'would have moved it ' + (result.OffsetMs || 0) + 'ms, which is inside the tolerance ' +
+                    'would have ' + wouldHaveMoved(result) + ', which is inside the tolerance ' +
                     'set under File output.');
             } else if (result.Skipped) {
                 confirmForceRetry(
@@ -2642,6 +2820,9 @@
                     result.EngineId, view, function () {
                         attemptSubToSubSync(view, body);
                     });
+            } else if (result.Unconfirmed) {
+                Dashboard.alert('LAPSE was not sure about this one (' + describeResult(result) + '), so it is not ' +
+                    'counted as synced. Wrote ' + result.OutputPath + ' for you to check, without touching any file already there.');
             } else {
                 Dashboard.alert('Synced! (' + describeResult(result) + ')\nWrote ' + result.OutputPath);
             }

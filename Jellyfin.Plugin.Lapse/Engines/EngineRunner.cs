@@ -220,6 +220,27 @@ public class EngineRunner
     }
 
     /// <summary>
+    /// Gets the format a subtitle gets converted to before the engine sees it, or null when it
+    /// goes in as it is. A converted subtitle comes back out in that format too, so callers
+    /// that pick the result's file name themselves need to know.
+    /// </summary>
+    public static string? ResolveConversionTarget(EngineRuntimeInfo runtime, IEngine engine, string subtitlePath)
+    {
+        // Ask the engine what it reads instead of assuming (LAPSE does fifteen formats incl.
+        // PGS/VobSub, alass and ffsubsync four). Anything it can't read gets converted to srt,
+        // everything reads that. Admins can also ask for everything to be converted, to end up
+        // with one format.
+        var engineReads = runtime.CanRead(engine.Descriptor.Id, subtitlePath);
+        var conversionFormat = ResolveConversionFormat();
+
+        var convertAnyway = Plugin.Instance?.Configuration.ConvertBeforeSync == true
+            && SubtitleFormats.IsTextBased(subtitlePath)
+            && !string.Equals(SubtitleFormats.GetName(subtitlePath), conversionFormat, StringComparison.OrdinalIgnoreCase);
+
+        return !engineReads ? "srt" : convertAnyway ? conversionFormat : null;
+    }
+
+    /// <summary>
     /// Gets the output mode: what was asked for, else what's configured.
     /// </summary>
     public static OutputMode ResolveOutputMode(OutputMode? requested)
@@ -317,6 +338,7 @@ public class EngineRunner
         string? outputFormat = null,
         bool skipConfidencePolicy = false,
         EngineBatchSession? batch = null,
+        string? fromVideoPath = null,
         CancellationToken cancellationToken = default)
     {
         // runs on the same subtitle share a work file, so they take turns
@@ -331,27 +353,23 @@ public class EngineRunner
         var runtime = await _probe.ProbeAsync(enginePath, cancellationToken).ConfigureAwait(false);
         var config = Plugin.Instance?.Configuration;
 
-        // Ask the engine what it reads instead of assuming (LAPSE does eleven formats incl.
-        // PGS/VobSub, alass and ffsubsync four). Anything it can't read gets converted first.
-        // Admins can also ask for everything to be converted, to end up with one format.
+        // the other engines have nothing like it, and an older LAPSE would sync against the
+        // speech and quietly write a subtitle for the wrong copy
+        if (fromVideoPath is not null && (!IsLapse(engine) || !runtime.HasFlag("--from")))
+        {
+            return Failed(engine, mode, "Moving a subtitle from another copy needs LAPSE 2.3.0 or newer. Update the engine from the LAPSE dashboard first.");
+        }
+
         string? convertedInput = null;
         var engineInput = subtitlePath;
-        var engineReads = runtime.CanRead(engine.Descriptor.Id, subtitlePath);
-        var conversionFormat = ResolveConversionFormat();
 
-        var convertAnyway = config?.ConvertBeforeSync == true
-            && SubtitleFormats.IsTextBased(subtitlePath)
-            && !string.Equals(SubtitleFormats.GetName(subtitlePath), conversionFormat, StringComparison.OrdinalIgnoreCase);
-
-        if (!engineReads || convertAnyway)
+        if (ResolveConversionTarget(runtime, engine, subtitlePath) is { } convertTo)
         {
             if (_converter.GetConversionProblem(subtitlePath) is { } conversionProblem)
             {
                 return Failed(engine, mode, conversionProblem);
             }
 
-            // the engine needed it: srt, everything reads that. Otherwise the admin's format.
-            var convertTo = engineReads ? conversionFormat : "srt";
             convertedInput = subtitlePath + ".lapse-converted." + convertTo;
 
             try
@@ -388,6 +406,7 @@ public class EngineRunner
 
             var ffmpegDirectory = GetFfmpegDirectory();
             var parameters = ResolveParameters(engine);
+            var environment = engine.GetEnvironment(parameters);
             var ignoreEmbedded = IsOwnTrack(referencePath, subtitlePath);
 
             EngineRunOptions BuildOptions(bool forceAnyway) => new()
@@ -402,7 +421,8 @@ public class EngineRunner
                 Parameters = parameters,
                 ConfidenceSigma = config?.ConfidenceSigma ?? LapseEngine.DefaultConfidenceSigma,
                 ForceAnyway = forceAnyway,
-                IgnoreEmbedded = ignoreEmbedded
+                IgnoreEmbedded = ignoreEmbedded,
+                FromVideoPath = fromVideoPath
             };
 
             // warm batch process if we have one and this build supports it, otherwise (or if
@@ -412,7 +432,7 @@ public class EngineRunner
             async Task<SyncResult> Run(IReadOnlyList<string> arguments)
             {
                 var output = useBatch
-                    ? await batch!.TryRunAsync(enginePath, arguments, si => PrepareEnvironment(si, ffmpegDirectory), cancellationToken).ConfigureAwait(false)
+                    ? await batch!.TryRunAsync(enginePath, arguments, si => PrepareEnvironment(si, ffmpegDirectory, environment), cancellationToken).ConfigureAwait(false)
                     : null;
 
                 if (output is null)
@@ -422,7 +442,7 @@ public class EngineRunner
                     // No time limit, a long film just takes a while and the Stop button is the
                     // way out. Cancelling kills the engine and the ffmpeg it started.
                     var process = await ProcessRunner
-                        .RunAsync(enginePath, arguments, null, cancellationToken, si => PrepareEnvironment(si, ffmpegDirectory))
+                        .RunAsync(enginePath, arguments, null, cancellationToken, si => PrepareEnvironment(si, ffmpegDirectory, environment))
                         .ConfigureAwait(false);
 
                     output = (process.Stdout, process.Stderr, process.ExitCode);
@@ -504,11 +524,22 @@ public class EngineRunner
                     return result;
                 }
 
-                if (action == LowConfidenceAction.Sidecar && string.IsNullOrWhiteSpace(destinationOverride))
+                if (action == LowConfidenceAction.Sidecar)
                 {
-                    // put the doubtful answer next to the original whatever the output mode says
-                    destination = ResolveDestination(subtitlePath, OutputMode.SidecarOnly, outputFormat);
-                    resolvedOutputMode = OutputMode.SidecarOnly;
+                    // Put the doubtful answer next to the original whatever the output mode says.
+                    // A caller that picked the file itself still gets it there, as long as that
+                    // doesn't mean writing over something.
+                    if (string.IsNullOrWhiteSpace(destinationOverride))
+                    {
+                        destination = ResolveDestination(subtitlePath, OutputMode.SidecarOnly, outputFormat);
+                        resolvedOutputMode = OutputMode.SidecarOnly;
+                    }
+                    else if (File.Exists(destination))
+                    {
+                        destination = ResolveDestination(destination, OutputMode.SidecarOnly, outputFormat);
+                        resolvedOutputMode = OutputMode.SidecarOnly;
+                    }
+
                     result.Unconfirmed = true;
                 }
             }
@@ -699,12 +730,21 @@ public class EngineRunner
             return false;
         }
 
-        if (result.Slope is not null || result.Mode == SyncMode.Split || result.Snapped > 0)
+        if (result.Slope is not null || result.Snapped > 0)
         {
             return false;
         }
 
-        return Math.Abs(offset) <= Math.Clamp(config.AlreadyInSyncToleranceMs, 0, 5000);
+        var tolerance = Math.Clamp(config.AlreadyInSyncToleranceMs, 0, 5000);
+
+        // A split only counts when LAPSE said where every part went (2.3.0) and none of them
+        // moved further than a whole file would be allowed to.
+        if (result.Mode == SyncMode.Split)
+        {
+            return result.PartOffsetsMs is { Count: > 0 } parts && parts.All(part => Math.Abs(part) <= tolerance);
+        }
+
+        return Math.Abs(offset) <= tolerance;
     }
 
     // The engine's own "not enough cues, use --force" message. Only the text tells us, there's
@@ -792,11 +832,16 @@ public class EngineRunner
         File.Move(staged, shimPath, overwrite: true);
     }
 
-    private static void PrepareEnvironment(ProcessStartInfo startInfo, string? ffmpegDirectory)
+    private static void PrepareEnvironment(ProcessStartInfo startInfo, string? ffmpegDirectory, IReadOnlyDictionary<string, string> environment)
     {
         // ffsubsync is Python and writes to pipes in the locale encoding, we read UTF-8
         startInfo.Environment["PYTHONUTF8"] = "1";
         startInfo.Environment["PYTHONIOENCODING"] = "utf-8";
+
+        foreach (var (name, value) in environment)
+        {
+            startInfo.Environment[name] = value;
+        }
 
         if (string.IsNullOrEmpty(ffmpegDirectory))
         {

@@ -60,6 +60,13 @@ public class EngineRunOptions
     public bool IgnoreEmbedded { get; set; }
 
     /// <summary>
+    /// Gets or sets another copy of the film the subtitle already fits. LAPSE then lines the
+    /// two soundtracks up instead of the cues and the speech (--from, 2.3.0+). Null for a
+    /// normal sync.
+    /// </summary>
+    public string? FromVideoPath { get; set; }
+
+    /// <summary>
     /// Gets or sets this engine's advanced parameters, already merged with the engine's
     /// own defaults.
     /// </summary>

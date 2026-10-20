@@ -174,6 +174,11 @@ public partial class LapseController
     // so it goes back to pending with the reason.
     private static void SaveSyncRecord(Guid itemId, SyncResult result, string subtitlePath)
     {
+        SaveSyncRecord(itemId, result, SyncedPaths(result, subtitlePath));
+    }
+
+    private static void SaveSyncRecord(Guid itemId, SyncResult result, IEnumerable<string> syncedPaths)
+    {
         var status = !result.Success ? MovieSyncStatus.Failed
             : result.CountsAsSynced ? MovieSyncStatus.Synced
             : MovieSyncStatus.Pending;
@@ -187,7 +192,7 @@ public partial class LapseController
             status,
             message,
             result,
-            result.CountsAsSynced ? SyncedPaths(result, subtitlePath) : null);
+            result.CountsAsSynced ? syncedPaths : null);
     }
 
     // The synced subtitle plus the new file written beside it, if there is one.

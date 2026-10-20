@@ -119,6 +119,24 @@ public class EngineParameter
     /// like audio track where 0 is a real value).
     /// </summary>
     public bool BlankMeansUnset { get; set; }
+
+    /// <summary>
+    /// Gets or sets the first engine release that takes the flag, so the card can say why a
+    /// setting does nothing on an older build. Null when every supported build has it.
+    /// </summary>
+    public string? Since { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether the value is a file on the server, which gets a
+    /// browse button next to it.
+    /// </summary>
+    public bool IsPath { get; set; }
+
+    /// <summary>
+    /// Gets or sets the flag the installed build has to take for this to do anything, when
+    /// that isn't <see cref="Flag"/> itself (a setting that only feeds another flag).
+    /// </summary>
+    public string? RequiresFlag { get; set; }
 }
 
 /// <summary>
