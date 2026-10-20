@@ -33,6 +33,7 @@ public class LibraryService
     private static readonly TimeSpan LibraryIdsCacheFor = TimeSpan.FromSeconds(10);
 
     private readonly ILibraryManager _libraryManager;
+    private readonly IMediaSourceManager _mediaSourceManager;
 
     // swapped as a whole so readers never see half an update
     private LibraryIdSnapshot? _libraryIds;
@@ -40,9 +41,10 @@ public class LibraryService
     /// <summary>
     /// Initializes a new instance of the <see cref="LibraryService"/> class.
     /// </summary>
-    public LibraryService(ILibraryManager libraryManager)
+    public LibraryService(ILibraryManager libraryManager, IMediaSourceManager mediaSourceManager)
     {
         _libraryManager = libraryManager;
+        _mediaSourceManager = mediaSourceManager;
     }
 
     /// <summary>
@@ -266,20 +268,22 @@ public class LibraryService
 
         // We can be handed either end of a version group, so start from the primary. The
         // versions come with the item, a user who can see one can see them all.
-        var primary = Guid.TryParse(video.PrimaryVersionId, out var primaryId) && _libraryManager.GetItemById(primaryId) is Video main
+        //
+        // Version groups changed shape in Jellyfin 12 (PrimaryVersionId became a Guid and the
+        // versions moved out of the item into their own table), so this goes through the media
+        // sources, the same list the player's version picker shows, which both have.
+        var primary = ReadPrimaryVersionId(video) is { } primaryId && _libraryManager.GetItemById(primaryId) is Video main
             ? main
             : FindLocalPrimary(video) ?? video;
 
         Add(primary, true);
 
-        foreach (var linked in primary.GetLinkedAlternateVersions())
+        foreach (var source in _mediaSourceManager.GetStaticMediaSources(primary, false))
         {
-            Add(linked, true);
-        }
-
-        foreach (var id in primary.GetLocalAlternateVersionIds())
-        {
-            Add(_libraryManager.GetItemById(id), true);
+            if (Guid.TryParse(source.Id, out var versionId))
+            {
+                Add(_libraryManager.GetItemById(versionId), true);
+            }
         }
 
         var ids = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -316,9 +320,16 @@ public class LibraryService
         return found;
     }
 
+    // A string on 10.11 and a Guid? on 12, so it's read without binding to either
+    private static Guid? ReadPrimaryVersionId(Video video)
+    {
+        var value = typeof(Video).GetProperty(nameof(Video.PrimaryVersionId))?.GetValue(video)?.ToString();
+        return Guid.TryParse(value, out var id) ? id : null;
+    }
+
     // A version found next to the main file ("Film - TV.mkv" beside "Film - Bluray.mkv") has
-    // no PrimaryVersionId pointing back, only the main item lists it. So look at the videos
-    // in the same folder.
+    // no PrimaryVersionId pointing back on 10.11, only the main item lists it. So look at the
+    // videos in the same folder for the one whose versions include this file.
     private Video? FindLocalPrimary(Video video)
     {
         var folder = Path.GetDirectoryName(video.Path);
@@ -335,7 +346,7 @@ public class LibraryService
             }
 
             if (_libraryManager.FindByPath(file, false) is Video candidate
-                && Array.Exists(candidate.LocalAlternateVersions, path => string.Equals(path, video.Path, StringComparison.Ordinal)))
+                && _mediaSourceManager.GetStaticMediaSources(candidate, false).Any(s => string.Equals(s.Path, video.Path, StringComparison.Ordinal)))
             {
                 return candidate;
             }
