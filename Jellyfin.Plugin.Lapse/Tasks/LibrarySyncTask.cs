@@ -13,9 +13,8 @@ using Microsoft.Extensions.Logging;
 namespace Jellyfin.Plugin.Lapse.Tasks;
 
 /// <summary>
-/// Syncs every enabled library, as a task Jellyfin's own scheduler owns. Having it here
-/// means the task list shows it, the run history is kept, and people can add whatever
-/// triggers they like on top of the daily default.
+/// Syncs every enabled library as a Jellyfin scheduled task, so it shows in the task list
+/// with history and people can add their own triggers.
 /// </summary>
 public class LibrarySyncTask : IScheduledTask, IConfigurableScheduledTask
 {
@@ -26,9 +25,6 @@ public class LibrarySyncTask : IScheduledTask, IConfigurableScheduledTask
     /// <summary>
     /// Initializes a new instance of the <see cref="LibrarySyncTask"/> class.
     /// </summary>
-    /// <param name="libraryService">Works out which items to sync.</param>
-    /// <param name="queueManager">Runs the syncs.</param>
-    /// <param name="logger">Logger.</param>
     public LibrarySyncTask(LibraryService libraryService, SyncQueueManager queueManager, ILogger<LibrarySyncTask> logger)
     {
         _libraryService = libraryService;
@@ -60,12 +56,9 @@ public class LibrarySyncTask : IScheduledTask, IConfigurableScheduledTask
     /// <inheritdoc />
     public IEnumerable<TaskTriggerInfo> GetDefaultTriggers()
     {
-        // No schedule of its own. This used to run every night at 03:00 over every library
-        // that was turned on, which on a fresh install meant rewriting the whole library
-        // the first night without anybody asking, against everything else in LAPSE that
-        // stays off until someone turns it on. A library that should be synced on a timer
-        // gets that from its own schedule on the dashboard, and anyone who wants this one
-        // on a timer can add one under Scheduled Tasks.
+        // No default trigger. It used to run nightly and rewrote whole libraries on a fresh
+        // install without anyone asking. Per-library schedules live on the dashboard, or add
+        // a trigger under Scheduled Tasks.
         return Array.Empty<TaskTriggerInfo>();
     }
 
@@ -75,7 +68,7 @@ public class LibrarySyncTask : IScheduledTask, IConfigurableScheduledTask
         var items = _libraryService.GetItems();
         if (items.Count == 0)
         {
-            _logger.LogInformation("Scheduled sync found nothing to do - no enabled library has a syncable item in it");
+            _logger.LogInformation("Scheduled sync found nothing to do, no enabled library has a syncable item in it");
             progress.Report(100);
             return;
         }

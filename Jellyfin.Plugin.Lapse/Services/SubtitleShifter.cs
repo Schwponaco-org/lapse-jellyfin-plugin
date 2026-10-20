@@ -15,8 +15,7 @@ using Jellyfin.Plugin.Lapse.Engines;
 namespace Jellyfin.Plugin.Lapse.Services;
 
 /// <summary>
-/// What a shift did: how many timestamps moved, where the result landed, and what got
-/// backed up on the way.
+/// What a shift did.
 /// </summary>
 public class ShiftResult
 {
@@ -26,8 +25,7 @@ public class ShiftResult
     public int Shifted { get; set; }
 
     /// <summary>
-    /// Gets or sets the file the shifted subtitle was written to. Which file that is
-    /// depends on the configured output mode, the same as a sync.
+    /// Gets or sets where the shifted subtitle went (depends on the output mode, like a sync).
     /// </summary>
     public string OutputPath { get; set; } = string.Empty;
 
@@ -54,22 +52,18 @@ public class SubtitlePreview
 }
 
 /// <summary>
-/// Nudges every timestamp in a subtitle file forward or backward. This is for when a sync
-/// gets you close but the result is still slightly off and you just want to hand-tune it.
-/// Doesn't involve the engine at all, it's only text editing.
+/// Moves every timestamp in a subtitle forward or back, for hand tuning when a sync is
+/// close but not quite. No engine involved, just text editing.
 /// </summary>
 public partial class SubtitleShifter
 {
-    // Matches timestamps like 00:01:23,456 (srt), 00:01:23.456 and 01:23.456 (vtt, which
-    // leaves the hours off when there are none) and 0:01:23.45 (ass/ssa, which counts in
-    // centiseconds and writes a single digit hour). The widths are captured rather than
-    // assumed so each format can be written back the way it came in - an ass file with
-    // millisecond timings in it is not an ass file any more.
+    // 00:01:23,456 (srt), 00:01:23.456 / 01:23.456 (vtt, hours optional), 0:01:23.45 (ass).
+    // Widths are captured so each one gets written back in its own shape, ass with ms
+    // timings isn't valid ass anymore.
     [GeneratedRegex(@"(?:(?<h>\d{1,3}):)?(?<m>\d{2}):(?<s>\d{2})(?<sep>[,.])(?<f>\d{1,3})")]
     private static partial Regex TimestampRegex();
 
-    // A vtt cue can carry timestamps inside its text, <00:01:02.500>, to reveal a line a
-    // word at a time. They're absolute, so they move with the cue.
+    // vtt karaoke timestamps inside the text, <00:01:02.500>. Absolute, so they move too.
     [GeneratedRegex(@"<(?<t>(?:\d{1,3}:)?\d{2}:\d{2}\.\d{3})>")]
     private static partial Regex InlineTimestampRegex();
 
@@ -80,26 +74,20 @@ public partial class SubtitleShifter
     // The two timing fields on an ass/ssa event line: "Dialogue: 0,0:00:01.00,0:00:03.50,..."
     private const int AssTimestampsPerLine = 2;
 
-    // Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text. The text
-    // is last and may itself contain commas, which is why it's a limited split.
+    // Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text (text can have commas)
     private const int AssEventFieldCount = 10;
 
     /// <summary>
     /// Checks whether a file is one this can work on at all.
     /// </summary>
-    /// <param name="subtitlePath">The subtitle file.</param>
-    /// <returns>True for the formats with plain text timestamps: srt, vtt, ass and ssa.</returns>
     public static bool IsShiftable(string subtitlePath)
     {
         return SubtitleFormats.IsNative(subtitlePath);
     }
 
     /// <summary>
-    /// Gets whether a path is an ass/ssa file, which keeps its timings on Dialogue lines
-    /// rather than on a line of its own with an arrow in it.
+    /// Gets whether a path is ass/ssa (timings on Dialogue lines instead of arrow lines).
     /// </summary>
-    /// <param name="subtitlePath">The subtitle file.</param>
-    /// <returns>True for .ass and .ssa.</returns>
     public static bool IsAss(string subtitlePath)
     {
         var extension = Path.GetExtension(subtitlePath);
@@ -108,16 +96,8 @@ public partial class SubtitleShifter
     }
 
     /// <summary>
-    /// Reads the first real cue out of a subtitle file, so the dialog can show what a
-    /// given offset would do to a line the user recognises rather than to an abstraction.
+    /// Reads the first cue so the shift dialog can show a real line moving.
     /// </summary>
-    /// <param name="subtitlePath">The subtitle file.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>The first cue, or null if the file has none.</returns>
-    [System.Diagnostics.CodeAnalysis.SuppressMessage(
-        "Security",
-        "CA3003:Review code for file path injection vulnerabilities",
-        Justification = "The path is one the library reported for an item, checked by the controller before it gets here.")]
     public static async Task<SubtitlePreview?> ReadFirstCueAsync(string subtitlePath, CancellationToken cancellationToken = default)
     {
         if (!File.Exists(subtitlePath))
@@ -151,10 +131,8 @@ public partial class SubtitleShifter
         return null;
     }
 
-    // An ass event line carries its timings as the second and third of ten comma
-    // separated fields, with the dialogue as the last one. The preview shows them in the
-    // same "start --> end" shape the other formats use, since that's what the dialog is
-    // built to display and the point is to see the numbers move.
+    // ass timings are fields 2 and 3 of 10, dialogue last. Shown as "start --> end" like
+    // the other formats since that's what the dialog expects.
     private static SubtitlePreview? ReadFirstAssCue(string[] lines)
     {
         foreach (var line in lines)
@@ -182,8 +160,7 @@ public partial class SubtitleShifter
         return null;
     }
 
-    // Drops the {\pos(...)} style override blocks and turns the hard line break marker
-    // into a space, so the example line reads as the words on screen.
+    // drop {\...} overrides and turn \N into a space so it reads like what's on screen
     private static string StripAssTags(string text)
     {
         var withoutBreaks = text.Replace("\\N", " ", StringComparison.OrdinalIgnoreCase)
@@ -195,31 +172,15 @@ public partial class SubtitleShifter
     /// <summary>
     /// Applies an offset to a timing line without touching any file, for the preview.
     /// </summary>
-    /// <param name="timingLine">A line containing one or two timestamps.</param>
-    /// <param name="offsetMs">How far to move it, in milliseconds.</param>
-    /// <returns>The line with its timestamps moved.</returns>
     public static string PreviewShift(string timingLine, int offsetMs)
     {
         return ShiftTimingLine(timingLine, TimeSpan.FromMilliseconds(offsetMs), int.MaxValue, out _);
     }
 
     /// <summary>
-    /// Shifts all the timestamps in a subtitle file. Positive moves subtitles later,
-    /// negative moves them earlier.
-    ///
-    /// Where the result lands follows the configured output mode, exactly like a sync
-    /// does - shifting a subtitle by hand is no less destructive than syncing it, so it
-    /// gets the same backup and sidecar promises rather than always editing in place.
+    /// Shifts every timestamp (positive = later). The result follows the output mode just
+    /// like a sync, a hand shift is just as destructive so it gets the same backups.
     /// </summary>
-    /// <param name="subtitlePath">The subtitle file to read.</param>
-    /// <param name="offsetSeconds">How far to move it, in seconds. Can be negative.</param>
-    /// <param name="outputMode">Where to put the result, or null for the configured default.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>What the shift did.</returns>
-    [System.Diagnostics.CodeAnalysis.SuppressMessage(
-        "Security",
-        "CA3003:Review code for file path injection vulnerabilities",
-        Justification = "The input path is one the library reported for an item and the output is derived from it with a fixed suffix.")]
     public async Task<ShiftResult> ShiftAsync(
         string subtitlePath,
         double offsetSeconds,
@@ -237,14 +198,12 @@ public partial class SubtitleShifter
             throw new FileNotFoundException("Subtitle file not found", subtitlePath);
         }
 
-        // Held from the read to the write, so a second shift of the same file lands on
-        // top of this one instead of on the same starting point, or on a half written file.
+        // held from read to write so two shifts stack instead of racing
         using var fileLock = await SubtitleFileLock.AcquireAsync(subtitlePath, cancellationToken).ConfigureAwait(false);
 
         var offset = TimeSpan.FromSeconds(offsetSeconds);
 
-        // Read with its encoding and line endings, so what goes back out is the same file
-        // with different numbers in it rather than the same subtitle re-encoded as UTF-8.
+        // keep the original encoding and line endings, only the numbers should change
         var document = await SubtitleEncoding.ReadDocumentAsync(subtitlePath, cancellationToken).ConfigureAwait(false);
         var lines = new List<string>(document.Lines);
         var isAss = IsAss(subtitlePath);
@@ -253,15 +212,12 @@ public partial class SubtitleShifter
 
         for (var i = 0; i < lines.Count; i++)
         {
-            // Only touch the timing lines. Subtitle text could contain something that
-            // looks like a timestamp and we'd rather not mangle someone's dialogue.
+            // only timing lines, dialogue can contain things that look like timestamps
             var line = lines[i];
 
             if (isAss)
             {
-                // ass and ssa put the timings on their event lines, and the dialogue is on
-                // the same line right after them. Only the first two matches are taken,
-                // which keeps this to the Start and End fields and off anything in the text.
+                // dialogue is on the same line, so only take the first two matches (Start, End)
                 if (IsAssEventLine(line))
                 {
                     lines[i] = ShiftTimingLine(line, offset, AssTimestampsPerLine, out var moved);
@@ -307,9 +263,7 @@ public partial class SubtitleShifter
         return text.Length > 60 ? text[..60] + "..." : text;
     }
 
-    // Says whether an ass/ssa line is one of the ones with timings on it. Comment lines
-    // are timed the same way as Dialogue ones and a renderer ignores them, but leaving
-    // them where they were would put them out of step with everything around them.
+    // Every timed ass event line. Comments aren't rendered but should still move with everything else.
     private static bool IsAssEventLine(string line)
     {
         var trimmed = line.TrimStart();
@@ -322,10 +276,8 @@ public partial class SubtitleShifter
             || trimmed.StartsWith("Command:", StringComparison.OrdinalIgnoreCase);
     }
 
-    // Moves the start and end of one cue together. A cue moved to before the start of the
-    // film keeps its length and starts at zero, the way the engine and alass both handle
-    // it; pinning each end on its own used to cut a cue short, or to nothing at all when
-    // both ends went under.
+    // Moves start and end together. A cue pushed before zero keeps its length and starts
+    // at 0 (like the engine and alass do), clamping each end alone used to shorten or kill it.
     private static string ShiftTimingLine(string line, TimeSpan offset, int count, out int moved)
     {
         var matches = TimestampRegex().Matches(line);
@@ -366,7 +318,7 @@ public partial class SubtitleShifter
 
     private static TimeSpan Clamp(TimeSpan value)
     {
-        // Subtitles can't start before the movie does.
+        // can't start before the movie does
         return value < TimeSpan.Zero ? TimeSpan.Zero : value;
     }
 
@@ -382,10 +334,8 @@ public partial class SubtitleShifter
             int.Parse(match.Groups["f"].Value.PadRight(3, '0'), CultureInfo.InvariantCulture));
     }
 
-    // Writes a timestamp back in the shape it was read in. srt and vtt want two digit
-    // hours and milliseconds; ass and ssa want a single digit hour and centiseconds, and
-    // a player will refuse a file that mixes them up. vtt without hours stays without
-    // them until a shift takes it past the hour, where it needs them.
+    // Writes a timestamp back in the shape it came in. Players refuse files that mix ass
+    // and srt style times. Hourless vtt stays hourless until it passes the hour.
     private static string FormatLike(Match match, TimeSpan value)
     {
         var fractionDigits = match.Groups["f"].Value.Length;
@@ -396,16 +346,9 @@ public partial class SubtitleShifter
     }
 
     /// <summary>
-    /// Formats a time the way a subtitle writes it, rounded to the precision the format
-    /// keeps rather than cut off at it. Cutting off put every ass line up to 9ms early, and
-    /// the engine stopped doing that in 2.2.4.
+    /// Formats a subtitle time, rounded (not truncated) to the format's precision.
+    /// Truncating made ass lines up to 9ms early, the engine fixed the same thing in 2.2.4.
     /// </summary>
-    /// <param name="value">The time.</param>
-    /// <param name="separator">The character between seconds and the fraction.</param>
-    /// <param name="hourDigits">How many digits the hour gets, or 0 to leave it off while
-    /// the time is under an hour.</param>
-    /// <param name="fractionDigits">1, 2 or 3: tenths, hundredths or thousandths.</param>
-    /// <returns>The formatted time.</returns>
     internal static string Format(TimeSpan value, string separator, int hourDigits, int fractionDigits)
     {
         var unit = fractionDigits switch
@@ -415,8 +358,7 @@ public partial class SubtitleShifter
             _ => 1L
         };
 
-        // Rounded as a whole, so 59.996 seconds carries into the next minute rather than
-        // coming out as a 60th second.
+        // round the whole thing so 59.996s carries into the next minute
         var units = (long)Math.Round(value.TotalMilliseconds / unit, MidpointRounding.AwayFromZero);
         var rounded = TimeSpan.FromMilliseconds(units * unit);
         var fraction = rounded.Milliseconds / unit;
@@ -430,8 +372,7 @@ public partial class SubtitleShifter
             return clock;
         }
 
-        // A vtt time that grew an hour gets the two digit hour vtt uses; everything else
-        // keeps the width it came in with.
+        // hourless vtt that grew an hour gets two digits, everything else keeps its width
         var width = hourDigits == 0 ? 2 : hourDigits;
         return hours.ToString(CultureInfo.InvariantCulture).PadLeft(width, '0') + ":" + clock;
     }

@@ -4,6 +4,9 @@
 
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Threading;
+using System.Threading.Tasks;
 using Jellyfin.Plugin.Lapse.Configuration;
 using Jellyfin.Plugin.Lapse.Web;
 using MediaBrowser.Common.Configuration;
@@ -15,27 +18,27 @@ using Microsoft.Extensions.Logging;
 namespace Jellyfin.Plugin.Lapse;
 
 /// <summary>
-/// The main LAPSE plugin. Registers the dashboard page and the script files the web
-/// client loads. Getting that script in front of the web client is handled by
-/// <see cref="ScriptInjectionMiddleware"/> rather than by editing index.html, which is
-/// what this used to do and what stopped the context menu from ever appearing on the
-/// packaged Linux and macOS builds.
+/// The LAPSE plugin. Registers the dashboard page and the web client scripts (which get
+/// injected by <see cref="ScriptInjectionMiddleware"/>).
 /// </summary>
 public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
 {
+    // see SaveConfigurationSoon
+    private static readonly TimeSpan DeferredSaveDelay = TimeSpan.FromSeconds(5);
+
+    private readonly ILogger<Plugin> _logger;
+    private int _deferredSavePending;
+
     /// <summary>
     /// Initializes a new instance of the <see cref="Plugin"/> class.
     /// </summary>
-    /// <param name="applicationPaths">Instance of the <see cref="IApplicationPaths"/> interface.</param>
-    /// <param name="xmlSerializer">Instance of the <see cref="IXmlSerializer"/> interface.</param>
-    /// <param name="logger">Logger.</param>
     public Plugin(IApplicationPaths applicationPaths, IXmlSerializer xmlSerializer, ILogger<Plugin> logger)
         : base(applicationPaths, xmlSerializer)
     {
         Instance = this;
+        _logger = logger;
 
-        // Carry any settings from the single-engine days onto the LAPSE engine entry so
-        // upgrading doesn't quietly drop a configured binary path or penalty.
+        // fix up configs from older versions
         Configuration.MigrateLegacySettings();
 
         try
@@ -61,10 +64,8 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
     public static Plugin? Instance { get; private set; }
 
     /// <summary>
-    /// Gets the lock held while the configuration is written out. The sync records and
-    /// history are lists that the queue worker and request threads both add to, and
-    /// serializing one while another thread adds to it throws, so anything that edits
-    /// those lists takes this first.
+    /// Gets the lock for editing the config's lists. The queue and request threads both add to
+    /// them, and serializing while another thread adds throws.
     /// </summary>
     public static object ConfigurationLock { get; } = new();
 
@@ -73,7 +74,45 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
     {
         lock (ConfigurationLock)
         {
+            // takes any pending deferred save with it
+            Interlocked.Exchange(ref _deferredSavePending, 0);
             base.SaveConfiguration(config);
+        }
+    }
+
+    /// <summary>
+    /// Saves a few seconds from now so a burst of changes is one write. The config holds a
+    /// record per item, so saving after every item in a bulk run rewrote a big file over and
+    /// over. Things that must be on disk before answering still call SaveConfiguration.
+    /// </summary>
+    public void SaveConfigurationSoon()
+    {
+        if (Interlocked.Exchange(ref _deferredSavePending, 1) == 1)
+        {
+            return;
+        }
+
+        _ = Task.Delay(DeferredSaveDelay).ContinueWith(_ => FlushDeferredSave(), TaskScheduler.Default);
+    }
+
+    /// <summary>
+    /// Writes out a pending <see cref="SaveConfigurationSoon"/> now. Called when a job finishes.
+    /// </summary>
+    public void FlushDeferredSave()
+    {
+        if (Volatile.Read(ref _deferredSavePending) == 0)
+        {
+            return;
+        }
+
+        try
+        {
+            SaveConfiguration();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            // nobody's waiting on this, so just log it
+            _logger.LogError(ex, "Could not save the LAPSE configuration");
         }
     }
 
@@ -89,9 +128,8 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
                 Name = Name,
                 EmbeddedResourcePath = $"{prefix}.Configuration.configPage.html",
 
-                // Puts LAPSE in the dashboard's own left sidebar, under Plugins, instead of
-                // leaving it four clicks deep under Dashboard > Plugins > My Plugins. The
-                // icon is a Material Symbols name, which is the set the web client ships.
+                // in the dashboard sidebar instead of 4 clicks deep under My Plugins.
+                // Icon is a Material Symbols name.
                 EnableInMainMenu = true,
                 DisplayName = Name,
                 MenuIcon = "subtitles"

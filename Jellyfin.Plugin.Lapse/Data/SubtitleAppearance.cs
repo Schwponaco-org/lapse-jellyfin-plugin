@@ -5,19 +5,9 @@
 namespace Jellyfin.Plugin.Lapse.Data;
 
 /// <summary>
-/// How subtitles should look during playback. This is applied by the injected script
-/// restyling what the web player already renders, so nothing on disk is touched and
-/// turning it off puts everything straight back.
-///
-/// Every user can have their own, set from the subtitle menu while a film is playing.
-/// That is the point of it: a shared library has one person who wants huge text in a
-/// dyslexia-friendly font and several who don't, and a server-wide setting can only ever
-/// suit one of them. What an admin saves in the dashboard is the starting point for
-/// anybody who hasn't set their own.
-///
-/// Only text based formats can be restyled. PGS and VOBSUB are pictures of subtitles, so
-/// there is nothing here to apply to them, and ASS/SSA carries its own per-line styling
-/// which the player honours over any global override.
+/// How subtitles look during playback. Applied by the injected script on top of what the player
+/// renders, nothing on disk changes. Each user can set their own from the subtitle menu, the
+/// admin's is the default. Text subtitles only, PGS are pictures and ASS styles itself.
 /// </summary>
 public class SubtitleAppearance
 {
@@ -62,50 +52,19 @@ public class SubtitleAppearance
     public bool BackgroundEnabled { get; set; } = true;
 
     /// <summary>
-    /// Gets or sets the font the player draws subtitles in, or empty for whatever the
-    /// client already uses. Any font the browser can resolve works; OpenDyslexic is
-    /// served by the plugin once an admin has installed it, so it can be picked here
-    /// without anything being installed on the device.
+    /// Gets or sets the font, or empty for the client's own. OpenDyslexic is served by the plugin once installed.
     /// </summary>
     public string? FontFamily { get; set; }
 
     /// <summary>
-    /// Gets or sets the extra space between letters, in pixels. Wider tracking is the
-    /// readability change with the most evidence behind it, and unlike the file-based
-    /// styling it costs nothing here to undo.
+    /// Gets or sets extra letter spacing in px.
     /// </summary>
     public double LetterSpacingPx { get; set; }
 
     /// <summary>
-    /// Gets or sets how far up from the bottom of the picture subtitles sit, as a
-    /// percentage of the video height. Zero is where the player already puts them.
-    ///
-    /// Worth having because the right answer is not the same for everyone or even for
-    /// every film: a release with burnt-in signage along the bottom, a TV that cuts off
-    /// the edge of the picture, or simply a preference for text nearer the middle. The
-    /// player anchors its subtitle strip to the bottom of the window, so this moves that
-    /// strip up.
-    ///
-    /// Only reaches subtitles the player draws as HTML. An ASS or SSA track rendered
-    /// through libass carries its own positioning inside the file and is drawn on a
-    /// canvas, which no amount of styling from out here can move.
+    /// Gets or sets how far up from the bottom subtitles sit, in percent of the video height.
+    /// Handy for burnt-in signs or TVs that crop. Only works for subtitles the player draws as HTML,
+    /// libass draws ASS on a canvas.
     /// </summary>
     public int VerticalPositionPercent { get; set; }
-
-    /// <summary>
-    /// Returns a copy, so a user's own settings can be edited without writing through to
-    /// the server-wide defaults they were copied from.
-    /// </summary>
-    /// <returns>A copy of these settings.</returns>
-    public SubtitleAppearance Clone() => new()
-    {
-        Enabled = Enabled,
-        FontSizePx = FontSizePx,
-        TextColor = TextColor,
-        BackgroundColor = BackgroundColor,
-        BackgroundEnabled = BackgroundEnabled,
-        FontFamily = FontFamily,
-        LetterSpacingPx = LetterSpacingPx,
-        VerticalPositionPercent = VerticalPositionPercent
-    };
 }

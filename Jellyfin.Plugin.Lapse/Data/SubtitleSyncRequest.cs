@@ -31,10 +31,7 @@ public class SubtitleSyncRequest
     public OutputMode? OutputMode { get; set; }
 
     /// <summary>
-    /// Gets or sets an explicit file to write the synced subtitle to, leaving the input
-    /// alone. Null overwrites the input the way the output mode says. This is what the
-    /// dashboard's "write the result to a new file" option sends. A bare file name with no
-    /// folder in it is placed according to <see cref="Placement"/>.
+    /// Gets or sets a file to write to instead of the input. A bare file name goes where <see cref="Placement"/> says.
     /// </summary>
     public string? OutputPath { get; set; }
 

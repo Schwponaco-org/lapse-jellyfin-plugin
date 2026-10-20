@@ -23,21 +23,17 @@ using Microsoft.Extensions.Logging;
 namespace Jellyfin.Plugin.Lapse.Services;
 
 /// <summary>
-/// The scheduled extraction: goes through the picked libraries and writes the embedded
-/// subtitle tracks that match the settings out as files beside each video. Experimental.
+/// Scheduled extraction (experimental): goes through the picked libraries and writes the
+/// embedded tracks matching the settings out as files next to each video.
 ///
-/// The point is choosing. Jellyfin can already extract embedded subtitles, but it takes
-/// every one in every file and puts them in its cache, and someone who only ever wants
-/// the forced English track is paying for twenty others per file. This takes only the
-/// languages and kinds asked for, writes them where Jellyfin shows them as ordinary
-/// external subtitles, and leaves everything else in the video untouched.
+/// Jellyfin can extract embedded subs already, but it grabs every track into its cache.
+/// Someone who only wants forced English shouldn't pay for twenty other tracks per file.
 ///
-/// A second run over the same library does next to nothing: each track has a fixed file
-/// name, so one already written is recognised and passed over, usually without opening
-/// the video at all. Jellyfin's own record of a file's streams decides whether it's worth
-/// looking at; the file itself is only read when there's something to extract, or when
-/// that record can't be trusted - the file changed since it was scanned, or the library
-/// is set to not keep embedded subtitles, which leaves the record empty.
+/// Second runs are cheap: extracted files have fixed names so they're spotted and skipped,
+/// usually without opening the video. Jellyfin's stream record decides whether a file is
+/// worth looking at, the file itself is only read when there's something to extract or
+/// the record can't be trusted (file changed since the scan, or the library doesn't keep
+/// embedded subtitle info).
 /// </summary>
 public class EmbeddedSubtitleExtractionService
 {
@@ -54,33 +50,21 @@ public class EmbeddedSubtitleExtractionService
     private readonly IFileSystem _fileSystem;
     private readonly ILogger<EmbeddedSubtitleExtractionService> _logger;
 
-    // What ffprobe said about a file, kept for as long as the file stays the same size
-    // and age. Only the libraries whose database can't be trusted get probed every run,
-    // and this keeps those from reading every file again every night.
+    // ffprobe answers per file, kept while size and write time stay the same. Saves
+    // re-reading every file each night in libraries whose DB record can't be trusted.
     private readonly ConcurrentDictionary<string, (long Size, DateTime WriteTimeUtc, List<EmbeddedSubtitleTrack> Tracks)> _probeCache = new(StringComparer.Ordinal);
 
-    // Tracks that came out empty, so a placeholder forced track isn't read through again
-    // on every run for as long as the server is up.
+    // tracks that came out empty (placeholder forced tracks), so we don't read them every run
     private readonly ConcurrentDictionary<string, byte> _knownEmpty = new(StringComparer.Ordinal);
 
     private volatile ExtractionRunSummary? _lastRun;
 
-    // 1 while a run is going. The scheduler never starts the task twice, but the
-    // dashboard's run button goes through the same door.
+    // 1 while running. The scheduler won't start it twice but the dashboard button can try.
     private int _running;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="EmbeddedSubtitleExtractionService"/> class.
     /// </summary>
-    /// <param name="libraryManager">Looks up items and library settings.</param>
-    /// <param name="mediaSourceManager">Lists the versions of a film.</param>
-    /// <param name="libraryService">Walks a library's items.</param>
-    /// <param name="languages">Compares language tags.</param>
-    /// <param name="probe">Reads a file's subtitle streams.</param>
-    /// <param name="extractor">Writes the tracks out.</param>
-    /// <param name="providerManager">Asks Jellyfin to rescan items that got new files.</param>
-    /// <param name="fileSystem">Needed for that rescan.</param>
-    /// <param name="logger">Logger.</param>
     public EmbeddedSubtitleExtractionService(
         ILibraryManager libraryManager,
         IMediaSourceManager mediaSourceManager,
@@ -104,22 +88,36 @@ public class EmbeddedSubtitleExtractionService
     }
 
     /// <summary>
-    /// Gets what the last run did, or null if there hasn't been one since the server
-    /// started.
+    /// Gets what the last run did, null if none since the server started.
     /// </summary>
     public ExtractionRunSummary? LastRun => _lastRun;
 
     /// <summary>
-    /// Gets a value indicating whether a run is going now.
+    /// Gets a value indicating whether a run is going.
     /// </summary>
     public bool IsRunning => Volatile.Read(ref _running) == 1;
 
     /// <summary>
+    /// Puts a path or path filter in one form for comparing: composed Unicode (macOS and some
+    /// SMB shares give decomposed names, so a typed "Amélie" wouldn't match) and forward slashes.
+    /// </summary>
+    public static string? NormalizeForMatch(string? value)
+    {
+        return string.IsNullOrWhiteSpace(value) ? null : value.Trim().Normalize(NormalizationForm.FormC).Replace('\\', '/');
+    }
+
+    /// <summary>
+    /// Says whether a video path contains the path filter, ignoring case.
+    /// </summary>
+    public static bool PassesPathFilter(string videoPath, string? normalizedFilter)
+    {
+        return normalizedFilter is null
+            || NormalizeForMatch(videoPath)!.Contains(normalizedFilter, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
     /// Goes through the picked libraries once.
     /// </summary>
-    /// <param name="progress">Progress, 0 to 100.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>What happened.</returns>
     public async Task<ExtractionRunSummary> RunAsync(IProgress<double> progress, CancellationToken cancellationToken)
     {
         var summary = new ExtractionRunSummary { StartedUtc = DateTime.UtcNow };
@@ -159,7 +157,7 @@ public class EmbeddedSubtitleExtractionService
                 summary.Empty,
                 summary.Unsupported,
                 summary.Failed,
-                summary.Message is null ? string.Empty : " - " + summary.Message);
+                summary.Message is null ? string.Empty : " (" + summary.Message + ")");
         }
 
         return summary;
@@ -195,28 +193,33 @@ public class EmbeddedSubtitleExtractionService
             config.ExtractPictureSubtitles,
             NormalizeForMatch(config.ExtractPathFilter));
 
-        var items = new List<BaseItem>();
+        // library options are the same for everything in a library, so look them up once
+        var work = new List<(BaseItem Item, LibraryOptions? Options)>();
         var seenItems = new HashSet<Guid>();
 
         foreach (var libraryId in libraries)
         {
+            var options = LibraryOptionsFor(libraryId);
+
             foreach (var (item, _) in _libraryService.GetItemsWithLibrary(libraryId))
             {
                 if (seenItems.Add(item.Id))
                 {
-                    items.Add(item);
+                    work.Add((item, options));
                 }
             }
         }
 
         var seenPaths = new HashSet<string>(StringComparer.Ordinal);
 
-        for (var i = 0; i < items.Count; i++)
+        for (var i = 0; i < work.Count; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            progress.Report(100.0 * i / items.Count);
+            progress.Report(100.0 * i / work.Count);
 
-            foreach (var video in VideosOf(items[i]))
+            var (item, options) = work[i];
+
+            foreach (var video in VideosOf(item))
             {
                 if (!seenPaths.Add(video.Path) || !PassesPathFilter(video.Path, settings.PathFilter))
                 {
@@ -225,11 +228,11 @@ public class EmbeddedSubtitleExtractionService
 
                 try
                 {
-                    await ProcessVideoAsync(video, settings, summary, cancellationToken).ConfigureAwait(false);
+                    await ProcessVideoAsync(video, options, settings, summary, cancellationToken).ConfigureAwait(false);
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
                 {
-                    // One unreadable file is that file's problem, not the run's.
+                    // one bad file is that file's problem, not the run's
                     summary.Failed++;
                     AddFailure(summary, video.Path, ex.Message);
                     _logger.LogWarning(ex, "Could not extract subtitles from {Video}", video.Path);
@@ -245,10 +248,22 @@ public class EmbeddedSubtitleExtractionService
         }
     }
 
-    // The item itself, and any other versions of it sitting beside it ("Film - 720p.mkv"
-    // next to "Film - 1080p.mkv"). Jellyfin 10.11 lists those as paths on the item and
-    // Jellyfin 12 links them instead, so they're found through the media sources the
-    // server hands a player, which both versions fill in, with the path list as well.
+    private LibraryOptions? LibraryOptionsFor(Guid libraryId)
+    {
+        try
+        {
+            return _libraryManager.GetItemById(libraryId) is { } folder ? _libraryManager.GetLibraryOptions(folder) : null;
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or NullReferenceException)
+        {
+            _logger.LogDebug(ex, "Could not read the library settings for {Library}", libraryId);
+            return null;
+        }
+    }
+
+    // The item plus any other versions next to it ("Film - 720p.mkv" / "Film - 1080p.mkv").
+    // 10.11 keeps those as paths on the item and 12 links them, both fill in the media
+    // sources, so check both.
     private List<BaseItem> VideosOf(BaseItem item)
     {
         var result = new List<BaseItem> { item };
@@ -258,9 +273,8 @@ public class EmbeddedSubtitleExtractionService
             return result;
         }
 
-        // Path to item id, where the id is known. The same version can turn up in both
-        // lists, and only the media source carries its id, which on Jellyfin 12 is the only
-        // way to look it up.
+        // path -> item id where known. Only media sources carry the id, and on 12 that's the
+        // only way to look a version up.
         var versions = new Dictionary<string, string?>(StringComparer.Ordinal);
 
         foreach (var path in video.LocalAlternateVersions ?? Array.Empty<string>())
@@ -325,19 +339,14 @@ public class EmbeddedSubtitleExtractionService
         return result;
     }
 
-    [System.Diagnostics.CodeAnalysis.SuppressMessage(
-        "Security",
-        "CA3003:Review code for file path injection vulnerabilities",
-        Justification = "Every path here is Jellyfin's own resolved path for a library item, or built from one by ExtractedSubtitleNames.")]
-    private async Task ProcessVideoAsync(BaseItem item, RunSettings settings, ExtractionRunSummary summary, CancellationToken cancellationToken)
+    private async Task ProcessVideoAsync(BaseItem item, LibraryOptions? options, RunSettings settings, ExtractionRunSummary summary, CancellationToken cancellationToken)
     {
-        var videoPath = item.Path;
-
         if (!IsPlainVideoFile(item))
         {
             return;
         }
 
+        var videoPath = item.Path;
         var file = new FileInfo(videoPath);
         if (!file.Exists)
         {
@@ -346,13 +355,12 @@ public class EmbeddedSubtitleExtractionService
 
         summary.Videos++;
 
-        // Jellyfin's own record answers one question for free: does this file have any
-        // track worth extracting at all? For most of a library it doesn't, and those
-        // files are never opened. It can't answer anything past that - its stream numbers
-        // aren't the file's once there's a subtitle beside the video - so for every file
-        // that does, the file itself is read (once per change, the answer is kept).
-        var known = TracksFromDatabase(item, file, settings);
-        if (known is not null && !known.Any(t => IsWanted(t, settings)))
+        // Jellyfin's record tells us for free whether there's anything worth extracting. For
+        // most files there isn't and they never get opened. Its stream numbers aren't the
+        // file's though, so if there IS something we read the file (once per change).
+        var streams = item.GetMediaStreams();
+        var known = TracksFromDatabase(item, streams, file, options, settings);
+        if (known is not null && !known.Exists(t => IsWanted(t, settings)))
         {
             return;
         }
@@ -365,16 +373,13 @@ public class EmbeddedSubtitleExtractionService
             return;
         }
 
-        var jobs = PlanJobs(item, file, probed, settings, summary);
+        var jobs = PlanJobs(item, streams, file, probed, settings, summary);
         if (jobs.Count == 0)
         {
             return;
         }
 
-        var results = await _extractor
-            .ExtractTracksAsync(videoPath, jobs, settings.IncludePictures, cancellationToken)
-            .ConfigureAwait(false);
-
+        var results = await _extractor.ExtractTracksAsync(videoPath, jobs, settings.IncludePictures, cancellationToken).ConfigureAwait(false);
         var wroteAny = false;
 
         foreach (var result in results)
@@ -405,23 +410,16 @@ public class EmbeddedSubtitleExtractionService
         }
     }
 
-    // The tracks Jellyfin has on record, or null when that record can't be relied on to
-    // say there's nothing to do. Only what they are is used, never their numbers.
-    private List<EmbeddedSubtitleTrack>? TracksFromDatabase(BaseItem item, FileInfo file, RunSettings settings)
+    // The tracks Jellyfin has on record, or null if that record can't be trusted to say
+    // "nothing here". We only look at what the tracks are, never their numbers.
+    private static List<EmbeddedSubtitleTrack>? TracksFromDatabase(
+        BaseItem item,
+        IReadOnlyList<MediaStream> streams,
+        FileInfo file,
+        LibraryOptions? options,
+        RunSettings settings)
     {
-        // A library set to not keep embedded subtitles drops them from its record
-        // entirely, text only drops the pictures. Either way an empty answer there
-        // doesn't mean the file has none.
-        LibraryOptions? options = null;
-        try
-        {
-            options = _libraryManager.GetLibraryOptions(item);
-        }
-        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or NullReferenceException)
-        {
-            _logger.LogDebug(ex, "Could not read the library settings for {Video}", item.Path);
-        }
-
+        // libraries set to not keep embedded subs (or text only) leave them out of the record
         var keeps = options?.AllowEmbeddedSubtitles ?? EmbeddedSubtitleOptions.AllowAll;
         var keepsText = keeps is EmbeddedSubtitleOptions.AllowAll or EmbeddedSubtitleOptions.AllowText;
         var keepsPictures = keeps is EmbeddedSubtitleOptions.AllowAll or EmbeddedSubtitleOptions.AllowImage;
@@ -431,13 +429,13 @@ public class EmbeddedSubtitleExtractionService
             return null;
         }
 
-        // A file changed since Jellyfin last read it may have different tracks now.
+        // changed since Jellyfin read it, may have different tracks now
         if (Math.Abs((file.LastWriteTimeUtc - DateTime.SpecifyKind(item.DateModified, DateTimeKind.Utc)).TotalSeconds) > 2)
         {
             return null;
         }
 
-        return item.GetMediaStreams()
+        return streams
             .Where(s => s.Type == MediaStreamType.Subtitle && string.IsNullOrEmpty(s.Path) && !s.IsExternal)
             .Select(s => new EmbeddedSubtitleTrack
             {
@@ -451,10 +449,10 @@ public class EmbeddedSubtitleExtractionService
             .ToList();
     }
 
-    // Works out which of a file's tracks to write, counting the ones it passes over into
-    // the summary.
+    // Picks the tracks to write and counts the ones it skips into the summary.
     private List<TrackExtractionJob> PlanJobs(
         BaseItem item,
+        IReadOnlyList<MediaStream> streams,
         FileInfo file,
         List<EmbeddedSubtitleTrack> tracks,
         RunSettings settings,
@@ -483,8 +481,7 @@ public class EmbeddedSubtitleExtractionService
                 continue;
             }
 
-            var destination = ExtractedSubtitleNames.BuildPath(
-                file.FullName, track.Index, track.Language, track.IsForced, track.IsHearingImpaired, extension);
+            var destination = ExtractedSubtitleNames.BuildPath(file.FullName, track.Index, track.Language, track.IsForced, track.IsHearingImpaired, extension);
 
             if (SubtitleExtractor.IsCurrent(item, destination))
             {
@@ -494,10 +491,10 @@ public class EmbeddedSubtitleExtractionService
 
             if (settings.SkipExisting)
             {
-                existing ??= ExistingSubtitles(item, file.FullName);
+                existing ??= ExistingSubtitles(streams, file.FullName);
                 var language = _languages.Resolve(track.Language);
 
-                if (existing.Any(e => e.Forced == track.IsForced && SubtitleLanguages.SameLanguage(e.Language, language)))
+                if (existing.Exists(e => e.Forced == track.IsForced && SubtitleLanguages.SameLanguage(e.Language, language)))
                 {
                     summary.CoveredByExisting++;
                     continue;
@@ -511,8 +508,7 @@ public class EmbeddedSubtitleExtractionService
                 continue;
             }
 
-            // An out of date copy from before the video was replaced is written over, as
-            // long as nothing touches it in the meantime.
+            // an out of date copy from before the video was replaced gets written over (if nothing touches it meanwhile)
             var writeTime = File.Exists(destination) ? File.GetLastWriteTimeUtc(destination) : (DateTime?)null;
             jobs.Add(new TrackExtractionJob(track, destination, ReplaceExisting: writeTime is not null, ExistingWriteTimeUtc: writeTime));
         }
@@ -522,30 +518,23 @@ public class EmbeddedSubtitleExtractionService
 
     private bool IsWanted(EmbeddedSubtitleTrack track, RunSettings settings)
     {
-        switch (settings.Filter)
+        if ((settings.Filter == ExtractTrackFilter.ForcedOnly && !track.IsForced)
+            || (settings.Filter == ExtractTrackFilter.NotForced && track.IsForced))
         {
-            case ExtractTrackFilter.ForcedOnly when !track.IsForced:
-            case ExtractTrackFilter.NotForced when track.IsForced:
-                return false;
+            return false;
         }
 
         return settings.Languages.Count == 0 || SubtitleLanguages.Matches(settings.Languages, _languages.Resolve(track.Language));
     }
 
-    // The subtitle files Jellyfin shows, or will show after its next scan, for this video:
-    // the external ones it has on record, and files beside the video named after it.
-    // Each comes with its language and whether it's forced, read the way Jellyfin reads
-    // them. A file whose language can't be told doesn't cover anything.
-    [System.Diagnostics.CodeAnalysis.SuppressMessage(
-        "Security",
-        "CA3003:Review code for file path injection vulnerabilities",
-        Justification = "Lists the folder of a video Jellyfin already resolved.")]
-    private List<(SubtitleLanguageKey Language, bool Forced)> ExistingSubtitles(BaseItem item, string videoPath)
+    // Subtitle files Jellyfin shows (or will after its next scan) for this video, with their
+    // language and forced flag read the way Jellyfin reads them. No language = covers nothing.
+    private List<(SubtitleLanguageKey Language, bool Forced)> ExistingSubtitles(IReadOnlyList<MediaStream> streams, string videoPath)
     {
         var result = new List<(SubtitleLanguageKey, bool)>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
 
-        foreach (var stream in item.GetMediaStreams())
+        foreach (var stream in streams)
         {
             if (stream.Type != MediaStreamType.Subtitle || string.IsNullOrEmpty(stream.Path) || !File.Exists(stream.Path))
             {
@@ -624,8 +613,7 @@ public class EmbeddedSubtitleExtractionService
         return tracks;
     }
 
-    // A video file on disk that ffmpeg can open as one. Disc folders, ISOs, .strm links
-    // and anything streamed from a URL are left alone.
+    // a plain file ffmpeg can open. disc folders, ISOs, .strm and URLs are left alone
     private static bool IsPlainVideoFile(BaseItem item)
     {
         if (string.IsNullOrEmpty(item.Path) || item.LocationType == LocationType.Virtual || !item.IsFileProtocol)
@@ -640,10 +628,7 @@ public class EmbeddedSubtitleExtractionService
     {
         try
         {
-            _providerManager.QueueRefresh(
-                item.Id,
-                new MetadataRefreshOptions(new DirectoryService(_fileSystem)),
-                RefreshPriority.Normal);
+            _providerManager.QueueRefresh(item.Id, new MetadataRefreshOptions(new DirectoryService(_fileSystem)), RefreshPriority.Normal);
         }
         catch (Exception ex) when (ex is InvalidOperationException or ObjectDisposedException)
         {
@@ -656,44 +641,11 @@ public class EmbeddedSubtitleExtractionService
         return string.Join('|', file.FullName, file.Length, file.LastWriteTimeUtc.Ticks, streamIndex);
     }
 
-    /// <summary>
-    /// Puts a path or a path filter into one form for comparing: composed Unicode (macOS
-    /// and some SMB shares hand back decomposed names, so "Amélie" typed in a box wouldn't
-    /// otherwise match "Amélie" on disk) and forward slashes.
-    /// </summary>
-    /// <param name="value">The path or filter.</param>
-    /// <returns>The normalised form, or null for a blank one.</returns>
-    public static string? NormalizeForMatch(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return null;
-        }
-
-        return value.Trim().Normalize(NormalizationForm.FormC).Replace('\\', '/');
-    }
-
-    /// <summary>
-    /// Says whether a video path contains the path filter, ignoring case.
-    /// </summary>
-    /// <param name="videoPath">The video's path.</param>
-    /// <param name="normalizedFilter">The filter from <see cref="NormalizeForMatch"/>, or null for none.</param>
-    /// <returns>True when there's no filter or the path contains it.</returns>
-    public static bool PassesPathFilter(string videoPath, string? normalizedFilter)
-    {
-        return normalizedFilter is null
-            || NormalizeForMatch(videoPath)!.Contains(normalizedFilter, StringComparison.OrdinalIgnoreCase);
-    }
-
     private static void AddFailure(ExtractionRunSummary summary, string videoPath, string? reason)
     {
-        AddFailure(summary, Path.GetFileName(videoPath) + ": " + (reason ?? "unknown error"));
-    }
+        var failure = Path.GetFileName(videoPath) + ": " + (reason ?? "unknown error");
 
-    // The dashboard can read the summary while a run is still adding to it, so the list
-    // is only touched under its own lock.
-    private static void AddFailure(ExtractionRunSummary summary, string failure)
-    {
+        // the dashboard can read this while the run adds to it
         lock (summary.Failures)
         {
             if (summary.Failures.Count < MaxFailuresKept)

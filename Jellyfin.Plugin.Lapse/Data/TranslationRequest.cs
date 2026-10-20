@@ -49,9 +49,7 @@ public class TranslationRequest
     public bool? IncludeMetadataHeader { get; set; }
 
     /// <summary>
-    /// Gets or sets whether lines below the threshold keep their original text, or null
-    /// for the configured default. When false they're translated anyway and counted as
-    /// flagged in the header.
+    /// Gets or sets whether low confidence lines keep the original text, null for the default.
     /// </summary>
     public bool? KeepLowConfidenceOriginal { get; set; }
 }

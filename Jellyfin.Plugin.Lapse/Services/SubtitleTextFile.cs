@@ -6,16 +6,14 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
 namespace Jellyfin.Plugin.Lapse.Services;
 
 /// <summary>
-/// A subtitle file split into "the lines that are dialogue" and "everything else".
-/// Translation only ever touches the dialogue, so timings, cue numbers, style blocks and
-/// headers come back out exactly as they went in.
+/// A subtitle split into dialogue lines and everything else. Translation only touches the
+/// dialogue so timings, numbers, styles and headers come out untouched.
 /// </summary>
 public class SubtitleTextFile
 {
@@ -35,25 +33,24 @@ public class SubtitleTextFile
     public string Extension { get; }
 
     /// <summary>
-    /// Gets the dialogue lines, in file order.
+    /// Gets the dialogue lines in file order. Builds a new list each time, grab it once.
     /// </summary>
-    public IReadOnlyList<string> TextLines => _spans.Select(s => s.Text).ToList();
+    public IReadOnlyList<string> TextLines => _spans.ConvertAll(s => s.Text);
 
     /// <summary>
     /// Reads a subtitle file and works out which of its lines are dialogue.
     /// </summary>
-    /// <param name="path">The file to read.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>The parsed file.</returns>
     /// <exception cref="NotSupportedException">Thrown for a format we can't pick text out of.</exception>
-    [System.Diagnostics.CodeAnalysis.SuppressMessage(
-        "Security",
-        "CA3003:Review code for file path injection vulnerabilities",
-        Justification = "Callers only pass subtitle paths the library reported for an item, or paths an admin picked in the file browser.")]
     public static async Task<SubtitleTextFile> LoadAsync(string path, CancellationToken cancellationToken = default)
     {
         var extension = Path.GetExtension(path).ToLowerInvariant();
         var lines = (await SubtitleEncoding.ReadAllLinesAsync(path, cancellationToken).ConfigureAwait(false)).ToList();
+
+        // trailing newline gives one empty line too many
+        if (lines.Count > 0 && lines[^1].Length == 0)
+        {
+            lines.RemoveAt(lines.Count - 1);
+        }
 
         var spans = extension switch
         {
@@ -68,8 +65,6 @@ public class SubtitleTextFile
     /// <summary>
     /// Puts translated text back in place of the original dialogue.
     /// </summary>
-    /// <param name="translated">One entry per dialogue line, in the same order as
-    /// <see cref="TextLines"/>. Null entries leave that line alone.</param>
     public void ApplyTranslations(IReadOnlyList<string?> translated)
     {
         for (var i = 0; i < _spans.Count && i < translated.Count; i++)
@@ -88,15 +83,6 @@ public class SubtitleTextFile
     /// <summary>
     /// Writes the file back out, optionally with a comment block at the top.
     /// </summary>
-    /// <param name="path">Where to write it.</param>
-    /// <param name="headerLines">Lines to put at the very top, already formatted as
-    /// comments for this format, or null for none.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>Task.</returns>
-    [System.Diagnostics.CodeAnalysis.SuppressMessage(
-        "Security",
-        "CA3003:Review code for file path injection vulnerabilities",
-        Justification = "The output path is derived from an input path the caller already validated, with a fixed suffix.")]
     public async Task SaveAsync(string path, IReadOnlyList<string>? headerLines, CancellationToken cancellationToken = default)
     {
         var output = new List<string>();
@@ -104,9 +90,7 @@ public class SubtitleTextFile
 
         if (headerLines is { Count: > 0 } && SupportsComments)
         {
-            // A WebVTT file has to start with the WEBVTT line and nothing else, so the
-            // NOTE block goes underneath it rather than above. Anything else takes the
-            // header at the very top.
+            // vtt must start with WEBVTT, so the NOTE goes below it. Everything else gets it on top.
             var signature = _lines.FindIndex(line => line.Trim().StartsWith("WEBVTT", StringComparison.OrdinalIgnoreCase));
 
             if (signature >= 0)
@@ -126,13 +110,9 @@ public class SubtitleTextFile
     }
 
     /// <summary>
-    /// Builds the name of the translated file: Movie.en.srt with target "es" becomes
-    /// Movie.es.translated.srt. An existing language tag on the end of the name gets
-    /// replaced rather than stacked, so re-translating doesn't grow the name each time.
+    /// Builds the translated file name: Movie.en.srt + "es" = Movie.es.translated.srt.
+    /// An existing language tag gets replaced, not stacked.
     /// </summary>
-    /// <param name="sourcePath">The subtitle being translated.</param>
-    /// <param name="targetLanguage">The language code being translated into.</param>
-    /// <returns>The output path.</returns>
     public static string BuildOutputPath(string sourcePath, string targetLanguage)
     {
         var directory = Path.GetDirectoryName(sourcePath) ?? string.Empty;
@@ -150,9 +130,7 @@ public class SubtitleTextFile
             stem = stem[..lastDot];
         }
 
-        // The language is typed by a person and ends up in a file name, so only the
-        // characters a language tag is made of get that far. "pt-BR" and "zh_Hant" come
-        // through; a slash can't take the file somewhere else.
+        // typed by a person and goes in a file name, so only tag characters ("pt-BR", "zh_Hant"), no slashes
         var tag = new string(targetLanguage.Trim().Where(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_').ToArray());
         if (tag.Length == 0)
         {
@@ -163,14 +141,9 @@ public class SubtitleTextFile
     }
 
     /// <summary>
-    /// Reads the language tag off the end of a subtitle's name, so Movie.en.srt gives
-    /// "en". Releases label their subtitle files this way almost without exception, which
-    /// makes the filename the one source language hint available without reading the
-    /// dialogue - and providers that reject "auto" need a real code to be given one.
+    /// Reads the language tag off a subtitle's name (Movie.en.srt gives "en"). Releases
+    /// nearly always name them like that, and providers that reject "auto" need a real code.
     /// </summary>
-    /// <param name="path">The subtitle path.</param>
-    /// <param name="language">The tag that was found, lowercased.</param>
-    /// <returns>True if the name ends in something that looks like a language code.</returns>
     public static bool TryGetLanguageTag(string path, out string language)
     {
         return TryGetLanguageTag(path, out language, out _);
@@ -206,12 +179,8 @@ public class SubtitleTextFile
     }
 
     /// <summary>
-    /// Gets a value indicating whether this format has a comment syntax to put a header
-    /// in. SRT has none: the NOTE block that used to be written there is not a numbered
-    /// cue, and players that parse strictly - which is most of them once the file leaves
-    /// Jellyfin - either drop the first subtitle or reject the file outright. So the
-    /// header is a WebVTT and ASS/SSA thing, and asking for one on an SRT quietly gets a
-    /// clean file instead of a broken one.
+    /// Gets a value indicating whether the format has comments for a header. srt doesn't, a
+    /// NOTE block there made strict players drop the first cue or reject the whole file.
     /// </summary>
     public bool SupportsComments => Extension is ".ass" or ".ssa" or ".vtt" or ".webvtt";
 
@@ -221,62 +190,49 @@ public class SubtitleTextFile
         return Extension is ".ass" or ".ssa" ? "; " + text : "NOTE " + text;
     }
 
-    // srt and vtt: a cue is "optional number / timing line / one or more text lines".
-    // Anything that isn't a timing line, a bare cue number, a blank, or a WEBVTT/NOTE
-    // header is dialogue.
+    // srt/vtt: dialogue is whatever follows a timing line up to the next blank line. That
+    // keeps out cue numbers, the WEBVTT header and NOTE/STYLE/REGION blocks (a translated
+    // STYLE block is a stylesheet in Spanish). Going by position also lets a line that's
+    // just "1984" through instead of mistaking it for a cue number.
     private static List<TextSpan> FindCueText(IReadOnlyList<string> lines)
     {
         var spans = new List<TextSpan>();
-        var inNoteBlock = false;
+        var inCue = false;
 
         for (var i = 0; i < lines.Count; i++)
         {
             var line = lines[i];
-            var trimmed = line.Trim();
 
-            if (trimmed.Length == 0)
+            if (line.Trim().Length == 0)
             {
-                inNoteBlock = false;
-                continue;
-            }
-
-            if (inNoteBlock)
-            {
-                continue;
-            }
-
-            if (trimmed.StartsWith("WEBVTT", StringComparison.OrdinalIgnoreCase)
-                || trimmed.StartsWith("STYLE", StringComparison.Ordinal)
-                || trimmed.StartsWith("REGION", StringComparison.Ordinal))
-            {
-                continue;
-            }
-
-            if (trimmed.StartsWith("NOTE", StringComparison.Ordinal))
-            {
-                inNoteBlock = true;
+                inCue = false;
                 continue;
             }
 
             if (line.Contains("-->", StringComparison.Ordinal))
             {
+                inCue = true;
                 continue;
             }
 
-            if (int.TryParse(trimmed, out _))
+            // no blank line between cues, this is the next cue's number
+            if (i + 1 < lines.Count && lines[i + 1].Contains("-->", StringComparison.Ordinal))
             {
+                inCue = false;
                 continue;
             }
 
-            spans.Add(new TextSpan(i, string.Empty, line));
+            if (inCue)
+            {
+                spans.Add(new TextSpan(i, string.Empty, line));
+            }
         }
 
         return spans;
     }
 
-    // ass/ssa: only Dialogue: lines carry text, and the text is everything after the
-    // ninth comma. The nine fields before it are Layer, Start, End, Style, Name, MarginL,
-    // MarginR, MarginV and Effect.
+    // ass/ssa: text is everything after the 9th comma of a Dialogue line
+    // (Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect)
     private static List<TextSpan> FindDialogueText(IReadOnlyList<string> lines)
     {
         const int FieldsBeforeText = 9;
@@ -317,19 +273,5 @@ public class SubtitleTextFile
         return spans;
     }
 
-    private sealed class TextSpan
-    {
-        public TextSpan(int lineIndex, string prefix, string text)
-        {
-            LineIndex = lineIndex;
-            Prefix = prefix;
-            Text = text;
-        }
-
-        public int LineIndex { get; }
-
-        public string Prefix { get; }
-
-        public string Text { get; }
-    }
+    private sealed record TextSpan(int LineIndex, string Prefix, string Text);
 }

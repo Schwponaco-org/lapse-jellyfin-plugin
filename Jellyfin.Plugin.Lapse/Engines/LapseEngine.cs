@@ -12,7 +12,7 @@ using Jellyfin.Plugin.Lapse.Data;
 namespace Jellyfin.Plugin.Lapse.Engines;
 
 /// <summary>
-/// The LAPSE engine, which is what this plugin is built around. Its CLI is:
+/// The LAPSE engine. CLI:
 ///
 /// lapse &lt;video_or_subtitle&gt; &lt;subtitle&gt; [auto|ols|nosplit|split] [penalty]
 ///       [--output PATH] [--confidence N] [--audio-track N] [--sub-track N]
@@ -20,28 +20,30 @@ namespace Jellyfin.Plugin.Lapse.Engines;
 ///       [--no-backup] [--no-sidecar] [--no-embedded] [--full-scan] [--no-cache]
 ///       [--force] [--strict] [--dry-run] [--json] [--quiet]
 ///
-/// With --json it prints one line of JSON describing what it did, including the verdict
-/// it reached, which is a much better thing to judge a run on than scraping a sentence.
-/// Older builds don't have --json (or the auto mode), so the runtime probe decides which
-/// of the two paths to take and the plain-text parsing is kept for those.
+/// --json gives one line of JSON with the verdict, much better than scraping text. Old
+/// builds don't have it (or auto mode), so the text parsing stays for those.
 /// </summary>
 public partial class LapseEngine : IEngine
 {
     /// <summary>
-    /// The engine's own default for --confidence: how many standard deviations the answer
-    /// has to stand out by before it will overwrite the original. This is sure_sigma in
-    /// the engine's main.cpp, and the plugin's own threshold setting defaults to it rather
-    /// than to a number of the plugin's own invention.
+    /// The engine's default --confidence (sure_sigma in its main.cpp), in standard deviations.
     /// </summary>
     public const double DefaultConfidenceSigma = 8.0;
 
     private const string RepoUrl = "https://github.com/Schwponaco-org/lapse";
     private const string BenchmarksUrl = "https://github.com/Schwponaco-org/lapse/blob/main/docs/benchmarks.md";
 
-    // The files that ship in the same archive as the binary and have to land beside it.
-    // silero.cpp's loader looks for these next to the executable and quietly falls back to
-    // the weaker built-in voice detection when they aren't there, so a "successful" install
-    // that dropped them would just sync worse for no visible reason.
+    // numeric parameters and the flag each one drives
+    private static readonly (string Key, string Flag)[] NumberFlags =
+    {
+        ("audioTrack", "--audio-track"),
+        ("subTrack", "--sub-track"),
+        ("fps", "--fps"),
+        ("snap", "--snap")
+    };
+
+    // Ship in the archive and have to sit next to the binary. Without them silero quietly
+    // falls back to the weaker voice detector and everything syncs worse.
     private static readonly string[] CompanionNames =
     {
         "libonnxruntime.so", "libonnxruntime.dylib", "onnxruntime.dll", "silero_vad.onnx"
@@ -61,8 +63,7 @@ public partial class LapseEngine : IEngine
     /// <inheritdoc />
     public bool NeedsSeededOutput(EngineRuntimeInfo runtime)
     {
-        // With --output it writes wherever we point it. Without, it edits in place and the
-        // only way to get the result somewhere else is to give it a copy to work on.
+        // without --output it edits in place, so it needs a copy to chew on
         return !runtime.SupportsOutputFlag;
     }
 
@@ -73,15 +74,13 @@ public partial class LapseEngine : IEngine
         var values = options.Parameters;
         var supportsOutput = runtime.SupportsOutputFlag;
 
-        // Without --output, LAPSE rewrites the file it's handed, so the caller copies the
-        // input to the output path first and we point LAPSE at that copy.
+        // without --output we point it at the copy the runner made
         var subtitleArgument = supportsOutput ? options.InputPath : options.OutputPath;
 
         var mode = options.Mode;
         if (mode == SyncMode.Auto && !runtime.SupportsAutoMode)
         {
-            // An older binary would reject "auto" outright. Its nearest equivalent is the
-            // plain single-offset search, which is what it used to default to anyway.
+            // old builds reject "auto", single offset is what they defaulted to anyway
             mode = SyncMode.Standard;
         }
 
@@ -95,9 +94,7 @@ public partial class LapseEngine : IEngine
 
         var args = new List<string> { options.ReferencePath, subtitleArgument, modeArgument };
 
-        // The penalty is positional and has to come right after the mode. Only split mode
-        // reads it; in auto mode the engine works the penalty out from the size of the
-        // file, which it does better than a fixed number would.
+        // positional, right after the mode, split only (auto works it out itself)
         if (mode == SyncMode.Split)
         {
             args.Add(options.Penalty.ToString(CultureInfo.InvariantCulture));
@@ -109,9 +106,7 @@ public partial class LapseEngine : IEngine
             args.Add(options.OutputPath);
         }
 
-        // The plugin does its own backups, driven by the output mode setting, so let the
-        // engine skip its .bak when it knows how. Older builds always write one, next to
-        // the temporary work file, and the runner cleans that up afterwards.
+        // we do our own backups. Old builds write a .bak anyway, the runner cleans it up
         if (runtime.SupportsNoBackupFlag)
         {
             args.Add("--no-backup");
@@ -128,34 +123,26 @@ public partial class LapseEngine : IEngine
             args.Add(EngineParameterValues.Format(options.ConfidenceSigma));
         }
 
-        AddNumber(args, runtime, values, "audioTrack", "--audio-track");
-        AddNumber(args, runtime, values, "subTrack", "--sub-track");
-        AddNumber(args, runtime, values, "fps", "--fps");
-
-        // --snap takes its window as an optional value. The engine's own default is 120ms;
-        // the plugin always passes a number so what's in the box is what runs.
-        AddNumber(args, runtime, values, "snap", "--snap");
-
-        if (options.IgnoreEmbedded && !values.GetBool("noEmbedded") && runtime.HasFlag("--no-embedded"))
+        // only flags the installed build lists, old builds refuse unknown ones
+        foreach (var (key, flag) in NumberFlags)
         {
-            args.Add("--no-embedded");
+            if (runtime.HasFlag(flag))
+            {
+                values.AddNumber(args, key, flag);
+            }
         }
-        else
-        {
-            AddSwitch(args, runtime, values, "noEmbedded", "--no-embedded");
-        }
-        AddSwitch(args, runtime, values, "fullScan", "--full-scan");
-        AddSwitch(args, runtime, values, "noCache", "--no-cache");
-        AddSwitch(args, runtime, values, "force", "--force");
 
-        AddText(args, runtime, values, "encoding", "--encoding");
-
-        // The runner asks for this on a second attempt, after the engine turned a very
-        // short subtitle away for having too few cues to be sure about.
-        if (options.ForceAnyway && !values.GetBool("force") && runtime.HasFlag("--force"))
+        if (runtime.HasFlag("--encoding"))
         {
-            args.Add("--force");
+            values.AddText(args, "encoding", "--encoding");
         }
+
+        // a track extracted from this video must go against the audio, and the runner asks
+        // for --force on the retry after "too few cues"
+        AddIfSupported(args, runtime, "--no-embedded", values.GetBool("noEmbedded") || options.IgnoreEmbedded);
+        AddIfSupported(args, runtime, "--full-scan", values.GetBool("fullScan"));
+        AddIfSupported(args, runtime, "--no-cache", values.GetBool("noCache"));
+        AddIfSupported(args, runtime, "--force", values.GetBool("force") || options.ForceAnyway);
 
         return args;
     }
@@ -163,9 +150,7 @@ public partial class LapseEngine : IEngine
     /// <inheritdoc />
     public SyncResult ParseResult(string stdout, string stderr, int exitCode, SyncMode requestedMode, int requestedPenalty)
     {
-        // The JSON report is the reliable source when the binary has it. It's a single
-        // line on stdout, but be generous about where it is in case something else got
-        // printed first.
+        // JSON report if there is one, could be on either stream
         var report = ReadJsonReport(stdout) ?? ReadJsonReport(stderr);
         if (report is not null)
         {
@@ -212,7 +197,6 @@ public partial class LapseEngine : IEngine
             GitHubRepo = "Schwponaco-org/lapse",
             BuildGuideUrl = RepoUrl + "#building",
             ExecutableName = "lapse",
-            EditsInPlace = true,
             Tier = EngineTier.Recommended,
             AdvancedNote = "Text encoding needs no setting here for the usual case. LAPSE detects the "
                 + "encoding of the subtitle it reads and writes the result back in the same one, so a "
@@ -294,6 +278,7 @@ public partial class LapseEngine : IEngine
             Kind = EngineParameterKind.Number,
             Minimum = 10,
             Maximum = 120,
+            Step = 0.001,
             BlankMeansUnset = true
         });
 
@@ -390,47 +375,11 @@ public partial class LapseEngine : IEngine
         return download;
     }
 
-    private static void AddSwitch(
-        List<string> args,
-        EngineRuntimeInfo runtime,
-        EngineParameterValues values,
-        string key,
-        string flag)
+    private static void AddIfSupported(List<string> args, EngineRuntimeInfo runtime, string flag, bool wanted)
     {
-        if (values.GetBool(key) && runtime.HasFlag(flag))
+        if (wanted && runtime.HasFlag(flag))
         {
             args.Add(flag);
-        }
-    }
-
-    private static void AddNumber(
-        List<string> args,
-        EngineRuntimeInfo runtime,
-        EngineParameterValues values,
-        string key,
-        string flag)
-    {
-        var value = values.GetInt(key);
-        if (value.HasValue && runtime.HasFlag(flag))
-        {
-            args.Add(flag);
-            args.Add(value.Value.ToString(CultureInfo.InvariantCulture));
-        }
-    }
-
-    // Same, for the ones whose value is a word rather than a number. A build that predates
-    // the flag would reject it outright, so the runtime probe is asked first here too.
-    private static void AddText(
-        List<string> args,
-        EngineRuntimeInfo runtime,
-        EngineParameterValues values,
-        string key,
-        string flag)
-    {
-        if (values.ShouldPass(key) && runtime.HasFlag(flag))
-        {
-            args.Add(flag);
-            args.Add(values.GetString(key));
         }
     }
 
@@ -472,7 +421,7 @@ public partial class LapseEngine : IEngine
                 Confidence = ReadDouble(root, "confidence"),
                 Sigma = ReadDouble(root, "sigma"),
                 Agreement = ReadDouble(root, "agreement"),
-                OffsetMs = (int?)ReadDouble(root, "offset_ms"),
+                OffsetMs = ReadDouble(root, "offset_ms") is { } offset ? (int)Math.Round(offset) : null,
                 EngineOutput = DescribeReport(root, verdict)
             };
 
@@ -542,8 +491,7 @@ public partial class LapseEngine : IEngine
             : null;
     }
 
-    // The engine reports what it actually did, which in auto mode is one of "auto/shifted",
-    // "auto/drifting", "auto/recut" and friends rather than the mode we asked for.
+    // auto mode reports what it actually did ("auto/shifted", "auto/drifting", "auto/recut"...)
     private static SyncMode ModeFromEngineName(string? name, SyncMode fallback)
     {
         if (string.IsNullOrWhiteSpace(name))

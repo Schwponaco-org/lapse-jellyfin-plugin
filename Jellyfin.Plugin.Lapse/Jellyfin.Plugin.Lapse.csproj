@@ -22,6 +22,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Lets the tests reach the few internal helpers worth checking on their own. -->
+    <InternalsVisibleTo Include="Jellyfin.Plugin.Lapse.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <None Remove="Configuration\configPage.html" />
     <EmbeddedResource Include="Configuration\configPage.html" />
     <None Remove="Configuration\lapse-dashboard.js" />

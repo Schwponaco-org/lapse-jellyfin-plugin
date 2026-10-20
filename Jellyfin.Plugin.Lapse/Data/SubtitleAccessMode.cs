@@ -5,10 +5,7 @@
 namespace Jellyfin.Plugin.Lapse.Data;
 
 /// <summary>
-/// Who, apart from administrators, may work on an item's subtitles: sync it, shift it,
-/// convert it or translate it. Administrators always may, and everything that changes the
-/// plugin itself - settings, engines, libraries, bulk runs - stays admin only whatever
-/// this is set to.
+/// Who besides admins may sync, shift, convert or translate an item's subtitles. Plugin settings stay admin only regardless.
 /// </summary>
 public enum SubtitleAccessMode
 {
@@ -19,9 +16,7 @@ public enum SubtitleAccessMode
     AdminsOnly = 0,
 
     /// <summary>
-    /// Anyone holding Jellyfin's own "subtitle management" permission. Those users can
-    /// already download subtitle files into the library, so this hands them nothing they
-    /// couldn't do a messier version of already.
+    /// Users with Jellyfin's subtitle management permission. They can already download subtitles anyway.
     /// </summary>
     SubtitleManagers = 1,
 

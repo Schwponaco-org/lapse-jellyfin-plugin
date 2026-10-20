@@ -9,3 +9,11 @@ dotnet_diagnostic.CA2007.severity = none
 # CA1859: Use concrete types when possible for improved performance - nice to have,
 # not worth chasing everywhere.
 dotnet_diagnostic.CA1859.severity = suggestion
+
+# Every path we touch comes from Jellyfin's own item records, and paths sent in a request
+# are matched against the item's subtitle list before use (FindSubtitle). So CA3003 only
+# ever flagged things we had already checked.
+dotnet_diagnostic.CA3003.severity = none
+
+# The XML config serializer needs setters on the list properties.
+dotnet_diagnostic.CA2227.severity = none

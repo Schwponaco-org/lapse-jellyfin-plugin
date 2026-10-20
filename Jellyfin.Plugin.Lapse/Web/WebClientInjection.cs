@@ -24,8 +24,7 @@ public enum InjectionMethod
     PatchedFile,
 
     /// <summary>
-    /// index.html can be read and does have a head to inject into, so the middleware will
-    /// do its job as soon as a browser asks for the page. Nothing has asked yet.
+    /// index.html looks fine, the middleware will do its thing once a browser asks for it.
     /// </summary>
     Ready,
 
@@ -36,29 +35,21 @@ public enum InjectionMethod
 }
 
 /// <summary>
-/// Shared knowledge about getting the LAPSE script into the Jellyfin web client, plus
-/// where the last attempt stands.
+/// Getting our script into the web client, and how that's going.
 ///
-/// This used to be done by editing index.html on disk in the plugin's constructor, the
-/// way plugins have done it for years. That quietly fails on most packaged installs -
-/// the Debian and RPM packages own /usr/share/jellyfin/web as root while the server runs
-/// as the jellyfin user, and the macOS build keeps its web client inside the (signed,
-/// read-only) app bundle. The plugin loaded, the dashboard worked, and no sync entry ever
-/// appeared in the item menu. So the script is now added to index.html on its way out,
-/// which needs no write access anywhere.
+/// We used to edit index.html on disk like plugins traditionally do, but on Debian/RPM the
+/// web folder is owned by root and on macOS it's inside the signed app bundle, so it just
+/// silently didn't work. Now it's added on the way out by the middleware.
 /// </summary>
 public static class WebClientInjection
 {
     /// <summary>
-    /// The marker that says the script is already in a page. Also the tag inserted by the
-    /// old on-disk patching, so a server whose index.html was successfully edited by an
-    /// earlier version doesn't end up with two copies.
+    /// Says the script is already in a page (old on-disk patching used it too, so no double copies).
     /// </summary>
     public const string Marker = "lapse-inject.js";
 
-    // Exactly what the old on-disk patching wrote into index.html. It has no version on
-    // it, so a server still carrying it would go on serving whatever copy of the script
-    // each browser cached first, however many times the plugin is updated.
+    // What the old on-disk patching wrote. No version in it, so browsers would keep a stale
+    // cached script forever. We swap it for the versioned one.
     private const string LegacyTag = "<script src=\"configurationpage?name=lapse-inject.js\"></script>";
 
     /// <summary>
@@ -76,38 +67,27 @@ public static class WebClientInjection
     /// </summary>
     public static string? WebPath { get; set; }
 
+    // the assembly doesn't change while running
+    private static readonly Lazy<string> Version = new(BuildVersion);
+
     /// <summary>
-    /// Builds the script and stylesheet tags to insert, rooted at the web client's own
-    /// base path so they resolve the same whether the page was loaded as /web/,
-    /// /web/index.html, or from behind a configured base URL.
+    /// Builds the script and stylesheet tags, rooted at the web client's base path (works behind a base URL too).
     /// </summary>
-    /// <param name="webBasePath">The request path the web client is served under,
-    /// e.g. "/web".</param>
-    /// <returns>The markup to insert before &lt;/head&gt;.</returns>
     public static string BuildTags(string webBasePath)
     {
         var prefix = webBasePath.TrimEnd('/');
 
-        // The plugin's version goes in the URL so that updating it actually reaches
-        // people. Without this the browser has no reason to ask for the file again - the
-        // address never changed - so an upgrade leaves everyone running the script they
-        // cached whenever they first loaded the client, and the new version appears to do
-        // nothing at all.
-        var version = BuildVersion();
+        // version in the URL so an update actually reaches browsers instead of the cached copy
+        var version = Version.Value;
 
-        // data-lapse-inject-css is what the script looks for before adding the stylesheet
-        // itself, so tagging it here stops the page ending up with two copies.
+        // the script checks data-lapse-inject-css before adding the stylesheet itself
         return $"<link rel=\"stylesheet\" href=\"{prefix}/configurationpage?name=lapse-inject.css&amp;v={version}\" data-lapse-inject-css=\"1\">"
             + $"<script src=\"{prefix}/configurationpage?name=lapse-inject.js&amp;v={version}\" defer></script>";
     }
 
     /// <summary>
-    /// Gets the string that makes a cached copy of the script stale when the plugin
-    /// changes. The assembly version is what moves on every release; a build that somehow
-    /// reports none falls back to the assembly's own timestamp, which still changes with
-    /// the file.
+    /// Cache buster: the assembly version, or its timestamp if there's no version.
     /// </summary>
-    /// <returns>A short token safe to put in a query string.</returns>
     private static string BuildVersion()
     {
         var assembly = typeof(WebClientInjection).Assembly;
@@ -132,14 +112,9 @@ public static class WebClientInjection
     /// <summary>
     /// Puts the tags into a page's head, if they aren't in it already.
     /// </summary>
-    /// <param name="html">The page markup.</param>
-    /// <param name="webBasePath">The request path the web client is served under.</param>
-    /// <returns>The markup with the tags in it, or null when there was no head to put
-    /// them in or they were already there.</returns>
     public static string? Inject(string html, string webBasePath)
     {
-        // A page an older version patched on disk gets its unversioned tag swapped for
-        // the current ones rather than being taken as already done.
+        // swap an old unversioned tag for the current ones
         html = html.Replace(LegacyTag, string.Empty, StringComparison.Ordinal);
 
         if (html.Contains(Marker, StringComparison.Ordinal))
@@ -157,17 +132,10 @@ public static class WebClientInjection
     }
 
     /// <summary>
-    /// Says whether a request path is the web client's entry document, which is the only
-    /// page worth rewriting. Tolerates a base URL in front of it.
-    ///
-    /// The trailing slash on the folder form matters and isn't optional here. A request
-    /// to "/web" is answered by a redirect to "/web/", and serving the page at the
-    /// slashless URL instead would leave the browser resolving every relative script in
-    /// it against the site root, which breaks the whole client. So that form is left to
-    /// redirect, and we pick the page up on the way back.
+    /// Says whether a path is the web client's index (base URL in front is fine). This runs on
+    /// every request so keep it cheap. "/web" without a slash is left to redirect, serving
+    /// the page there breaks every relative URL in it.
     /// </summary>
-    /// <param name="path">The request path.</param>
-    /// <returns>True if this request is for the web client's index page.</returns>
     public static bool IsWebIndexPath(string? path)
     {
         if (string.IsNullOrEmpty(path))
@@ -182,8 +150,6 @@ public static class WebClientInjection
     /// <summary>
     /// Works out the base path the web client is served under, from the request path.
     /// </summary>
-    /// <param name="path">The request path that matched <see cref="IsWebIndexPath"/>.</param>
-    /// <returns>The base path, without a trailing slash, e.g. "/web".</returns>
     public static string GetWebBasePath(string path)
     {
         if (path.EndsWith("/index.html", StringComparison.OrdinalIgnoreCase))
@@ -195,20 +161,10 @@ public static class WebClientInjection
     }
 
     /// <summary>
-    /// Works out where things stand right now, rather than reporting on whatever the last
-    /// request happened to do.
-    ///
-    /// <see cref="Method"/> on its own is not a fair answer to "does the context menu
-    /// work". It starts at None and only moves once a browser has actually asked this
-    /// server process for index.html. An admin who opens the plugin page from a client
-    /// that was already loaded - the normal case after a server restart, since the web
-    /// client is a single page app and doesn't re-fetch its own index - would see None
-    /// and a warning saying the entries can't be added, while the entries were in fact
-    /// working perfectly. So a status nobody has confirmed yet gets confirmed here, by
-    /// checking the one thing the middleware actually depends on: that index.html can be
-    /// read and has a head to insert into.
+    /// Works out where things stand now. <see cref="Method"/> only moves once a browser loads
+    /// index.html, and after a restart the already loaded SPA doesn't, so the dashboard would
+    /// show a false warning. If nothing's confirmed yet, check index.html is readable and has a head.
     /// </summary>
-    /// <returns>The current status.</returns>
     public static InjectionMethod Evaluate()
     {
         if (Method is InjectionMethod.Middleware or InjectionMethod.PatchedFile)
@@ -247,19 +203,8 @@ public static class WebClientInjection
     }
 
     /// <summary>
-    /// Says whether the sync entries will show up in the item context menu.
-    /// </summary>
-    /// <returns>True unless something is genuinely stopping the script from getting there.</returns>
-    public static bool IsWorking()
-    {
-        return Evaluate() != InjectionMethod.None;
-    }
-
-    /// <summary>
     /// Reads the web client's index.html off disk.
     /// </summary>
-    /// <param name="webPath">The folder the web client lives in.</param>
-    /// <returns>The markup, or null if it couldn't be read.</returns>
     public static string? TryReadIndex(string? webPath)
     {
         if (string.IsNullOrWhiteSpace(webPath))

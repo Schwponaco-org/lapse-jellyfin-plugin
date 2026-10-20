@@ -5,10 +5,8 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.IO;
-using System.Linq;
 using System.Text;
 using Jellyfin.Plugin.Lapse.Data;
 using Jellyfin.Plugin.Lapse.Engines;
@@ -18,89 +16,70 @@ using MediaBrowser.Model.Entities;
 namespace Jellyfin.Plugin.Lapse.Services;
 
 /// <summary>
-/// Finds every subtitle an item has: the files sitting next to the video, and the tracks
-/// still inside the video itself.
-///
-/// The engines only read files, so an embedded track can't be handed to one as it stands.
-/// It's still listed, because on most libraries embedded is all there is and a plugin
-/// that says "no subtitle found" to a film with eleven of them is no use to anybody. What
-/// happens instead is that the track gets pulled out to a file beside the video the first
-/// time something needs it. See <see cref="SubtitleExtractor"/>.
+/// Finds every subtitle an item has: files next to the video and tracks inside it.
+/// Embedded tracks get listed too (on lots of libraries that's all there is) and are
+/// extracted to a file the first time something needs one, see <see cref="SubtitleExtractor"/>.
 /// </summary>
 public class SubtitleLocator
 {
     private static readonly TimeSpan FolderCacheFor = TimeSpan.FromSeconds(15);
 
-    // Where Jellyfin and every subtitle tool put subtitles when they don't put them next
-    // to the video. Searched as well as the video's own folder, since a subtitle sitting
-    // in one of these is still that video's subtitle.
-    private static readonly string[] SubtitleSubfolders = { "Subs", "Subtitles", "subs", "subtitles" };
+    // where people and tools put subtitles when not right next to the video
+    private static readonly string[] SubtitleSubfolders = { "Subs", "Subtitles" };
 
-    // The dashboard's item list asks about every item in every enabled library, and a TV
-    // library puts a whole season in one folder, so without this the same directory gets
-    // enumerated once per episode. Short lived on purpose: long enough to cover one page
-    // load, short enough that a subtitle dropped in a folder still shows up promptly. The
-    // folder's own write time is kept too: adding, removing or renaming a file changes it,
-    // so a file LAPSE has just written shows up on the very next request instead of up to
-    // fifteen seconds later - which used to leave "Back to normal" with nothing to undo
-    // right after a readable copy was made.
-    private readonly ConcurrentDictionary<string, (string[] Files, DateTime ReadUtc, DateTime FolderWriteUtc)> _folderCache = new(StringComparer.OrdinalIgnoreCase);
+    // The status list asks about every item and a TV season shares one folder, so without
+    // this the same folder gets listed once per episode. Keyed on the folder's write time
+    // too, so a file we just wrote shows up on the next request instead of 15s later.
+    private readonly ConcurrentDictionary<string, (FolderListing Listing, DateTime ReadUtc, DateTime FolderWriteUtc)> _folderCache = new(StringComparer.Ordinal);
 
     /// <summary>
-    /// Gets every external subtitle file for the given item.
+    /// Gets every subtitle for an item.
     /// </summary>
     /// <param name="item">The item.</param>
-    /// <returns>List of subtitle options, empty if there aren't any external subs.</returns>
-    public List<SubtitleOption> GetExternalSubtitles(BaseItem item)
+    /// <param name="streams">The item's media streams if the caller already has them, saves a DB query.</param>
+    /// <returns>The subtitles, external ones first.</returns>
+    public List<SubtitleOption> GetExternalSubtitles(BaseItem item, IReadOnlyList<MediaStream>? streams = null)
     {
         var options = new List<SubtitleOption>();
         var seenPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var stream in item.GetMediaStreams())
+        streams ??= item.GetMediaStreams();
+
+        foreach (var stream in streams)
         {
-            // A subtitle stream with a file path behind it is an external subtitle,
-            // whatever the IsExternal flag says. That flag isn't always set the way you'd
-            // expect - a subtitle Jellyfin picked up from a Subs folder, or one written by
-            // another plugin, can come back with a perfectly good path and IsExternal
-            // false - and insisting on it was hiding files the server had clearly found.
-            // An embedded stream has no path at all, so this still can't confuse the two.
-            if (stream.Type != MediaStreamType.Subtitle || string.IsNullOrEmpty(stream.Path))
-            {
-                continue;
-            }
-
-            if (!SubtitleFormats.IsSubtitle(stream.Path))
-            {
-                continue;
-            }
-
-            if (!seenPaths.Add(stream.Path))
+            // A subtitle stream with a path is external, whatever IsExternal says. That flag
+            // is often false for stuff picked up from a Subs folder or written by another
+            // plugin. Embedded streams never have a path so they can't get mixed up.
+            // (jellyfin's record also outlives the file until the next scan, hence File.Exists)
+            if (stream.Type != MediaStreamType.Subtitle
+                || string.IsNullOrEmpty(stream.Path)
+                || !SubtitleFormats.IsSubtitle(stream.Path)
+                || !File.Exists(stream.Path)
+                || !seenPaths.Add(stream.Path))
             {
                 continue;
             }
 
             var fileName = Path.GetFileName(stream.Path);
             var displayName = string.IsNullOrEmpty(stream.Language) ? fileName : $"{stream.Language} ({fileName})";
-
             options.Add(Describe(stream.Path, displayName, stream.Language));
         }
 
         AddSubtitlesFromDisk(item, options, seenPaths);
-        AddEmbeddedSubtitles(item, options);
+        AddEmbeddedSubtitles(item, streams, options);
 
         return options;
     }
 
-    // Tracks inside the container. Jellyfin has already probed these, so there's no cost
-    // to listing them and no guessing about what they are.
-    private static void AddEmbeddedSubtitles(BaseItem item, List<SubtitleOption> options)
+    // Tracks inside the container. Jellyfin already probed these so listing them is free.
+    private static void AddEmbeddedSubtitles(BaseItem item, IReadOnlyList<MediaStream> streams, List<SubtitleOption> options)
     {
         if (string.IsNullOrEmpty(item.Path))
         {
             return;
         }
 
-        foreach (var stream in item.GetMediaStreams())
+        foreach (var stream in streams)
         {
             if (stream.Type != MediaStreamType.Subtitle || !string.IsNullOrEmpty(stream.Path))
             {
@@ -108,101 +87,90 @@ public class SubtitleLocator
             }
 
             var extension = SubtitleExtractor.GetExtensionForCodec(stream.Codec);
-            var format = extension is null
-                ? (stream.Codec ?? "unknown").ToLowerInvariant()
-                : extension[1..];
+            var format = extension is null ? (stream.Codec ?? "unknown").ToLowerInvariant() : extension[1..];
+
+            var label = stream.DisplayTitle;
+            if (string.IsNullOrWhiteSpace(label))
+            {
+                label = string.IsNullOrWhiteSpace(stream.Language)
+                    ? "Track " + stream.Index.ToString(CultureInfo.InvariantCulture)
+                    : stream.Language;
+            }
 
             options.Add(new SubtitleOption
             {
                 Path = SubtitleExtractor.BuildKey(stream.Index),
-                DisplayName = BuildEmbeddedName(stream, format),
+                DisplayName = $"{label} [in video, {format}]",
                 Language = stream.Language,
                 Format = format,
                 IsEmbedded = true,
                 Codec = stream.Codec,
 
-                // Picture based tracks are listed so it's clear why they aren't offered,
-                // rather than leaving someone wondering where their eleven subtitles went.
+                // picture tracks are listed anyway so it's clear why they can't be picked
                 Supported = extension is not null
             });
         }
     }
 
-    private static string BuildEmbeddedName(MediaStream stream, string format)
-    {
-        var label = stream.DisplayTitle;
-
-        if (string.IsNullOrWhiteSpace(label))
-        {
-            label = string.IsNullOrWhiteSpace(stream.Language) ? "Track " + stream.Index.ToString(CultureInfo.InvariantCulture) : stream.Language;
-        }
-
-        return $"{label} [in video, {format}]";
-    }
-
-    // Jellyfin's own database can lag behind what's actually on disk - a subtitle file
-    // dropped into a folder doesn't show up as a MediaStream until that item gets
-    // rescanned, which might not happen for a long time on a big library. Rather than
-    // making people manually refresh every item, just look in the folder directly too.
+    // Jellyfin's DB lags behind the disk (a new .srt isn't a stream until the item is
+    // rescanned), so look in the folder ourselves as well.
     private void AddSubtitlesFromDisk(BaseItem item, List<SubtitleOption> options, HashSet<string> seenPaths)
     {
-        if (string.IsNullOrEmpty(item.Path))
-        {
-            return;
-        }
-
-        var folder = Path.GetDirectoryName(item.Path);
+        var folder = string.IsNullOrEmpty(item.Path) ? null : Path.GetDirectoryName(item.Path);
         if (string.IsNullOrEmpty(folder))
         {
             return;
         }
 
-        var files = ReadFolder(folder);
+        var listing = ReadFolder(folder);
+        var stem = new Stem(Path.GetFileNameWithoutExtension(item.Path!));
 
-        // A whole season of episodes shares one folder, so "every subtitle in the folder"
-        // would hand episode 1 the subtitles for the entire season. When the folder holds
-        // more than one video, only take subtitles named after this item's own file, which
-        // is the convention every subtitle tool follows. A folder with a single video in it
-        // keeps the looser behaviour, since that's where oddly named subtitles like
-        // "English.srt" turn up and they can only belong to the one video.
-        var stem = Path.GetFileNameWithoutExtension(item.Path);
-        var restrictToStem = CountVideoLikeFiles(files, item.Path) > 1;
+        // A season folder holds lots of videos, so only take subtitles named after this one.
+        // A folder with a single video keeps the loose matching, that's where "English.srt" lives.
+        var restrictToStem = CountVideoLikeFiles(listing.Files, item.Path!) > 1;
 
-        Collect(files, stem, restrictToStem, options, seenPaths);
+        Collect(listing.Files, stem, restrictToStem, options, seenPaths);
 
-        // Then the Subs/Subtitles folders, both the shared one beside the video and a
-        // per-video one named after it, which is how a few rippers lay things out. Inside
-        // a folder named after this video the loose naming is fine again - everything in
-        // there belongs to it.
-        foreach (var subfolder in SubtitleSubfolders)
+        // Subs/ and Subtitles/ beside the video, plus a folder named after the video (some
+        // rippers do that). Inside the per-video folder everything belongs to it.
+        foreach (var subfolder in SubfoldersNamed(listing, SubtitleSubfolders))
         {
-            Collect(ReadFolder(Path.Combine(folder, subfolder)), stem, restrictToStem, options, seenPaths);
-            Collect(ReadFolder(Path.Combine(folder, stem, subfolder)), stem, false, options, seenPaths);
+            Collect(ReadFolder(subfolder).Files, stem, restrictToStem, options, seenPaths);
         }
 
-        Collect(ReadFolder(Path.Combine(folder, stem)), stem, false, options, seenPaths);
+        foreach (var ownFolder in SubfoldersNamed(listing, stem.Raw))
+        {
+            var own = ReadFolder(ownFolder);
+            Collect(own.Files, stem, false, options, seenPaths);
+
+            foreach (var subfolder in SubfoldersNamed(own, SubtitleSubfolders))
+            {
+                Collect(ReadFolder(subfolder).Files, stem, false, options, seenPaths);
+            }
+        }
     }
 
-    private static void Collect(
-        string[] files,
-        string stem,
-        bool restrictToStem,
-        List<SubtitleOption> options,
-        HashSet<string> seenPaths)
+    private static IEnumerable<string> SubfoldersNamed(FolderListing listing, params string[] names)
+    {
+        foreach (var directory in listing.Directories)
+        {
+            var name = Path.GetFileName(directory);
+            if (Array.Exists(names, n => string.Equals(name, n, StringComparison.OrdinalIgnoreCase)))
+            {
+                yield return directory;
+            }
+        }
+    }
+
+    private static void Collect(string[] files, Stem stem, bool restrictToStem, List<SubtitleOption> options, HashSet<string> seenPaths)
     {
         foreach (var file in files)
         {
-            if (!SubtitleFormats.IsSubtitle(file) || IsWorkFile(file))
-            {
-                continue;
-            }
-
-            if (restrictToStem && !MatchesStem(file, stem))
-            {
-                continue;
-            }
-
-            if (!seenPaths.Add(file))
+            // ".lapse-" files are the runner's scratch files mid-sync, not real subtitles
+            if (!SubtitleFormats.IsSubtitle(file)
+                || Path.GetFileName(file).Contains(".lapse-", StringComparison.OrdinalIgnoreCase)
+                || (restrictToStem && !stem.Matches(file))
+                || !seenPaths.Add(file))
             {
                 continue;
             }
@@ -211,52 +179,13 @@ public class SubtitleLocator
         }
     }
 
-    // The runner writes its scratch files next to the subtitle it's working on, and they
-    // are real .srt files while a sync is in flight. They aren't anybody's subtitle, so
-    // they have no business showing up in a picker.
-    private static bool IsWorkFile(string path)
-    {
-        return Path.GetFileName(path).Contains(".lapse-", StringComparison.OrdinalIgnoreCase);
-    }
-
-    // Subtitle files are named after the video with the language tacked on, but not
-    // always with the same punctuation the video uses - "Show.S01E01.en.srt" next to
-    // "Show S01E01.mkv" is common enough that a plain StartsWith was throwing away
-    // subtitles that obviously belonged to the item. Compare with the separators taken
-    // out so those all land on each other.
-    private static bool MatchesStem(string file, string stem)
-    {
-        var name = Path.GetFileNameWithoutExtension(file);
-
-        return name.StartsWith(stem, StringComparison.OrdinalIgnoreCase)
-            || Simplify(name).StartsWith(Simplify(stem), StringComparison.Ordinal);
-    }
-
-    private static string Simplify(string value)
-    {
-        var builder = new StringBuilder(value.Length);
-
-        foreach (var c in value)
-        {
-            if (char.IsLetterOrDigit(c))
-            {
-                builder.Append(char.ToLowerInvariant(c));
-            }
-        }
-
-        return builder.ToString();
-    }
-
     private static SubtitleOption Describe(string path, string displayName, string? language)
     {
         var kind = SubtitleFormats.GetKind(path);
 
-        // Whether a file needs converting is the default engine's business, not the
-        // plugin's: LAPSE reads MicroDVD, SAMI, TTML, PGS and VobSub as they are, so
-        // saying "this has to be converted first" about one of those would be wrong and
-        // would cost the user a pointless extra file. The static list is used rather than
-        // the binary's own --formats answer because this runs once per subtitle while a
-        // page loads, and starting a process for each of them isn't worth the precision.
+        // Whether it needs converting depends on the default engine (LAPSE reads MicroDVD,
+        // SAMI, TTML, PGS, VobSub as is). Static list instead of asking the binary, this runs
+        // per subtitle on page load and starting a process each time isn't worth it.
         var engineReads = EngineFormats.DefaultEngineCanRead(path);
 
         return new SubtitleOption
@@ -268,17 +197,12 @@ public class SubtitleLocator
             NeedsConversion = kind == SubtitleFormatKind.Convertible && !engineReads,
             TextBased = kind != SubtitleFormatKind.ImageBased,
 
-            // A picture based subtitle is only worth offering when the engine can line it
-            // up, since there's nothing else here that can be done to one.
+            // picture subtitles are only useful if the engine can line them up
             Supported = kind != SubtitleFormatKind.ImageBased || engineReads
         };
     }
 
-    [SuppressMessage(
-        "Security",
-        "CA3003:Review code for file path injection vulnerabilities",
-        Justification = "item.Path is Jellyfin's own resolved library path for an item already looked up by GetItemById, not a raw path from the request.")]
-    private string[] ReadFolder(string folder)
+    private FolderListing ReadFolder(string folder)
     {
         var now = DateTime.UtcNow;
         var folderWriteUtc = ReadFolderWriteTime(folder);
@@ -287,28 +211,32 @@ public class SubtitleLocator
             && now - cached.ReadUtc < FolderCacheFor
             && cached.FolderWriteUtc == folderWriteUtc)
         {
-            return cached.Files;
+            return cached.Listing;
         }
 
-        string[] files;
+        var files = new List<string>();
+        var directories = new List<string>();
+
         try
         {
-            files = Directory.Exists(folder) ? Directory.GetFiles(folder) : Array.Empty<string>();
+            // one pass for both, the entry type comes with the name on most file systems
+            foreach (var entry in new DirectoryInfo(folder).EnumerateFileSystemInfos())
+            {
+                (entry is DirectoryInfo ? directories : files).Add(entry.FullName);
+            }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            files = Array.Empty<string>();
+            files.Clear();
+            directories.Clear();
         }
 
-        _folderCache[folder] = (files, now, folderWriteUtc);
+        var listing = new FolderListing(files.ToArray(), directories.ToArray());
+        _folderCache[folder] = (listing, now, folderWriteUtc);
         Prune(now);
-        return files;
+        return listing;
     }
 
-    [SuppressMessage(
-        "Security",
-        "CA3003:Review code for file path injection vulnerabilities",
-        Justification = "The folder is derived from Jellyfin's own resolved library path for an item.")]
     private static DateTime ReadFolderWriteTime(string folder)
     {
         try
@@ -321,10 +249,7 @@ public class SubtitleLocator
         }
     }
 
-    // The cache is meant to live for one dashboard page load, but nothing ever came back
-    // to clear it out, so on a big library it would sit there holding a file listing for
-    // every folder in it. Anything past its 15 seconds is dead weight - drop it once
-    // there's enough in here to be worth walking.
+    // drop expired entries once there's enough to bother, or it'd hold a listing for every folder in the library
     private void Prune(DateTime now)
     {
         if (_folderCache.Count < 256)
@@ -341,22 +266,60 @@ public class SubtitleLocator
         }
     }
 
-    // Good enough to answer "is this folder holding one video or a whole season". Counts
-    // anything that isn't a subtitle, an image or a metadata file as a video.
-    private static int CountVideoLikeFiles(IReadOnlyList<string> files, string itemPath)
+    // Good enough to tell "one video" from "a whole season": a season is ripped one way,
+    // so count files with the same extension as the item.
+    private static int CountVideoLikeFiles(string[] files, string itemPath)
     {
         var itemExtension = Path.GetExtension(itemPath);
+        var count = 0;
 
-        return files.Count(f => string.Equals(Path.GetExtension(f), itemExtension, StringComparison.OrdinalIgnoreCase));
+        foreach (var file in files)
+        {
+            if (string.Equals(Path.GetExtension(file), itemExtension, StringComparison.OrdinalIgnoreCase))
+            {
+                count++;
+            }
+        }
+
+        return count;
     }
 
-    /// <summary>
-    /// Checks whether a path looks like a subtitle file we can work with.
-    /// </summary>
-    /// <param name="path">The path to check.</param>
-    /// <returns>True if the extension is one of the subtitle formats we handle.</returns>
-    public static bool IsSubtitleFile(string path)
+    private sealed record FolderListing(string[] Files, string[] Directories);
+
+    // The video's file name without extension. "Show.S01E01.en.srt" next to "Show S01E01.mkv"
+    // is common, so besides a plain prefix match it also compares with punctuation stripped.
+    private sealed class Stem
     {
-        return SubtitleFormats.IsNative(path);
+        private readonly string _simple;
+
+        public Stem(string raw)
+        {
+            Raw = raw;
+            _simple = Simplify(raw);
+        }
+
+        public string Raw { get; }
+
+        public bool Matches(string file)
+        {
+            var name = Path.GetFileNameWithoutExtension(file);
+
+            return name.StartsWith(Raw, StringComparison.OrdinalIgnoreCase)
+                || Simplify(name).StartsWith(_simple, StringComparison.Ordinal);
+        }
+
+        private static string Simplify(string value)
+        {
+            var builder = new StringBuilder(value.Length);
+            foreach (var c in value)
+            {
+                if (char.IsLetterOrDigit(c))
+                {
+                    builder.Append(char.ToLowerInvariant(c));
+                }
+            }
+
+            return builder.ToString();
+        }
     }
 }

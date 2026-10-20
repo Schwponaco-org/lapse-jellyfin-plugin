@@ -4,7 +4,6 @@
 
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -19,35 +18,22 @@ using Microsoft.Extensions.Logging;
 namespace Jellyfin.Plugin.Lapse.Services;
 
 /// <summary>
-/// Takes the subtitle tracks out of a video file for good: writes each one out as a
-/// sidecar, then rebuilds the container without them.
+/// Pulls the subtitle tracks out of a video for good: writes each as a sidecar, then
+/// rebuilds the container without them.
 ///
-/// The reason to want this is direct play. A subtitle track inside the video means clients
-/// have to either render it themselves - and the Jellyfin web client's timing for embedded
-/// tracks drifts against the video often enough to be a known annoyance - or fall back to
-/// burning it in, which is a transcode and has to be turned on per client. The same
-/// subtitle as a file beside the video has neither problem: every client reads it, the
-/// timing is the file's own, and the video streams untouched.
+/// It's for direct play. Embedded tracks either get rendered by the client (the web
+/// client's timing on those drifts, known annoyance) or burnt in, which means a transcode.
+/// A file next to the video has neither problem.
 ///
-/// Nothing is dropped that could not first be saved. Text tracks come out as .srt/.ass/.vtt
-/// and are then removed; PGS and VobSub are pictures with no text to extract, so those
-/// stay in the video however this is called. Losing a track to a tidy-up is not a trade
-/// worth offering.
-///
-/// The video itself is only ever copied, never re-encoded: ffmpeg maps every stream except
-/// the subtitles across with -c copy, so this is a container rewrite at disk speed and the
-/// video and audio come out bit for bit identical.
+/// Only tracks that were actually saved get dropped. PGS/VobSub can't be extracted as text
+/// so they always stay. The video is copied with -c copy, never re-encoded.
 /// </summary>
 public class SubtitleRemuxer
 {
     private static readonly TimeSpan RemuxTimeout = TimeSpan.FromHours(2);
 
-    /// <summary>
-    /// Containers ffmpeg can write back out with the streams a video like this carries.
-    /// Anything else gets turned away rather than quietly remuxed into something that
-    /// drops a track: mp4 in particular cannot hold an ASS subtitle or a FLAC audio track,
-    /// and finding that out afterwards is too late.
-    /// </summary>
+    // Containers we'll rewrite. Anything else is refused rather than remuxed into something
+    // that quietly drops a track.
     private static readonly HashSet<string> SupportedContainers = new(StringComparer.OrdinalIgnoreCase)
     {
         ".mkv", ".mka", ".webm", ".mp4", ".m4v", ".mov"
@@ -60,9 +46,6 @@ public class SubtitleRemuxer
     /// <summary>
     /// Initializes a new instance of the <see cref="SubtitleRemuxer"/> class.
     /// </summary>
-    /// <param name="mediaEncoder">Used to find the ffmpeg Jellyfin ships.</param>
-    /// <param name="extractor">Writes each track out before it's dropped.</param>
-    /// <param name="logger">Logger.</param>
     public SubtitleRemuxer(IMediaEncoder mediaEncoder, SubtitleExtractor extractor, ILogger<SubtitleRemuxer> logger)
     {
         _mediaEncoder = mediaEncoder;
@@ -71,28 +54,10 @@ public class SubtitleRemuxer
     }
 
     /// <summary>
-    /// Writes an item's embedded subtitle tracks out as files, and optionally rebuilds the
-    /// video without them.
-    ///
-    /// Nothing here ever happens on its own. There is no scheduled task and no automation
-    /// action that calls this: rewriting somebody's library files is a thing to be asked
-    /// for each time, on the item it is wanted on. Both steps past the extraction are
-    /// separately opted into, so the three useful answers - keep the tracks, drop them but
-    /// keep the original video, drop them and replace it - are all reachable.
+    /// Writes an item's embedded tracks out as files and optionally rebuilds the video
+    /// without them. Never called by anything automatic. Removing and replacing are separate
+    /// opt-ins so you can keep the tracks, drop them into a copy, or drop them in place.
     /// </summary>
-    /// <param name="item">The item to work on.</param>
-    /// <param name="removeFromVideo">True to rebuild the video without the tracks that
-    /// were extracted. False just writes the files and leaves the video alone, which is
-    /// the default and undoes nothing.</param>
-    /// <param name="replaceOriginal">True to put the rebuilt video in the original's
-    /// place, false to leave the original alone and write a .nosubs file beside it. Only
-    /// means anything when <paramref name="removeFromVideo"/> is set.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>What happened.</returns>
-    [System.Diagnostics.CodeAnalysis.SuppressMessage(
-        "Security",
-        "CA3003:Review code for file path injection vulnerabilities",
-        Justification = "Every path here comes from Jellyfin's own resolved path for an item the caller already looked up, or is derived from it. The request contributes an item id and two booleans, none of which reach a path.")]
     public async Task<RemuxResult> ExtractEmbeddedSubtitlesAsync(
         BaseItem item,
         bool removeFromVideo,
@@ -108,8 +73,7 @@ public class SubtitleRemuxer
             return result;
         }
 
-        // Both of these only stand in the way of the rebuild. Extracting on its own needs
-        // neither, so a container LAPSE won't rewrite still gets its subtitles as files.
+        // only the rebuild needs these, extraction alone works on any container
         if (removeFromVideo)
         {
             if (!HasFfmpeg())
@@ -136,12 +100,9 @@ public class SubtitleRemuxer
             return result;
         }
 
-        // The rebuild drops streams by number, and Jellyfin's numbers aren't the file's:
-        // it counts the subtitle files beside the video ahead of the ones inside it. Each
-        // track is found in the file itself before anything is dropped, and if any of
-        // them can't be found for certain - the file was replaced since the last scan, or
-        // there's no ffprobe to ask - nothing is. Extracting alone is safe either way,
-        // since each extraction finds its own track, so only the rebuild waits on this.
+        // The rebuild drops streams by number and Jellyfin's numbers aren't the file's. So
+        // find every track in the actual file first, and if any can't be pinned down for
+        // sure (file replaced since the scan, no ffprobe), don't remove anything.
         var fileIndexes = new Dictionary<MediaStream, int>();
 
         if (removeFromVideo)
@@ -174,8 +135,7 @@ public class SubtitleRemuxer
             }
         }
 
-        // Everything that can be saved gets saved first. A track that won't come out is
-        // left in the video rather than being dropped with it.
+        // save first, a track that won't come out stays in the video
         var removable = new List<MediaStream>();
 
         foreach (var track in tracks)
@@ -217,8 +177,7 @@ public class SubtitleRemuxer
             return result;
         }
 
-        // Extract only: the files are written, the video is untouched, and every track is
-        // still in it. This is what the action does unless removal was asked for.
+        // extract only, video untouched
         if (!removeFromVideo)
         {
             result.Success = true;
@@ -243,6 +202,12 @@ public class SubtitleRemuxer
             result.Error = ex.Message;
             return result;
         }
+        catch (OperationCanceledException)
+        {
+            // stopped mid rebuild, original is untouched, drop the half written copy
+            TryDelete(destination);
+            throw;
+        }
 
         result.RemovedCount = removable.Count;
 
@@ -260,9 +225,8 @@ public class SubtitleRemuxer
             return result;
         }
 
-        // Only now, with a complete file on disk that ffmpeg exited cleanly on, does the
-        // original get touched. It goes to one side first rather than being deleted, so a
-        // failed move leaves both files rather than neither.
+        // Only now touch the original. Move it aside first instead of deleting, so a failed
+        // move leaves both files rather than neither.
         var reprieve = videoPath + ".lapse-old";
 
         try
@@ -273,7 +237,7 @@ public class SubtitleRemuxer
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            // Put back whatever got as far as moving, so the item is still playable.
+            // put it back so the item still plays
             if (!File.Exists(videoPath) && File.Exists(reprieve))
             {
                 TryMoveBack(reprieve, videoPath);
@@ -299,83 +263,42 @@ public class SubtitleRemuxer
         return result;
     }
 
-    [System.Diagnostics.CodeAnalysis.SuppressMessage(
-        "Security",
-        "CA3003:Review code for file path injection vulnerabilities",
-        Justification = "The video path is Jellyfin's own resolved path for an item the caller already looked up, the destination is derived from it, and the stream indexes were read from the file itself. Nothing from the request reaches any of it.")]
     private async Task RunFfmpegAsync(
         string videoPath,
         string destination,
         List<int> removableIndexes,
         CancellationToken cancellationToken)
     {
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = _mediaEncoder.EncoderPath,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
+        var arguments = new List<string> { "-nostdin", "-y", "-i", FfmpegPaths.AsFileUrl(videoPath) };
 
-        ProcessOutput.ReadAsUtf8(startInfo);
-
-        startInfo.ArgumentList.Add("-nostdin");
-        startInfo.ArgumentList.Add("-y");
-        startInfo.ArgumentList.Add("-i");
-        startInfo.ArgumentList.Add(videoPath);
-
-        // Take everything, then put back the tracks being removed. Mapping the wanted
-        // streams instead would silently drop chapters, attachments and any stream type
-        // this code doesn't know to ask for.
-        startInfo.ArgumentList.Add("-map");
-        startInfo.ArgumentList.Add("0");
+        // map everything then un-map the removed tracks. Mapping only what we want would
+        // lose chapters, attachments and stream types we don't know about.
+        arguments.Add("-map");
+        arguments.Add("0");
 
         foreach (var index in removableIndexes)
         {
-            startInfo.ArgumentList.Add("-map");
-            startInfo.ArgumentList.Add("-0:" + index.ToString(CultureInfo.InvariantCulture));
+            arguments.Add("-map");
+            arguments.Add("-0:" + index.ToString(CultureInfo.InvariantCulture));
         }
 
-        // Straight copy. No stream is decoded, so this runs at disk speed and the video
-        // comes out identical to what went in.
-        startInfo.ArgumentList.Add("-c");
-        startInfo.ArgumentList.Add("copy");
-        startInfo.ArgumentList.Add("-map_metadata");
-        startInfo.ArgumentList.Add("0");
-        startInfo.ArgumentList.Add("-map_chapters");
-        startInfo.ArgumentList.Add("0");
-        startInfo.ArgumentList.Add(destination);
+        // straight copy, nothing decoded
+        arguments.AddRange(new[] { "-c", "copy", "-map_metadata", "0", "-map_chapters", "0", FfmpegPaths.AsFileUrl(destination) });
 
-        using var process = new Process { StartInfo = startInfo };
+        int exitCode;
+        string stderr;
 
         try
         {
-            process.Start();
+            (exitCode, stderr) = await FfmpegPaths.RunAsync(_mediaEncoder.EncoderPath, arguments, RemuxTimeout, cancellationToken)
+                .ConfigureAwait(false);
         }
-        catch (System.ComponentModel.Win32Exception ex)
+        catch (TimeoutException ex)
         {
-            throw new NotSupportedException("Could not start ffmpeg to rebuild that video: " + ex.Message, ex);
+            throw new TimeoutException("ffmpeg took too long rebuilding that video file.", ex);
         }
 
-        var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
-
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeoutCts.CancelAfter(RemuxTimeout);
-
-        try
-        {
-            await process.WaitForExitAsync(timeoutCts.Token).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            TryKill(process);
-            throw new TimeoutException("ffmpeg took too long rebuilding that video file.");
-        }
-
-        var stderr = await stderrTask.ConfigureAwait(false);
-
-        if (process.ExitCode != 0 || !File.Exists(destination) || new FileInfo(destination).Length == 0)
+        if (exitCode != 0 || !File.Exists(destination) || new FileInfo(destination).Length == 0)
         {
             _logger.LogWarning("ffmpeg could not rebuild {Video} without its subtitles: {Error}", videoPath, stderr);
             throw new InvalidDataException("ffmpeg couldn't rebuild that video file without its subtitle tracks.");
@@ -401,12 +324,7 @@ public class SubtitleRemuxer
             codec);
     }
 
-    // The working file, which is also what's left behind when the original is being kept.
-    // .nosubs sits before the extension so the container stays what it was.
-    [System.Diagnostics.CodeAnalysis.SuppressMessage(
-        "Security",
-        "CA3003:Review code for file path injection vulnerabilities",
-        Justification = "Built from Jellyfin's own resolved video path. Nothing from the request reaches it.")]
+    // Movie.nosubs.mkv, also what's left when the original is kept
     private static string BuildDestination(string videoPath)
     {
         var folder = Path.GetDirectoryName(videoPath)!;
@@ -427,22 +345,6 @@ public class SubtitleRemuxer
         return destination;
     }
 
-    private static void TryKill(Process process)
-    {
-        try
-        {
-            process.Kill(entireProcessTree: true);
-        }
-        catch (InvalidOperationException)
-        {
-            // finished on its own in the meantime
-        }
-    }
-
-    [System.Diagnostics.CodeAnalysis.SuppressMessage(
-        "Security",
-        "CA3003:Review code for file path injection vulnerabilities",
-        Justification = "Only ever moves the file this class set aside back to the path it came from.")]
     private static void TryMoveBack(string from, string to)
     {
         try
@@ -451,16 +353,10 @@ public class SubtitleRemuxer
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            // Nothing further can be done here; the caller already reports the failure and
-            // the set aside file keeps its .lapse-old name for someone to rename by hand.
-            _ = ex;
+            // nothing more we can do, the .lapse-old file is still there to rename by hand
         }
     }
 
-    [System.Diagnostics.CodeAnalysis.SuppressMessage(
-        "Security",
-        "CA3003:Review code for file path injection vulnerabilities",
-        Justification = "Only ever removes the half written output file this class just named.")]
     private static void TryDelete(string path)
     {
         try
@@ -470,9 +366,9 @@ public class SubtitleRemuxer
                 File.Delete(path);
             }
         }
-        catch (IOException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            // untidy, not a failure worth reporting over the one that actually went wrong
+            // untidy but not worth reporting
         }
     }
 }

@@ -22,7 +22,6 @@ public class ExtractSubtitlesTask : IScheduledTask, IConfigurableScheduledTask
     /// <summary>
     /// Initializes a new instance of the <see cref="ExtractSubtitlesTask"/> class.
     /// </summary>
-    /// <param name="extraction">Does the work.</param>
     public ExtractSubtitlesTask(EmbeddedSubtitleExtractionService extraction)
     {
         _extraction = extraction;
@@ -52,9 +51,7 @@ public class ExtractSubtitlesTask : IScheduledTask, IConfigurableScheduledTask
     /// <inheritdoc />
     public IEnumerable<TaskTriggerInfo> GetDefaultTriggers()
     {
-        // An hour ahead of the nightly sync. Nothing the sync does depends on it - freshly
-        // extracted tracks are left out of automatic syncs - but it keeps the two heavy
-        // reads of the library from landing on the disks at the same moment.
+        // 02:00, an hour before the old 03:00 sync slot so the two don't hammer the disks together
         return new[]
         {
             new TaskTriggerInfo

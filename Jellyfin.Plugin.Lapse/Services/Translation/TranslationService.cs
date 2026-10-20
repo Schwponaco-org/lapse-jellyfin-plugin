@@ -16,10 +16,8 @@ using Microsoft.Extensions.Logging;
 namespace Jellyfin.Plugin.Lapse.Services.Translation;
 
 /// <summary>
-/// Runs translation jobs: read the subtitle, hand its dialogue to a provider, score what
-/// comes back, and write a new file. The source subtitle is never touched, and neither is
-/// the engine - translation is entirely a plugin side job that happens to be useful
-/// alongside syncing.
+/// Translation jobs: read the subtitle, send the dialogue to a provider, score what comes
+/// back, write a new file. The source is never touched and no engine is involved.
 /// </summary>
 public class TranslationService
 {
@@ -29,12 +27,9 @@ public class TranslationService
     /// <summary>
     /// Initializes a new instance of the <see cref="TranslationService"/> class.
     /// </summary>
-    /// <param name="providers">Every registered provider.</param>
-    /// <param name="logger">Logger.</param>
     public TranslationService(IEnumerable<ITranslationProvider> providers, ILogger<TranslationService> logger)
     {
-        // Least setup first, which is the order the dashboard lists them in and also the
-        // order a fallback should try them in.
+        // least setup first, same order as the dashboard
         _providers = providers.OrderBy(p => p.Tier).ToList();
         _logger = logger;
     }
@@ -47,8 +42,6 @@ public class TranslationService
     /// <summary>
     /// Finds a provider by id.
     /// </summary>
-    /// <param name="provider">Which one, or null for the configured default.</param>
-    /// <returns>The provider.</returns>
     public ITranslationProvider Resolve(TranslationProvider? provider)
     {
         var wanted = provider ?? Plugin.Instance?.Configuration.DefaultTranslationProvider ?? TranslationProvider.MyMemory;
@@ -58,10 +51,6 @@ public class TranslationService
     /// <summary>
     /// Translates one subtitle file into a new one.
     /// </summary>
-    /// <param name="subtitlePath">The subtitle to translate. Left untouched.</param>
-    /// <param name="request">The rest of the job's settings.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>What happened.</returns>
     public async Task<TranslationResult> TranslateAsync(
         string subtitlePath,
         TranslationRequest request,
@@ -78,8 +67,7 @@ public class TranslationService
             return result;
         }
 
-        var problem = provider.GetConfigurationProblem();
-        if (problem is not null)
+        if (provider.GetConfigurationProblem() is { } problem)
         {
             result.Error = problem;
             return result;
@@ -105,9 +93,7 @@ public class TranslationService
             return result;
         }
 
-        // "auto" is what the From box says when it's empty, and people type it. Half the
-        // providers take it as a language code and the other half reject it, so it means
-        // "nobody said" here and each provider does whatever it does with that.
+        // "auto" means nobody said, some providers accept it as a code and some don't
         var sourceLanguage = NormalizeSource(request.SourceLanguage);
 
         IReadOnlyList<TranslatedLine> translations;
@@ -117,10 +103,14 @@ public class TranslationService
                 .TranslateAsync(lines, sourceLanguage, request.TargetLanguage, cancellationToken)
                 .ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException or TaskCanceledException)
+        catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException or TaskCanceledException or System.Text.Json.JsonException
+            && !cancellationToken.IsCancellationRequested)
         {
+            // e.g. a proxy error page in front of a self hosted provider, a failed job not a crash
             _logger.LogWarning(ex, "Translating {Path} with {Provider} failed", subtitlePath, provider.DisplayName);
-            result.Error = ex.Message;
+            result.Error = ex is System.Text.Json.JsonException
+                ? provider.DisplayName + " answered with something that isn't a translation: " + ex.Message
+                : ex.Message;
             return result;
         }
 
@@ -169,7 +159,7 @@ public class TranslationService
         {
             await file.SaveAsync(outputPath, header, cancellationToken).ConfigureAwait(false);
         }
-        catch (IOException ex)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             result.Error = "Could not write the translated file: " + ex.Message;
             return result;
@@ -191,8 +181,7 @@ public class TranslationService
         return result;
     }
 
-    // Empty, "auto", "automatic" and "detect" all mean the same thing: let the provider
-    // work it out.
+    // empty, auto, automatic, detect: let the provider figure it out
     private static string? NormalizeSource(string? sourceLanguage)
     {
         var trimmed = sourceLanguage?.Trim();
@@ -233,20 +222,11 @@ public class TranslationService
     }
 
     /// <summary>
-    /// Scores one translated line from 0 to 1.
-    ///
-    /// MyMemory reports a match score of its own, and when a provider actually tells us
-    /// how sure it is that beats anything inferred. None of the others do, so rather than
-    /// pretending otherwise the plugin scores each line on what it can actually see:
-    /// whether anything came back, whether the text changed at all, whether the length is
-    /// plausible for a translation, and whether the language the provider detected is the
-    /// one that was asked for. That's what the threshold slider filters on, and it's good
-    /// enough to catch the lines that are worth a second look.
+    /// Scores a translated line 0..1. MyMemory gives its own score and we use that. The
+    /// others don't, so it's a guess from what we can see: did anything come back, did it
+    /// change, is the length plausible, and was the detected language the one asked for.
+    /// Good enough to flag lines worth a second look.
     /// </summary>
-    /// <param name="source">The original line.</param>
-    /// <param name="translated">What the provider said.</param>
-    /// <param name="requestedSource">The source language the job asked for, if any.</param>
-    /// <returns>A score from 0 to 1.</returns>
     private static double Score(string source, TranslatedLine translated, string? requestedSource)
     {
         if (string.IsNullOrWhiteSpace(translated.Text))
@@ -262,8 +242,7 @@ public class TranslationService
         var trimmedSource = source.Trim();
         var trimmedTranslation = translated.Text.Trim();
 
-        // a line with no letters at all - "♪♪", "- -", "1997" - has nothing to translate,
-        // so coming back unchanged is the right answer rather than a failure
+        // no letters ("♪♪", "1997"), nothing to translate, unchanged is correct
         if (!trimmedSource.Any(char.IsLetter))
         {
             return 1;
@@ -273,8 +252,7 @@ public class TranslationService
 
         if (string.Equals(trimmedSource, trimmedTranslation, StringComparison.OrdinalIgnoreCase))
         {
-            // identical output usually means it wasn't translated, though short lines and
-            // proper nouns legitimately survive a translation unchanged
+            // unchanged usually means untranslated, but short lines and names can legitimately stay the same
             score -= trimmedSource.Length <= 4 ? 0.25 : 0.6;
         }
 

@@ -59,9 +59,5 @@ public class LibrarySettingsRequest
     /// <summary>
     /// Gets or sets the libraries being saved.
     /// </summary>
-    [System.Diagnostics.CodeAnalysis.SuppressMessage(
-        "Usage",
-        "CA2227:Collection properties should be read only",
-        Justification = "This needs a setter. System.Text.Json - which is what ASP.NET Core binds request bodies with - skips collection properties it can't assign to rather than adding into them, so a read-only collection here silently arrives empty. That is exactly what made saving the library toggles look like it worked while doing nothing at all.")]
     public List<LibrarySettingsEntry> Libraries { get; set; } = new();
 }

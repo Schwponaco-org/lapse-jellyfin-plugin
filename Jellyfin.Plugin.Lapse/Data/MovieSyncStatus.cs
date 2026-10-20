@@ -36,12 +36,8 @@ public enum MovieSyncStatus
     Failed,
 
     /// <summary>
-    /// On the ignore list, so no automatic or bulk run will touch it. Distinct from
-    /// <see cref="Skipped"/>, which is a per-item "not now" rather than a standing rule
-    /// that also covers everything under a series or folder.
-    ///
-    /// Last in the enum on purpose: an older config stores these values as numbers, and
-    /// inserting anywhere else would silently change what existing records mean.
+    /// On the ignore list. Unlike <see cref="Skipped"/> it's a standing rule that covers everything below.
+    /// Last on purpose, old configs store these as numbers.
     /// </summary>
     Ignored
 }

@@ -32,8 +32,6 @@ public class GoogleTranslationProvider : ITranslationProvider
     /// <summary>
     /// Initializes a new instance of the <see cref="GoogleTranslationProvider"/> class.
     /// </summary>
-    /// <param name="httpClientFactory">Factory to grab an HttpClient from.</param>
-    /// <param name="logger">Logger.</param>
     public GoogleTranslationProvider(IHttpClientFactory httpClientFactory, ILogger<GoogleTranslationProvider> logger)
     {
         _httpClientFactory = httpClientFactory;
@@ -78,15 +76,9 @@ public class GoogleTranslationProvider : ITranslationProvider
         var client = _httpClientFactory.CreateClient("Lapse");
         var results = new List<TranslatedLine>(lines.Count);
 
-        for (var start = 0; start < lines.Count; start += BatchSize)
+        foreach (var batch in TranslationBatches.Split(lines, BatchSize))
         {
             cancellationToken.ThrowIfCancellationRequested();
-
-            var batch = new List<string>();
-            for (var i = start; i < Math.Min(start + BatchSize, lines.Count); i++)
-            {
-                batch.Add(lines[i]);
-            }
 
             var url = "https://translation.googleapis.com/language/translate/v2?key=" + HttpUtility.UrlEncode(apiKey);
             var payload = new Dictionary<string, object>
@@ -110,7 +102,7 @@ public class GoogleTranslationProvider : ITranslationProvider
                     CultureInfo.InvariantCulture,
                     "Google Translate returned {0}: {1}",
                     (int)response.StatusCode,
-                    Shorten(body)));
+                    TranslationBatches.Shorten(body)));
             }
 
             using var document = await response.Content.ReadFromJsonAsync<JsonDocument>(cancellationToken).ConfigureAwait(false);
@@ -120,7 +112,7 @@ public class GoogleTranslationProvider : ITranslationProvider
         return results;
     }
 
-    private IEnumerable<TranslatedLine> ReadTranslations(JsonDocument? document, int expected)
+    private List<TranslatedLine> ReadTranslations(JsonDocument? document, int expected)
     {
         var results = new List<TranslatedLine>();
 
@@ -141,23 +133,6 @@ public class GoogleTranslationProvider : ITranslationProvider
             }
         }
 
-        // Google returns one translation per input, but if it ever doesn't, pad the batch
-        // out so the results still line up with the lines they came from
-        if (results.Count != expected)
-        {
-            _logger.LogWarning("Google Translate returned {Got} translations for {Expected} lines", results.Count, expected);
-            while (results.Count < expected)
-            {
-                results.Add(new TranslatedLine());
-            }
-        }
-
-        return results;
-    }
-
-    private static string Shorten(string text)
-    {
-        var trimmed = text.Trim();
-        return trimmed.Length > 300 ? trimmed[..300] : trimmed;
+        return TranslationBatches.Align(results, expected, _logger, DisplayName);
     }
 }

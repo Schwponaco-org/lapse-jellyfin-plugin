@@ -5,7 +5,6 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
@@ -17,18 +16,13 @@ using Microsoft.Extensions.Logging;
 namespace Jellyfin.Plugin.Lapse.Engines;
 
 /// <summary>
-/// Asks an installed engine binary what it supports, rather than the plugin assuming a
-/// version. Two ways, in order:
+/// Asks an engine binary what it supports instead of guessing from a version:
+/// 1. "engine --capabilities" (JSON with version and flags)
+/// 2. otherwise run it with no args and read the flags out of its usage text
+/// If neither works it's <see cref="EngineRuntimeInfo.Unknown"/> and we stick to the safe flags.
 ///
-/// 1. "engine --capabilities", which prints JSON like
-///    { "version": "1.3.0", "flags": ["--output", "--no-backup"] }.
-/// 2. If that isn't a thing on this build, run it with no arguments and read the flags
-///    out of the usage text it prints. Every engine here prints usage when it's called
-///    wrong, and that text lists the optional flags, so it's a reliable second source
-///    and it works on builds that predate --capabilities entirely.
-///
-/// If neither answers, the engine gets <see cref="EngineRuntimeInfo.Unknown"/> and the
-/// plugin sticks to the flags that have always been there.
+/// Answers are cached per binary (path + size + write time). The cache holds the running
+/// task, so the dashboard and a sync asking at the same moment share one probe.
 /// </summary>
 public partial class EngineCapabilityProbe
 {
@@ -45,92 +39,124 @@ public partial class EngineCapabilityProbe
     private static partial Regex FormatLineRegex();
 
     private static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan RunnableTimeout = TimeSpan.FromSeconds(10);
     private static readonly string[] CapabilitiesArguments = { "--capabilities" };
     private static readonly string[] VersionArguments = { "--version" };
     private static readonly string[] FormatsArguments = { "--formats" };
     private static readonly string[] VadArguments = { "--vad" };
 
     private readonly ILogger<EngineCapabilityProbe> _logger;
-    private readonly ConcurrentDictionary<string, EngineRuntimeInfo> _cache = new(StringComparer.Ordinal);
-    private readonly ConcurrentDictionary<string, string?> _vadCache = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, Lazy<Task<EngineRuntimeInfo>>> _cache = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, Lazy<Task<string?>>> _vadCache = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, string?> _runnableCache = new(StringComparer.Ordinal);
 
     /// <summary>
     /// Initializes a new instance of the <see cref="EngineCapabilityProbe"/> class.
     /// </summary>
-    /// <param name="logger">Logger.</param>
     public EngineCapabilityProbe(ILogger<EngineCapabilityProbe> logger)
     {
         _logger = logger;
     }
 
     /// <summary>
-    /// Throws away everything the probe remembers, so the next call re-asks the binaries.
-    /// Called after an install or an update, since the file on disk just changed.
+    /// Forgets everything, called after an install or update.
     /// </summary>
     public void Invalidate()
     {
         _cache.Clear();
         _vadCache.Clear();
+        _runnableCache.Clear();
     }
 
     /// <summary>
-    /// Gets what the binary at a path supports, asking it the first time and remembering
-    /// the answer afterwards. The cache key includes the file's write time and size, so a
-    /// binary replaced behind the plugin's back gets re-probed anyway.
+    /// Gets what a binary supports, probing it the first time.
     /// </summary>
-    /// <param name="binaryPath">Full path to the engine binary.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>What the binary supports.</returns>
-    public async Task<EngineRuntimeInfo> ProbeAsync(string binaryPath, CancellationToken cancellationToken = default)
+    public Task<EngineRuntimeInfo> ProbeAsync(string binaryPath, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(binaryPath) || !File.Exists(binaryPath))
         {
-            return EngineRuntimeInfo.Unknown;
+            return Task.FromResult(EngineRuntimeInfo.Unknown);
         }
 
-        var info = new FileInfo(binaryPath);
-        var key = $"{binaryPath}|{info.LastWriteTimeUtc.Ticks}|{info.Length}";
+        // shared between callers, so it runs on its own token (every process has a timeout anyway)
+        var probe = _cache.GetOrAdd(CacheKey(binaryPath), _ => new Lazy<Task<EngineRuntimeInfo>>(() => RunProbeAsync(binaryPath, CancellationToken.None)));
+        return probe.Value.WaitAsync(cancellationToken);
+    }
 
-        if (_cache.TryGetValue(key, out var cached))
+    /// <summary>
+    /// Checks a binary actually starts (a download can still miss a shared library). Only
+    /// a good answer is cached, a problem can get fixed without the file changing.
+    /// </summary>
+    public async Task<string?> CheckRunnableAsync(string binaryPath, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(binaryPath) || !File.Exists(binaryPath))
+        {
+            return "not installed yet";
+        }
+
+        var key = CacheKey(binaryPath);
+        if (_runnableCache.TryGetValue(key, out var cached))
         {
             return cached;
         }
 
-        var probed = await RunProbeAsync(binaryPath, cancellationToken).ConfigureAwait(false);
-        _cache[key] = probed;
-        return probed;
+        string? problem;
+
+        try
+        {
+            // no args fails fast either way (usage error or loader error)
+            var result = await Services.ProcessRunner.RunAsync(binaryPath, Array.Empty<string>(), RunnableTimeout, cancellationToken)
+                .ConfigureAwait(false);
+
+            problem = result.Stderr.Contains("error while loading shared libraries", StringComparison.OrdinalIgnoreCase)
+                ? result.Stderr.Trim()
+                : null;
+        }
+        catch (System.ComponentModel.Win32Exception ex)
+        {
+            problem = ex.Message;
+        }
+        catch (TimeoutException)
+        {
+            // still running means it loaded, good enough
+            problem = null;
+        }
+
+        if (problem is null)
+        {
+            _runnableCache[key] = null;
+        }
+
+        return problem;
     }
 
     /// <summary>
-    /// Asks a LAPSE binary which voice detector it's actually running, via its own
-    /// <c>lapse --vad</c> self-test. That prints "silero" and exits 0 when the accurate
-    /// ONNX model loaded, or "libfvad" and exits 1 when the onnxruntime library or model
-    /// sidecar wasn't found beside the binary and it fell back to the weaker built-in
-    /// detector - a degradation that otherwise syncs worse with no visible error anywhere.
-    /// Only LAPSE understands this flag, so callers should only ask it of that engine.
+    /// Asks LAPSE which voice detector it's running (lapse --vad): "silero" when the ONNX
+    /// model loaded, "libfvad" when it fell back to the weaker one because onnxruntime or
+    /// the model wasn't next to the binary. That fallback syncs worse with no error anywhere
+    /// else, so the dashboard warns about it. LAPSE only.
     /// </summary>
-    /// <param name="binaryPath">Full path to the LAPSE binary.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>"silero", "libfvad", or null if the binary couldn't be asked.</returns>
-    public async Task<string?> ProbeVadBackendAsync(string binaryPath, CancellationToken cancellationToken = default)
+    public Task<string?> ProbeVadBackendAsync(string binaryPath, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(binaryPath) || !File.Exists(binaryPath))
         {
-            return null;
+            return Task.FromResult<string?>(null);
         }
 
-        var info = new FileInfo(binaryPath);
-        var key = $"{binaryPath}|{info.LastWriteTimeUtc.Ticks}|{info.Length}";
-
-        if (_vadCache.TryGetValue(key, out var cached))
+        var probe = _vadCache.GetOrAdd(CacheKey(binaryPath), _ => new Lazy<Task<string?>>(async () =>
         {
-            return cached;
-        }
+            var (stdout, _, _, started) = await RunAsync(binaryPath, VadArguments, CancellationToken.None).ConfigureAwait(false);
+            return started ? ParseVadBackend(stdout) : null;
+        }));
 
-        var (stdout, _, _, started) = await RunAsync(binaryPath, VadArguments, cancellationToken).ConfigureAwait(false);
-        var backend = started ? ParseVadBackend(stdout) : null;
-        _vadCache[key] = backend;
-        return backend;
+        return probe.Value.WaitAsync(cancellationToken);
+    }
+
+    // size and write time in the key, so a binary swapped behind our back gets probed again
+    private static string CacheKey(string binaryPath)
+    {
+        var info = new FileInfo(binaryPath);
+        return $"{binaryPath}|{info.LastWriteTimeUtc.Ticks}|{info.Length}";
     }
 
     private static string? ParseVadBackend(string stdout)
@@ -151,12 +177,13 @@ public partial class EngineCapabilityProbe
 
     private async Task<EngineRuntimeInfo> RunProbeAsync(string binaryPath, CancellationToken cancellationToken)
     {
-        // Which subtitle formats a binary reads decides whether the plugin has to convert
-        // a file before handing it over, so it's asked of every build rather than assumed
-        // from a version number. Engines with no such call just don't answer.
-        var formats = await TryFormatsCallAsync(binaryPath, cancellationToken).ConfigureAwait(false);
+        // Formats decide whether we convert before handing a file over, so always ask.
+        // Independent calls, run them side by side (some engines take a while to start).
+        var formatsCall = TryFormatsCallAsync(binaryPath, cancellationToken);
+        var capabilitiesCall = TryCapabilitiesCallAsync(binaryPath, cancellationToken);
+        var formats = await formatsCall.ConfigureAwait(false);
+        var capabilities = await capabilitiesCall.ConfigureAwait(false);
 
-        var capabilities = await TryCapabilitiesCallAsync(binaryPath, cancellationToken).ConfigureAwait(false);
         if (capabilities is not null)
         {
             capabilities.ReportedExtensions.AddRange(formats);
@@ -169,13 +196,12 @@ public partial class EngineCapabilityProbe
             return capabilities;
         }
 
-        var fromUsage = await TryUsageTextAsync(binaryPath, cancellationToken).ConfigureAwait(false);
-
-        // Most engines that don't answer --capabilities still answer --version, and that's
-        // the only way to put a version on a binary the plugin didn't install itself. It's
-        // asked for either way now: a binary whose usage text gives up nothing still has a
-        // version worth showing, and that used to be thrown away with the rest.
-        var version = await TryVersionCallAsync(binaryPath, cancellationToken).ConfigureAwait(false);
+        // no --capabilities: read the usage text, and ask --version too since that's the
+        // only way to put a version on a binary we didn't install
+        var usageCall = TryUsageTextAsync(binaryPath, cancellationToken);
+        var versionCall = TryVersionCallAsync(binaryPath, cancellationToken);
+        var fromUsage = await usageCall.ConfigureAwait(false);
+        var version = await versionCall.ConfigureAwait(false);
 
         if (fromUsage is not null)
         {
@@ -217,14 +243,9 @@ public partial class EngineCapabilityProbe
             return null;
         }
 
-        // An engine that doesn't know --version prints its usage text, which is full of
-        // things that aren't versions, so only trust output that is short enough to be a
-        // real answer.
+        // An engine without --version prints its usage text, full of numbers that aren't
+        // versions. A real answer is a line or two.
         var text = (stdout + "\n" + stderr).Trim();
-
-        // An engine that doesn't know --version prints its whole usage text, which is
-        // full of numbers that aren't versions. A real answer is a line or two, so
-        // anything longer is treated as usage text and ignored.
         if (text.Length == 0 || text.Length > 200 || CountLines(text) > 3)
         {
             return null;
@@ -234,11 +255,8 @@ public partial class EngineCapabilityProbe
         return match.Success ? match.Groups["version"].Value : null;
     }
 
-    // "engine --formats" prints one subtitle extension per line and exits 0. An engine
-    // that has no such call either errors out or prints its usage text, and neither of
-    // those is a list of extensions, so the strict line-by-line parse below is what tells
-    // a real answer from a refusal. Anything that doesn't parse cleanly returns nothing,
-    // and the caller falls back to the list the plugin knows the project by.
+    // "--formats" prints one extension per line. Engines without it error or print usage,
+    // so the strict per-line parse tells them apart. Anything off and we use the built-in list.
     private async Task<List<string>> TryFormatsCallAsync(string binaryPath, CancellationToken cancellationToken)
     {
         var found = new List<string>();
@@ -332,8 +350,7 @@ public partial class EngineCapabilityProbe
         }
         catch (JsonException)
         {
-            // an engine that doesn't know --capabilities may well print usage text and
-            // exit 0, which isn't JSON. Nothing wrong, just not an answer.
+            // usage text with exit 0, not an answer
             return null;
         }
     }
@@ -372,70 +389,20 @@ public partial class EngineCapabilityProbe
         return result.Flags.Count > 0 ? result : null;
     }
 
-    [System.Diagnostics.CodeAnalysis.SuppressMessage(
-        "Security",
-        "CA3003:Review code for file path injection vulnerabilities",
-        Justification = "The path comes from the plugin's own engines folder or an admin-set override, the same value the runner already executes.")]
     private static async Task<(string Stdout, string Stderr, int ExitCode, bool Started)> RunAsync(
         string binaryPath,
         IReadOnlyList<string> arguments,
         CancellationToken cancellationToken)
     {
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = binaryPath,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-
-        Services.ProcessOutput.ReadAsUtf8(startInfo);
-
-        foreach (var argument in arguments)
-        {
-            startInfo.ArgumentList.Add(argument);
-        }
-
-        using var process = new Process { StartInfo = startInfo };
-
         try
         {
-            process.Start();
+            var result = await Services.ProcessRunner.RunAsync(binaryPath, arguments, ProbeTimeout, cancellationToken).ConfigureAwait(false);
+            return (result.Stdout, result.Stderr, result.ExitCode, true);
         }
-        catch (System.ComponentModel.Win32Exception)
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or TimeoutException)
         {
+            // didn't start or didn't answer, either way nothing useful
             return (string.Empty, string.Empty, -1, false);
         }
-
-        var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
-        var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
-
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeoutCts.CancelAfter(ProbeTimeout);
-
-        try
-        {
-            await process.WaitForExitAsync(timeoutCts.Token).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            // a binary that sits there rather than printing usage tells us nothing useful,
-            // and we're not going to wait around for it
-            try
-            {
-                process.Kill(entireProcessTree: true);
-            }
-            catch (InvalidOperationException)
-            {
-                // exited on its own in the meantime
-            }
-
-            return (string.Empty, string.Empty, -1, false);
-        }
-
-        var stdout = await stdoutTask.ConfigureAwait(false);
-        var stderr = await stderrTask.ConfigureAwait(false);
-        return (stdout, stderr, process.ExitCode, true);
     }
 }

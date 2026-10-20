@@ -28,17 +28,12 @@ public class ConvertRequest
     public string? TargetFormat { get; set; }
 
     /// <summary>
-    /// Gets or sets a value indicating whether the source file should be deleted once the
-    /// converted one is written. Null means whatever the Conversion settings say, which
-    /// ships as "keep it": converting should be something you can undo by deleting the
-    /// new file.
+    /// Gets or sets a value indicating whether to delete the source afterwards. Null = settings (default keep).
     /// </summary>
     public bool? ReplaceOriginal { get; set; }
 
     /// <summary>
-    /// Gets or sets a value indicating whether the converted file then gets synced. Null
-    /// means whatever the Conversion settings say, which ships as "yes" for a subtitle
-    /// that had to be converted before an engine could read it.
+    /// Gets or sets a value indicating whether to sync the converted file. Null = settings.
     /// </summary>
     public bool? SyncAfter { get; set; }
 

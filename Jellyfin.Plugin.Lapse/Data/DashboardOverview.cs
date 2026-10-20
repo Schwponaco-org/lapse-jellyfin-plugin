@@ -38,7 +38,7 @@ public class RecentActivityEntry
     public DateTime? WhenUtc { get; set; }
 
     /// <summary>
-    /// Gets or sets a short line about what happened - the offset found, or why it failed.
+    /// Gets or sets a short line about what happened (offset found, or why it failed).
     /// </summary>
     public string? Detail { get; set; }
 
@@ -65,12 +65,8 @@ public class RecentActivityEntry
 }
 
 /// <summary>
-/// What the dashboard's front page needs beyond the item list it already has: which
-/// engine is doing the work, and what has been synced lately.
-///
-/// The library counts are not here on purpose. The browser already holds the full status
-/// list for the Sync status panel, so it adds those up itself rather than making the
-/// server walk every item and stat its subtitles a second time.
+/// Front page data the item list doesn't have: active engine and recent activity. No library
+/// counts on purpose, the browser adds those up from the status list it already has.
 /// </summary>
 public class DashboardOverview
 {
@@ -100,9 +96,7 @@ public class DashboardOverview
     public bool ActiveEngineReady { get; set; }
 
     /// <summary>
-    /// Gets or sets a value indicating whether any engine at all is installed. When
-    /// nothing is, the dashboard drops back to a single Install button for LAPSE rather
-    /// than showing counts that would all be zero.
+    /// Gets or sets a value indicating whether any engine is installed (if not the page just shows Install LAPSE).
     /// </summary>
     public bool AnyEngineInstalled { get; set; }
 

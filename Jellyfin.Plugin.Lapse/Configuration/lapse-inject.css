@@ -88,10 +88,6 @@
     flex: 1;
 }
 
-.lapseSmallButton {
-    margin-top: .6em;
-}
-
 /* offset input with its - and + buttons either side */
 .lapseStepperRow {
     display: flex;
@@ -113,9 +109,7 @@
     margin-top: .9em;
 }
 
-/* The number here is the thing being read while dragging the slider, and at the inherited
-   input size it was too small to read at a glance. It gets its own size rather than a
-   global override so nothing else in the dialog moves. */
+/* bigger number, it's what you read while dragging the slider */
 .lapseShiftNumber {
     font-size: 1.5em !important;
     font-weight: 500;
@@ -145,9 +139,7 @@
     margin: .1em 0 .7em;
 }
 
-/* What the offset does to one real line from the file. This is the thing being read while
-   the slider moves, so it is sized to be read at a glance rather than inheriting the
-   dialog's small print. */
+/* the real line from the file, read while the slider moves, so it's big */
 .lapsePreviewBox {
     margin-top: .8em;
     padding: .9em 1em;
@@ -251,9 +243,7 @@
 }
 
 /* --- our entries in Jellyfin's action sheet ---
-   "Sync All Subtitles to Reference" is longer than anything Jellyfin puts in that menu
-   itself, and the sheet's own rules keep item text on one line, so it ran off the right
-   edge and got cut. Let ours wrap and give the sheet room to grow with it. */
+   "Sync All Subtitles to Reference" is longer than Jellyfin's own entries, let it wrap */
 
 .lapseSyncButton {
     height: auto !important;
@@ -280,9 +270,7 @@
     max-width: min(32em, 92vw);
 }
 
-/* Our entries make the sheet taller than the height Jellyfin positioned it on, so on a
-   short window the last one can still fall off the bottom even after it has been nudged
-   back up. Letting the list scroll means everything stays reachable either way. */
+/* our entries can push the sheet past the bottom on short windows, so let it scroll */
 .actionSheet:has(.lapseSyncButton),
 .actionSheetContent:has(.lapseSyncButton) {
     max-height: 88vh;
@@ -295,11 +283,8 @@
 }
 
 /* --- the in-player subtitle panel ---
-
-   Sits over the right edge of the picture while the film keeps playing, because the whole
-   point is to watch the subtitles move as you change them. It deliberately does not cover
-   the frame or take a backdrop: a dialog you have to close to see what it did would put
-   you right back where you started. */
+   Sits over the right edge while the film keeps playing, no backdrop, the point is watching
+   the subtitles move as you change them. */
 
 .lapseTools {
     position: fixed;
@@ -307,9 +292,7 @@
     right: 0;
     bottom: 0;
 
-    /* Jellyfin's own video container sits at 1000, so a tie would leave the panel behind
-       the picture depending on document order. Above that, and below the plugin's own
-       toast at 10001, so a message about what just happened still lands on top. */
+    /* Jellyfin's video is at 1000, our toast at 10001, so in between */
     z-index: 9000;
     width: min(23em, 92vw);
     display: flex;

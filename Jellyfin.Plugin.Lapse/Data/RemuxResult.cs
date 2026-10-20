@@ -36,9 +36,7 @@ public class RemuxResult
     public List<string> ExtractedPaths { get; } = new();
 
     /// <summary>
-    /// Gets the tracks that were left in the video because nothing could be saved out of
-    /// them - PGS and VobSub, which are pictures rather than text. Dropping a track that
-    /// could not be extracted would destroy it, so those stay put.
+    /// Gets the tracks left in the video because they couldn't be saved out (PGS, VobSub).
     /// </summary>
     public List<string> KeptTracks { get; } = new();
 

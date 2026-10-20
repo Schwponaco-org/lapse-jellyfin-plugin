@@ -8,9 +8,8 @@ using System.Collections.Generic;
 namespace Jellyfin.Plugin.Lapse.Data;
 
 /// <summary>
-/// "Sync every other subtitle on this item to this one." Handy when one subtitle track is
-/// known good and the rest are off: lining the others up against a subtitle is both
-/// faster and more accurate than going back to the audio for each of them.
+/// "Sync every other subtitle on this item to this one." Faster and more accurate than the audio
+/// when one track is known good.
 /// </summary>
 public class MultiSubtitleSyncRequest
 {
@@ -25,14 +24,8 @@ public class MultiSubtitleSyncRequest
     public string ReferencePath { get; set; } = string.Empty;
 
     /// <summary>
-    /// Gets or sets the subtitles to line up against the reference, or null/empty for
-    /// every other subtitle on the item. Naming one is how "sync just this track to the
-    /// reference" works, for items where only one of the tracks is off.
+    /// Gets or sets which subtitles to line up, or null/empty for all the others.
     /// </summary>
-    [System.Diagnostics.CodeAnalysis.SuppressMessage(
-        "Usage",
-        "CA2227:Collection properties should be read only",
-        Justification = "Bound from a request body, and System.Text.Json skips collection properties it can't assign to.")]
     public List<string>? SubtitlePaths { get; set; }
 
     /// <summary>

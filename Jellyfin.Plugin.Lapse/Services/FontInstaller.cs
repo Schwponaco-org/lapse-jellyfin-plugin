@@ -10,7 +10,6 @@ using System.Linq;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
-using Jellyfin.Plugin.Lapse.Data;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller.Configuration;
 using Microsoft.Extensions.Logging;
@@ -18,35 +17,23 @@ using Microsoft.Extensions.Logging;
 namespace Jellyfin.Plugin.Lapse.Services;
 
 /// <summary>
-/// Puts a font where Jellyfin's subtitle renderer will find it.
+/// Puts a font where Jellyfin's subtitle renderer finds it.
 ///
-/// Styling a subtitle to use OpenDyslexic only does anything if whatever is drawing the
-/// text can get hold of OpenDyslexic. Jellyfin already has the mechanism for that - the
-/// fallback font folder, which the web client's ASS renderer fetches fonts from and which
-/// ffmpeg reads when it burns subtitles in - but it ships empty, the setting is off by
-/// default, and finding a font, downloading it and pointing the server at it is several
-/// steps in three different places. This does those steps.
-///
-/// OpenDyslexic is used because it is free to redistribute (SIL Open Font License) and is
-/// the typeface the accessibility guidance names. Nothing here is specific to it: any font
-/// dropped in the same folder by hand works the same way, and the style can name it.
+/// A style asking for OpenDyslexic only works if the renderer can get the font. Jellyfin
+/// has a fallback font folder for that (the web client's ASS renderer and ffmpeg burn-in
+/// both use it), but it ships empty and switched off. This downloads the font and turns
+/// the setting on. OpenDyslexic is OFL licensed, any other font dropped in by hand works too.
 /// </summary>
 public class FontInstaller
 {
-    /// <summary>
-    /// Where the OpenDyslexic release archive is fetched from. A pinned release rather
-    /// than "latest": the asset names have moved between releases, and a font that quietly
-    /// stops installing is worse than one that installs a slightly older version.
-    /// </summary>
+    // Pinned release, not "latest", the asset names keep moving between releases.
     private const string OpenDyslexicUrl =
         "https://github.com/antijingoist/opendyslexic/releases/download/v0.91.12/opendyslexic-0.910.12-rc2-2019.10.17.zip";
 
-    // What counts as a font when reporting what's in the folder, whoever put it there.
+    // what we list as a font, whoever put it there
     private static readonly string[] FontExtensions = { ".otf", ".ttf", ".woff2", ".woff" };
 
-    // What gets unpacked. The archive also carries woff and woff2 builds of every face,
-    // which are for web pages: libass and ffmpeg read neither, so unpacking them would
-    // triple the folder's contents with files nothing here can use.
+    // the zip also has woff/woff2 builds, libass and ffmpeg can't use those
     private static readonly string[] InstallableExtensions = { ".otf", ".ttf" };
 
     private readonly IHttpClientFactory _httpClientFactory;
@@ -56,10 +43,6 @@ public class FontInstaller
     /// <summary>
     /// Initializes a new instance of the <see cref="FontInstaller"/> class.
     /// </summary>
-    /// <param name="httpClientFactory">Factory to grab an HttpClient from.</param>
-    /// <param name="configurationManager">Reads and writes the server's encoding options,
-    /// which is where the fallback font folder is configured.</param>
-    /// <param name="logger">Logger.</param>
     public FontInstaller(
         IHttpClientFactory httpClientFactory,
         IServerConfigurationManager configurationManager,
@@ -71,10 +54,8 @@ public class FontInstaller
     }
 
     /// <summary>
-    /// Gets where the fonts live and what is in there, along with whether the server is
-    /// set to actually use them.
+    /// Gets the font folder, what's in it and whether the server actually uses it.
     /// </summary>
-    /// <returns>The current state.</returns>
     public FontStatus GetStatus()
     {
         var options = _configurationManager.GetEncodingOptions();
@@ -86,17 +67,24 @@ public class FontInstaller
             FallbackFontEnabled = options.EnableFallbackFont
         };
 
-        if (Directory.Exists(folder))
+        try
         {
-            foreach (var file in Directory.EnumerateFiles(folder))
+            if (Directory.Exists(folder))
             {
-                if (FontExtensions.Contains(Path.GetExtension(file), StringComparer.OrdinalIgnoreCase))
+                foreach (var file in Directory.EnumerateFiles(folder))
                 {
-                    status.Fonts.Add(Path.GetFileName(file));
+                    if (FontExtensions.Contains(Path.GetExtension(file), StringComparer.OrdinalIgnoreCase))
+                    {
+                        status.Fonts.Add(Path.GetFileName(file));
+                    }
                 }
-            }
 
-            status.Fonts.Sort(StringComparer.OrdinalIgnoreCase);
+                status.Fonts.Sort(StringComparer.OrdinalIgnoreCase);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            status.Error = $"Could not read the font folder at {folder}: {ex.Message}";
         }
 
         status.DyslexicInstalled = status.Fonts.Exists(
@@ -106,11 +94,8 @@ public class FontInstaller
     }
 
     /// <summary>
-    /// Downloads OpenDyslexic and unpacks its font files into the fallback font folder,
-    /// then turns the fallback font setting on so the server actually serves them.
+    /// Downloads OpenDyslexic into the fallback font folder and turns the setting on.
     /// </summary>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>The state afterwards, with an error set if it didn't work.</returns>
     public async Task<FontStatus> InstallDyslexicFontAsync(CancellationToken cancellationToken = default)
     {
         var options = _configurationManager.GetEncodingOptions();
@@ -137,8 +122,7 @@ public class FontInstaller
 
             response.EnsureSuccessStatusCode();
 
-            // Into memory rather than a scratch file: the archive is a couple of megabytes
-            // and ZipArchive wants a seekable stream, which the response body is not.
+            // ZipArchive needs a seekable stream, and it's only a couple of MB
             using var buffer = new MemoryStream();
 
             var body = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
@@ -170,8 +154,7 @@ public class FontInstaller
             return failed;
         }
 
-        // A font in the folder that the server has been told to ignore does nothing, and
-        // "I installed it and nothing changed" is the obvious way for that to be reported.
+        // with the setting off the font does nothing, and it'd look like the install failed
         try
         {
             if (!options.EnableFallbackFont || !string.Equals(options.FallbackFontPath, folder, StringComparison.Ordinal))
@@ -197,7 +180,6 @@ public class FontInstaller
     /// <summary>
     /// Deletes any installed OpenDyslexic font files from the fallback font folder.
     /// </summary>
-    /// <returns>The state afterwards, with an error set if it didn't work.</returns>
     public FontStatus UninstallDyslexicFont()
     {
         var options = _configurationManager.GetEncodingOptions();
@@ -226,12 +208,7 @@ public class FontInstaller
         return GetStatus();
     }
 
-    // Flattened on purpose: the archive nests its fonts under a folder or two, and the
-    // fallback font folder is read as a flat list of files.
-    [System.Diagnostics.CodeAnalysis.SuppressMessage(
-        "Security",
-        "CA3003:Review code for file path injection vulnerabilities",
-        Justification = "The destination is the server's own configured font folder, and only the file name of each entry is used - never its path within the archive, which is what a zip slip would need.")]
+    // Flattened, the folder is read as a flat list.
     private static int ExtractFonts(Stream archiveStream, string folder)
     {
         using var archive = new ZipArchive(archiveStream, ZipArchiveMode.Read);
@@ -239,9 +216,7 @@ public class FontInstaller
 
         foreach (var entry in archive.Entries)
         {
-            // Take the entry's own file name and nothing else. An entry named
-            // "../../etc/passwd" contributes "passwd" and lands in the font folder like
-            // everything else.
+            // file name only, so "../../etc/passwd" can't escape the folder
             var name = Path.GetFileName(entry.FullName);
 
             if (string.IsNullOrEmpty(name)
@@ -257,8 +232,7 @@ public class FontInstaller
         return written;
     }
 
-    // Jellyfin leaves this empty until someone sets it, so fall back to a folder beside
-    // the rest of the server's data rather than refusing to do anything.
+    // empty until someone sets it, use a folder next to the server's data then
     private string ResolveFolder(string? configured)
     {
         if (!string.IsNullOrWhiteSpace(configured))
@@ -281,8 +255,7 @@ public class FontStatus
     public string FolderPath { get; set; } = string.Empty;
 
     /// <summary>
-    /// Gets or sets a value indicating whether the server is set to serve fonts from that
-    /// folder at all. Off, nothing in the folder is used.
+    /// Gets or sets a value indicating whether the server uses that folder at all.
     /// </summary>
     public bool FallbackFontEnabled { get; set; }
 

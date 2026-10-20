@@ -5,16 +5,12 @@
 namespace Jellyfin.Plugin.Lapse.Data;
 
 /// <summary>
-/// What a run nobody is watching does to the subtitles it finds. This covers the
-/// scheduled task, the per-library schedules, the auto-sync on a newly added item, the
-/// bulk runs and the Radarr/Sonarr webhook - everything that isn't a press on a button.
+/// What unattended runs (schedules, auto-sync, bulk, webhook) do to the subtitles they find.
 /// </summary>
 public enum AutomationAction
 {
     /// <summary>
-    /// Line the subtitles up and leave their format alone. The default, and with LAPSE
-    /// the only thing most libraries need: it reads and writes every common format, so
-    /// there's nothing to convert on the way past.
+    /// Just sync, keep the format. The default, LAPSE reads and writes every common format anyway.
     /// </summary>
     Sync = 0,
 

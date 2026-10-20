@@ -16,20 +16,16 @@ using Microsoft.Extensions.Logging;
 namespace Jellyfin.Plugin.Lapse.Services.Translation;
 
 /// <summary>
-/// DeepL, through its documented v2 REST API. Free and Pro keys use different hosts and
-/// are told apart by the ":fx" suffix a free key carries, which is exactly how DeepL's
-/// own client libraries decide, so there's no separate "which tier am I" setting to get
-/// wrong.
+/// DeepL v2 REST API. Free keys end in ":fx" and use a different host, same check DeepL's
+/// own libraries do, so no separate tier setting.
 /// </summary>
 public class DeepLTranslationProvider : ITranslationProvider
 {
     // DeepL takes up to 50 text parameters per request.
     private const int BatchSize = 50;
 
-    // DeepL asks callers to back off and try again rather than treating a 429 as a
-    // failure: https://developers.deepl.com/docs/best-practices/error-handling.
-    // A whole film is a fair few batches, so hitting the limit on a busy key is normal
-    // and shouldn't throw away the work already done.
+    // DeepL wants a back-off retry on 429 (https://developers.deepl.com/docs/best-practices/error-handling),
+    // a whole film is enough batches that hitting it is normal
     private const int MaxAttempts = 5;
     private const int FirstRetryDelayMs = 1000;
     private const int MaxRetryDelayMs = 30000;
@@ -43,8 +39,6 @@ public class DeepLTranslationProvider : ITranslationProvider
     /// <summary>
     /// Initializes a new instance of the <see cref="DeepLTranslationProvider"/> class.
     /// </summary>
-    /// <param name="httpClientFactory">Factory to grab an HttpClient from.</param>
-    /// <param name="logger">Logger.</param>
     public DeepLTranslationProvider(IHttpClientFactory httpClientFactory, ILogger<DeepLTranslationProvider> logger)
     {
         _httpClientFactory = httpClientFactory;
@@ -91,15 +85,9 @@ public class DeepLTranslationProvider : ITranslationProvider
         var client = _httpClientFactory.CreateClient("Lapse");
         var results = new List<TranslatedLine>(lines.Count);
 
-        for (var start = 0; start < lines.Count; start += BatchSize)
+        foreach (var batch in TranslationBatches.Split(lines, BatchSize))
         {
             cancellationToken.ThrowIfCancellationRequested();
-
-            var batch = new List<string>();
-            for (var i = start; i < Math.Min(start + BatchSize, lines.Count); i++)
-            {
-                batch.Add(lines[i]);
-            }
 
             var payload = new Dictionary<string, object>
             {
@@ -126,7 +114,7 @@ public class DeepLTranslationProvider : ITranslationProvider
                     CultureInfo.InvariantCulture,
                     "DeepL returned {0}: {1}",
                     (int)response.StatusCode,
-                    Describe(response.StatusCode, Shorten(body))));
+                    Describe(response.StatusCode, TranslationBatches.Shorten(body))));
             }
 
             using var document = await response.Content
@@ -218,7 +206,7 @@ public class DeepLTranslationProvider : ITranslationProvider
         };
     }
 
-    private IEnumerable<TranslatedLine> ReadTranslations(JsonDocument? document, int expected)
+    private List<TranslatedLine> ReadTranslations(JsonDocument? document, int expected)
     {
         var results = new List<TranslatedLine>();
 
@@ -238,21 +226,6 @@ public class DeepLTranslationProvider : ITranslationProvider
             }
         }
 
-        if (results.Count != expected)
-        {
-            _logger.LogWarning("DeepL returned {Got} translations for {Expected} lines", results.Count, expected);
-            while (results.Count < expected)
-            {
-                results.Add(new TranslatedLine());
-            }
-        }
-
-        return results;
-    }
-
-    private static string Shorten(string text)
-    {
-        var trimmed = text.Trim();
-        return trimmed.Length > 300 ? trimmed[..300] : trimmed;
+        return TranslationBatches.Align(results, expected, _logger, DisplayName);
     }
 }

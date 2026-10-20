@@ -4,7 +4,6 @@
 
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using Jellyfin.Data.Enums;
 using Jellyfin.Plugin.Lapse.Data;
 using MediaBrowser.Controller.Entities;
@@ -14,17 +13,12 @@ using MediaBrowser.Model.Entities;
 namespace Jellyfin.Plugin.Lapse.Services;
 
 /// <summary>
-/// Everything about "which libraries are there, and which items in them can we sync".
-/// Sync used to be movies only; now any library can be turned on and everything in it
-/// with a video file and an external subtitle is fair game.
+/// Which libraries exist and which items in them we can sync.
 /// </summary>
 public class LibraryService
 {
-    /// <summary>
-    /// The item types worth trying to sync. Everything here has a video file with audio
-    /// to line subtitles up against - there's no point offering this for an audio book.
-    /// </summary>
-    private static readonly BaseItemKind[] SyncableKinds =
+    // Things with a video track to line subtitles up against.
+    internal static readonly BaseItemKind[] SyncableKinds =
     {
         BaseItemKind.Movie,
         BaseItemKind.Episode,
@@ -32,21 +26,26 @@ public class LibraryService
         BaseItemKind.MusicVideo
     };
 
+    // GetVirtualFolders reads every library's options off disk, and a library scan asks
+    // which library each new item is in. Libraries don't change that often.
+    private static readonly TimeSpan LibraryIdsCacheFor = TimeSpan.FromSeconds(10);
+
     private readonly ILibraryManager _libraryManager;
+
+    // swapped as a whole so readers never see half an update
+    private LibraryIdSnapshot? _libraryIds;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="LibraryService"/> class.
     /// </summary>
-    /// <param name="libraryManager">Jellyfin's library manager.</param>
     public LibraryService(ILibraryManager libraryManager)
     {
         _libraryManager = libraryManager;
     }
 
     /// <summary>
-    /// Lists every library, with its LAPSE settings folded in.
+    /// Lists every library with our settings folded in, in Jellyfin's order.
     /// </summary>
-    /// <returns>One entry per library, in the order Jellyfin lists them.</returns>
     public List<LibraryEntry> GetLibraries()
     {
         var config = Plugin.Instance!.Configuration;
@@ -59,7 +58,7 @@ public class LibraryService
                 continue;
             }
 
-            var settings = config.Libraries.FirstOrDefault(l => l.LibraryId == id);
+            var settings = config.FindLibraryConfig(id);
             var collectionType = folder.CollectionType?.ToString();
 
             result.Add(new LibraryEntry
@@ -68,16 +67,12 @@ public class LibraryService
                 Name = folder.Name,
                 CollectionType = collectionType,
 
-                // no entry means the user has never touched this library in the dashboard,
-                // and those default to on so an upgrade doesn't quietly stop syncing
+                // untouched libraries are on, but auto-sync and schedules stay off until
+                // someone ticks them. An update shouldn't start rewriting files by itself.
                 Enabled = settings?.Enabled ?? true,
-
-                // Unlike Enabled, these two start off. Being eligible for a sync somebody
-                // asks for is one thing; having files rewritten unprompted is another, and
-                // that shouldn't begin because an update added the option.
                 AutoSyncEnabled = settings?.AutoSyncEnabled ?? false,
                 ScheduleEnabled = settings?.ScheduleEnabled ?? false,
-                ScheduleFrequency = (settings?.ScheduleFrequency ?? Data.ScheduleFrequency.Daily).ToString(),
+                ScheduleFrequency = (settings?.ScheduleFrequency ?? ScheduleFrequency.Daily).ToString(),
                 ScheduleDay = settings?.ScheduleDay?.ToString(),
                 ScheduleTime = settings?.ScheduleTime ?? "03:00",
                 LastScheduledRunUtc = settings?.LastScheduledRunUtc,
@@ -90,22 +85,15 @@ public class LibraryService
     }
 
     /// <summary>
-    /// Gets the ids of every library that's turned on.
+    /// Gets the ids of every library root. Cached for a few seconds since it's asked per item.
     /// </summary>
-    /// <returns>The enabled library ids.</returns>
-    public List<Guid> GetEnabledLibraryIds()
+    public IReadOnlySet<Guid> GetLibraryIdSet()
     {
-        return GetLibraries().Where(l => l.Enabled).Select(l => l.ItemId).ToList();
-    }
+        if (_libraryIds is { } cached && DateTime.UtcNow - cached.ReadUtc < LibraryIdsCacheFor)
+        {
+            return cached.Ids;
+        }
 
-    /// <summary>
-    /// Gets the ids of every library root, which is what an item's ancestors get checked
-    /// against. Worth pulling out and holding onto when looping over a lot of items -
-    /// GetVirtualFolders reads the library configuration each time it's called.
-    /// </summary>
-    /// <returns>The set of library ids.</returns>
-    public HashSet<Guid> GetLibraryIdSet()
-    {
         var libraryIds = new HashSet<Guid>();
         foreach (var folder in _libraryManager.GetVirtualFolders())
         {
@@ -115,19 +103,14 @@ public class LibraryService
             }
         }
 
+        _libraryIds = new LibraryIdSnapshot(libraryIds, DateTime.UtcNow);
         return libraryIds;
     }
 
     /// <summary>
-    /// Finds which library an item belongs to. Returns null for anything outside a
-    /// library the plugin can see, which includes items that have been removed since they
-    /// were queued.
+    /// Finds which library an item is in, or null if it's outside every library we can see.
     /// </summary>
-    /// <param name="item">The item.</param>
-    /// <param name="libraryIds">A set from <see cref="GetLibraryIdSet"/>, or null to
-    /// build one for this call.</param>
-    /// <returns>The library's CollectionFolder id, or null.</returns>
-    public Guid? GetLibraryIdFor(BaseItem item, HashSet<Guid>? libraryIds = null)
+    public Guid? GetLibraryIdFor(BaseItem item, IReadOnlySet<Guid>? libraryIds = null)
     {
         libraryIds ??= GetLibraryIdSet();
 
@@ -139,15 +122,9 @@ public class LibraryService
             }
         }
 
-        // The parent chain is the physical folder structure, and a library's
-        // CollectionFolder is not always on it - it depends on how the library's paths
-        // were set up. Jellyfin's own ancestor lookup is the reliable answer, and it is
-        // the same relation the item queries use, so falling back to it here keeps
-        // "which library is this in" agreeing with "which library did this come from".
-        //
-        // Without this, every caller downstream reads null and treats the item as being
-        // outside any library: auto-sync on a new file, the Radarr/Sonarr webhook and the
-        // library filter on the status list all quietly did nothing.
+        // The parent chain follows the folders on disk and the CollectionFolder isn't
+        // always on it, depends on how the library paths were set up. Jellyfin's own
+        // lookup is what the item queries use, so fall back to that.
         foreach (var folder in _libraryManager.GetCollectionFolders(item))
         {
             if (libraryIds.Contains(folder.Id))
@@ -160,173 +137,106 @@ public class LibraryService
     }
 
     /// <summary>
-    /// Says whether an item may be synced: right type, real file, not skipped, and in a
-    /// library that's turned on.
+    /// Says whether an item may be synced: right type, real file, not skipped or ignored,
+    /// and in a library that's turned on.
     /// </summary>
-    /// <param name="item">The item.</param>
-    /// <returns>True if the item is eligible.</returns>
     public bool IsEligible(BaseItem item)
     {
-        if (item.LocationType == LocationType.Virtual || string.IsNullOrEmpty(item.Path))
-        {
-            return false;
-        }
-
-        if (!IsSyncableKind(item))
-        {
-            return false;
-        }
-
-        if (SyncQueueManager.IsSkipped(item) || IsIgnored(item))
-        {
-            return false;
-        }
-
-        var libraryId = GetLibraryIdFor(item);
-
-        // an item we can't place in a library (a stray item, or a library the plugin
-        // can't see) is left alone rather than synced on a guess
-        return libraryId.HasValue && Plugin.Instance!.Configuration.IsLibraryEnabled(libraryId.Value);
+        return EligibleLibrary(item) is not null;
     }
 
     /// <summary>
-    /// Says whether a newly added item should be picked up straight away. Eligibility on
-    /// its own isn't enough: a library can be turned on for bulk and scheduled runs while
-    /// still not wanting every new file grabbed the moment it lands.
+    /// Says whether a new item should be picked up right away. Needs auto-sync ticked on
+    /// its library, being eligible isn't enough.
     /// </summary>
-    /// <param name="item">The item that was just added.</param>
-    /// <returns>True if auto-sync should queue it.</returns>
     public bool IsAutoSyncEnabled(BaseItem item)
     {
-        if (!IsEligible(item))
-        {
-            return false;
-        }
-
-        var libraryId = GetLibraryIdFor(item);
-        if (!libraryId.HasValue)
-        {
-            return false;
-        }
-
-        var settings = Plugin.Instance!.Configuration.Libraries
-            .FirstOrDefault(l => l.LibraryId == libraryId.Value);
-
-        // A library nobody has set this on doesn't get it. Nothing starts touching files
-        // by itself until somebody ticks the box.
-        return settings?.AutoSyncEnabled ?? false;
+        return EligibleLibrary(item) is { } id
+            && Plugin.Instance!.Configuration.FindLibraryConfig(id)?.AutoSyncEnabled == true;
     }
 
-    /// <summary>
-    /// Says whether anything on the ignore list covers this item. A rule on a series or a
-    /// folder covers everything under it, so this walks the item's ancestors as well as
-    /// checking its own id and path.
-    /// </summary>
-    /// <param name="item">The item.</param>
-    /// <returns>True if the item is ignored.</returns>
-    public static bool IsIgnored(BaseItem item)
+    private Guid? EligibleLibrary(BaseItem item)
     {
-        var config = Plugin.Instance?.Configuration;
-        if (config is null || config.IgnoreRules.Count == 0)
+        if (item.LocationType == LocationType.Virtual
+            || string.IsNullOrEmpty(item.Path)
+            || !IsSyncableKind(item)
+            || ItemExclusions.Load().Excludes(item))
         {
-            return false;
+            return null;
         }
 
-        var ids = new List<Guid>();
-        for (var current = item; current is not null; current = current.GetParent())
-        {
-            ids.Add(current.Id);
-        }
-
-        return config.IsIgnored(ids, item.Path);
+        // can't place it in a library? leave it alone rather than guess
+        var libraryId = GetLibraryIdFor(item);
+        return libraryId is { } id && Plugin.Instance!.Configuration.IsLibraryEnabled(id) ? id : null;
     }
 
     /// <summary>
-    /// Says whether an item's type is one the engines can do anything with.
+    /// Says whether an item's type is one the engines can work with.
     /// </summary>
-    /// <param name="item">The item.</param>
-    /// <returns>True if it's a video type LAPSE handles.</returns>
     public static bool IsSyncableKind(BaseItem item)
     {
         return Array.IndexOf(SyncableKinds, item.GetBaseItemKind()) >= 0;
     }
 
     /// <summary>
-    /// Gets every syncable item in one library, or across all enabled libraries when no
-    /// library is named.
+    /// Gets every syncable item in one library, or in all enabled libraries.
     /// </summary>
-    /// <param name="libraryId">The library to look in, or null for all enabled ones.</param>
-    /// <param name="includeSkipped">True to include items marked as skip or ignore. The
-    /// dashboard's status list wants them (they're worth showing, greyed out); anything
-    /// that is about to sync does not.</param>
-    /// <returns>The items.</returns>
+    /// <param name="libraryId">The library, or null for every enabled one.</param>
+    /// <param name="includeSkipped">True to keep skipped and ignored items (the status list shows them greyed out).</param>
     public List<BaseItem> GetItems(Guid? libraryId = null, bool includeSkipped = false)
     {
-        var result = new List<BaseItem>();
-
-        foreach (var entry in GetItemsWithLibrary(libraryId, includeSkipped))
-        {
-            result.Add(entry.Item);
-        }
-
-        return result;
+        return GetItemsWithLibrary(libraryId, includeSkipped).ConvertAll(e => e.Item);
     }
 
     /// <summary>
-    /// The same walk as <see cref="GetItems"/>, but each item comes back paired with the
-    /// library it was found in.
-    ///
-    /// The pairing is taken from the query that produced the item rather than by walking
-    /// the item's parents afterwards. Both should agree, but the parent walk quietly
-    /// returns null whenever an item's ancestor chain doesn't lead back to a
-    /// CollectionFolder the plugin can see, and a null there is what left every row in the
-    /// status list unattributable - so the library filter matched nothing at all.
+    /// Same as <see cref="GetItems"/> but each item comes with the library it was found in.
+    /// That's taken from the query rather than a parent walk, which sometimes comes up empty.
     /// </summary>
-    /// <param name="libraryId">The library to look in, or null for all enabled ones.</param>
-    /// <param name="includeSkipped">True to include items marked as skip or ignore.</param>
-    /// <returns>The items, each with its library id.</returns>
     public List<(BaseItem Item, Guid LibraryId)> GetItemsWithLibrary(Guid? libraryId = null, bool includeSkipped = false)
     {
-        var searched = libraryId.HasValue
-            ? new List<Guid> { libraryId.Value }
-            : GetEnabledLibraryIds();
+        var searched = new List<Guid>();
+        if (libraryId.HasValue)
+        {
+            searched.Add(libraryId.Value);
+        }
+        else
+        {
+            foreach (var library in GetLibraries())
+            {
+                if (library.Enabled)
+                {
+                    searched.Add(library.ItemId);
+                }
+            }
+        }
 
-        // a library can appear under more than one virtual folder path, and Jellyfin will
-        // happily hand back the same item twice for that
+        var exclusions = includeSkipped ? null : ItemExclusions.Load();
+
+        // the same item can come back twice when a library has overlapping paths
         var seen = new HashSet<Guid>();
         var result = new List<(BaseItem Item, Guid LibraryId)>();
 
         foreach (var id in searched)
         {
-            foreach (var item in QueryLibrary(id))
+            var query = new InternalItemsQuery
             {
-                if (!seen.Add(item.Id))
-                {
-                    continue;
-                }
+                IncludeItemTypes = SyncableKinds,
+                Recursive = true,
+                IsVirtualItem = false,
+                ParentId = id
+            };
 
-                if (!includeSkipped && (SyncQueueManager.IsSkipped(item) || IsIgnored(item)))
+            foreach (var item in _libraryManager.GetItemList(query))
+            {
+                if (seen.Add(item.Id) && exclusions?.Excludes(item) != true)
                 {
-                    continue;
+                    result.Add((item, id));
                 }
-
-                result.Add((item, id));
             }
         }
 
         return result;
     }
 
-    private IEnumerable<BaseItem> QueryLibrary(Guid libraryId)
-    {
-        var query = new InternalItemsQuery
-        {
-            IncludeItemTypes = SyncableKinds,
-            Recursive = true,
-            IsVirtualItem = false,
-            ParentId = libraryId
-        };
-
-        return _libraryManager.GetItemList(query);
-    }
+    private sealed record LibraryIdSnapshot(HashSet<Guid> Ids, DateTime ReadUtc);
 }

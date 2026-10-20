@@ -7,9 +7,7 @@ using Jellyfin.Plugin.Lapse.Data;
 namespace Jellyfin.Plugin.Lapse.Engines;
 
 /// <summary>
-/// Everything one engine run needs to know. This is a parameter object rather than a
-/// long argument list because engines now also have to look at what the installed binary
-/// supports before deciding which flags to pass.
+/// Everything one engine run needs.
 /// </summary>
 public class EngineRunOptions
 {
@@ -24,9 +22,7 @@ public class EngineRunOptions
     public string InputPath { get; set; } = string.Empty;
 
     /// <summary>
-    /// Gets or sets the file the engine should write its result to. This is always a
-    /// temporary file: the runner decides where the result finally lands, so a run that
-    /// dies halfway can't leave a half written subtitle behind.
+    /// Gets or sets where the engine writes. Always a temp file, the runner moves it into place.
     /// </summary>
     public string OutputPath { get; set; } = string.Empty;
 
@@ -41,8 +37,7 @@ public class EngineRunOptions
     public int Penalty { get; set; }
 
     /// <summary>
-    /// Gets or sets the folder holding ffmpeg and ffprobe, or null if it couldn't be
-    /// found. Engines that shell out to ffmpeg can point themselves at it.
+    /// Gets or sets the ffmpeg/ffprobe folder, or null if not found.
     /// </summary>
     public string? FfmpegDirectory { get; set; }
 
@@ -52,10 +47,7 @@ public class EngineRunOptions
     public EngineRuntimeInfo Runtime { get; set; } = EngineRuntimeInfo.Unknown;
 
     /// <summary>
-    /// Gets or sets a value indicating whether the engine should sync the file even when
-    /// it doesn't think there's enough of it to judge. The runner sets this for a second
-    /// attempt after a first one refused a very short subtitle, and it's off for the
-    /// normal first run.
+    /// Gets or sets a value indicating whether to sync even with too few cues to judge (the runner's retry).
     /// </summary>
     public bool ForceAnyway { get; set; }
 

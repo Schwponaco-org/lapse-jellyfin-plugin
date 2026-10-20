@@ -18,17 +18,13 @@ using Microsoft.Net.Http.Headers;
 namespace Jellyfin.Plugin.Lapse.Web;
 
 /// <summary>
-/// Serves the web client's index.html with the LAPSE script tag added. This is what puts
-/// the sync entries in the item context menu, and doing it here rather than by editing
-/// the file means it works on the packaged Linux and macOS builds, where the web folder
-/// isn't writable by the account the server runs as.
+/// Adds our script tag to the web client's index.html as it's served (that's what puts the
+/// sync entries in the context menu). Doing it here instead of editing the file means it
+/// works on packaged Linux/macOS installs where the web folder is read only.
 ///
-/// The request is always passed down the rest of the pipeline first and the page comes
-/// back out of whatever answered it, rather than being read off disk and returned from
-/// here. That matters because other plugins - anything built on File Transformation,
-/// Media Bar and Custom Tabs among them - patch the same page further down. Answering
-/// here and returning would mean they never run at all, so this waits for their version
-/// of the page and adds its tags to that.
+/// The request still goes down the rest of the pipeline first, since other plugins (File
+/// Transformation, Media Bar, Custom Tabs...) patch the same page there. We add our tags
+/// to whatever they produced.
 /// </summary>
 public class ScriptInjectionMiddleware
 {
@@ -39,9 +35,6 @@ public class ScriptInjectionMiddleware
     /// <summary>
     /// Initializes a new instance of the <see cref="ScriptInjectionMiddleware"/> class.
     /// </summary>
-    /// <param name="next">The rest of the pipeline.</param>
-    /// <param name="applicationPaths">Used to find the web client folder.</param>
-    /// <param name="logger">Logger.</param>
     public ScriptInjectionMiddleware(
         RequestDelegate next,
         IApplicationPaths applicationPaths,
@@ -55,8 +48,6 @@ public class ScriptInjectionMiddleware
     /// <summary>
     /// Handles one request.
     /// </summary>
-    /// <param name="context">The request.</param>
-    /// <returns>Task.</returns>
     public async Task InvokeAsync(HttpContext context)
     {
         if (!HttpMethods.IsGet(context.Request.Method)
@@ -69,23 +60,16 @@ public class ScriptInjectionMiddleware
         var originalBody = context.Response.Body;
         using var buffer = new MemoryStream();
 
-        // Everything downstream - the static file handler, and any plugin that has hooked
-        // it - writes in here instead of straight out to the socket, so the page can be
-        // read back and added to before it goes anywhere.
+        // everything downstream writes here instead of to the socket so we can edit it
         context.Response.Body = buffer;
 
-        // Asking for a compressed response would leave us holding bytes we can't read or
-        // rewrite. This is one document per page load, so giving up the compression on it
-        // costs little. The header goes back afterwards in case anything else looks at it.
+        // no compression, we need to read it. One document per page load, cheap. Put back after.
         var acceptEncoding = context.Request.Headers.AcceptEncoding;
         context.Request.Headers.Remove(HeaderNames.AcceptEncoding);
 
-        // A conditional request is answered with an empty 304, and a range request with a
-        // slice, and neither is a page we can add to. Falling back to the copy on disk at
-        // that point would throw away whatever File Transformation and the plugins built
-        // on it did further down, so the conditions come off and the full page is asked
-        // for every time. The response is marked no-store below, so a browser that has
-        // been here before won't be sending these anyway.
+        // A 304 or a range slice is nothing we can add to, and falling back to the disk copy
+        // would throw away what other plugins did. So always ask for the full page (we mark
+        // it no-store below, so browsers shouldn't send these anyway).
         var conditionals = StripConditionalHeaders(context.Request.Headers);
 
         try
@@ -107,13 +91,10 @@ public class ScriptInjectionMiddleware
             }
         }
 
-        // Headers were never sent, since the body they'd have gone with was a
-        // MemoryStream, so there's still a free hand to change the response here.
+        // nothing was sent yet (it all went into the MemoryStream), so headers can still change
         var html = ReadHtmlResponse(context, buffer);
 
-        // Nothing downstream produced a page we can work with. Falling back to the copy on
-        // disk keeps this working on setups where something else answers the request in a
-        // way we can't read, at the cost of dropping whatever that something else did.
+        // nothing usable came back, fall back to the file on disk
         var fromDisk = false;
         if (html is null)
         {
@@ -127,9 +108,7 @@ public class ScriptInjectionMiddleware
 
         if (injected is null)
         {
-            // Either an older version successfully patched index.html on disk, or there's
-            // no head to insert into. The first is fine and already does the job; the
-            // second means this page isn't what we thought it was, so leave it alone.
+            // already patched on disk by an old version (fine), or no <head> (leave it alone)
             if (html is not null)
             {
                 WebClientInjection.Method = html.Contains(WebClientInjection.Marker, StringComparison.Ordinal)
@@ -158,8 +137,7 @@ public class ScriptInjectionMiddleware
         context.Response.ContentType = "text/html; charset=utf-8";
         context.Response.ContentLength = bytes.Length;
 
-        // The page no longer matches whatever was on disk, so the validators that came
-        // with it would have a client caching the wrong thing.
+        // the page doesn't match the file anymore, drop the validators
         context.Response.Headers.Remove(HeaderNames.ETag);
         context.Response.Headers.Remove(HeaderNames.LastModified);
         context.Response.Headers.CacheControl = "no-cache, no-store, must-revalidate";
@@ -193,8 +171,7 @@ public class ScriptInjectionMiddleware
         return removed;
     }
 
-    // Gets what the pipeline produced as text, or null when it isn't an HTML page this
-    // should be touching - a redirect, a 404, a compressed or otherwise encoded body.
+    // The page as text, or null for anything we shouldn't touch (redirect, 404, compressed body).
     private static string? ReadHtmlResponse(HttpContext context, MemoryStream buffer)
     {
         if (context.Response.StatusCode != StatusCodes.Status200OK
@@ -238,7 +215,7 @@ public class ScriptInjectionMiddleware
         }
         catch (NotSupportedException)
         {
-            // A host that doesn't serve a web client at all has nothing for us to patch.
+            // no web client on this host
             WebClientInjection.Problem = "This server doesn't expose a web client folder.";
         }
 
@@ -247,10 +224,8 @@ public class ScriptInjectionMiddleware
 }
 
 /// <summary>
-/// Puts <see cref="ScriptInjectionMiddleware"/> at the front of Jellyfin's request
-/// pipeline. Plugins don't get to edit Startup, but an IStartupFilter registered from
-/// the service registrator is picked up by the generic host when it builds the pipeline,
-/// which is early enough to answer for index.html before the static file handler does.
+/// Puts <see cref="ScriptInjectionMiddleware"/> at the front of the pipeline. Plugins can't
+/// touch Startup, but an IStartupFilter from the registrator gets picked up early enough.
 /// </summary>
 public class ScriptInjectionStartupFilter : IStartupFilter
 {

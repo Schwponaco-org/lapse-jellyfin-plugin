@@ -9,9 +9,8 @@ using System.Linq;
 namespace Jellyfin.Plugin.Lapse.Configuration;
 
 /// <summary>
-/// One saved value for one of an engine's advanced parameters. A list of key/value pairs
-/// rather than a property per switch, because the switches belong to the engines and the
-/// plugin shouldn't need a config migration every time one of them grows a flag.
+/// A saved value for one advanced engine parameter. Key/value so a new engine flag
+/// doesn't need a config migration.
 /// </summary>
 public class EngineParameterSetting
 {
@@ -21,15 +20,13 @@ public class EngineParameterSetting
     public string Key { get; set; } = string.Empty;
 
     /// <summary>
-    /// Gets or sets the saved value, as text. Booleans are "true"/"false", numbers are
-    /// invariant culture. An empty string means "leave the flag off".
+    /// Gets or sets the value as text ("true"/"false", invariant numbers). Empty leaves the flag off.
     /// </summary>
     public string? Value { get; set; }
 }
 
 /// <summary>
-/// Per-engine settings. Stored as a list rather than a dictionary because Jellyfin's XML
-/// config serializer handles lists cleanly and dictionaries badly.
+/// Per-engine settings. A list entry rather than a dictionary since XmlSerializer can't do dictionaries.
 /// </summary>
 public class EngineSettings
 {
@@ -39,21 +36,17 @@ public class EngineSettings
     public string EngineId { get; set; } = string.Empty;
 
     /// <summary>
-    /// Gets or sets a custom path to the binary. When empty the plugin uses whatever it
-    /// installed into its own engines folder.
+    /// Gets or sets a custom binary path. Empty uses the one we installed.
     /// </summary>
     public string? PathOverride { get; set; }
 
     /// <summary>
-    /// Gets or sets the penalty to use for split mode with this engine. Null means use the
-    /// engine's own default, which matters because the scales differ wildly between them.
+    /// Gets or sets the split mode penalty. Null uses the engine default (the scales differ a lot between engines).
     /// </summary>
     public int? Penalty { get; set; }
 
     /// <summary>
-    /// Gets or sets the mode a plain "Sync" press uses with this engine - the button in
-    /// the three-dot context menu and the one on each row of the item list. Null means
-    /// the engine's own first offered mode.
+    /// Gets or sets the mode a plain Sync press uses. Null means the engine's first mode.
     /// </summary>
     public string? DefaultMode { get; set; }
 
@@ -63,15 +56,12 @@ public class EngineSettings
     public List<EngineParameterSetting> Parameters { get; } = new();
 
     /// <summary>
-    /// Gets or sets the release tag of the copy the plugin installed, e.g. "v1.0.7". Null
-    /// when the engine was never installed through the plugin (a hand built binary behind
-    /// a path override, say), in which case there's nothing to compare a release against.
+    /// Gets or sets the release tag we installed, e.g. "v1.0.7". Null for hand installed binaries.
     /// </summary>
     public string? InstalledVersion { get; set; }
 
     /// <summary>
-    /// Gets or sets when the plugin last asked GitHub what the newest release was. Used to
-    /// keep the dashboard from hammering the API on every page load.
+    /// Gets or sets when we last asked GitHub for the newest release, so we don't on every page load.
     /// </summary>
     public DateTime? LastUpdateCheckUtc { get; set; }
 
@@ -83,7 +73,6 @@ public class EngineSettings
     /// <summary>
     /// Reads the advanced parameters into the shape an engine wants them.
     /// </summary>
-    /// <returns>Key to value, with nothing filled in for parameters that were never saved.</returns>
     public Dictionary<string, string?> GetParameterMap()
     {
         var map = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
@@ -102,7 +91,6 @@ public class EngineSettings
     /// <summary>
     /// Replaces the saved advanced parameters with what the settings form sent.
     /// </summary>
-    /// <param name="values">Key to value.</param>
     public void SetParameters(IEnumerable<KeyValuePair<string, string?>> values)
     {
         Parameters.Clear();

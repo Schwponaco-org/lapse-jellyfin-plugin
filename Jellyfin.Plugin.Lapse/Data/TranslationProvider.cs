@@ -5,12 +5,8 @@
 namespace Jellyfin.Plugin.Lapse.Data;
 
 /// <summary>
-/// Which service does the translating. The engine is not involved in any of this,
-/// translation is post-processing the plugin does on a subtitle file.
-///
-/// The names are what ends up in the XML config, so they don't get renamed. The order
-/// here doesn't decide the dashboard's order - <see cref="Services.Translation.ITranslationProvider.Tier"/>
-/// does.
+/// Which service translates. Names end up in the XML config so don't rename them. Dashboard order
+/// comes from <see cref="Services.Translation.ITranslationProvider.Tier"/>.
 /// </summary>
 public enum TranslationProvider
 {

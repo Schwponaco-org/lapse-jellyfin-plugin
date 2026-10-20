@@ -83,7 +83,6 @@ public class ExtractionRunSummary
     /// Copies the summary, so it can be sent to the dashboard while a run is still
     /// adding to it.
     /// </summary>
-    /// <returns>A copy with a list of its own.</returns>
     public ExtractionRunSummary Snapshot()
     {
         var copy = new ExtractionRunSummary

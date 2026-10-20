@@ -3,7 +3,6 @@
 // Licensed under GPL v3 - see LICENSE for details
 
 using System;
-using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.Lapse.Configuration;
@@ -13,19 +12,15 @@ using Microsoft.Extensions.Logging;
 namespace Jellyfin.Plugin.Lapse.Services;
 
 /// <summary>
-/// Fires the per-library scheduled syncs. Jellyfin's own scheduler attaches triggers to
-/// a task rather than to a library, so "sync the TV library on Sundays at 02:00 and the
-/// films on Wednesdays at 04:00" can't be expressed with task triggers alone. This is a
-/// one minute tick that looks at each library's own day and time and queues its items
-/// when the slot comes round. The whole-everything daily run is still a normal scheduled
-/// task, see LibrarySyncTask.
+/// Per-library schedules. Jellyfin's task triggers are per task, not per library, so
+/// "TV on Sundays 02:00, films Wednesdays 04:00" needs this: a 1 minute tick that queues a
+/// library when its slot comes round. The everything-daily run is LibrarySyncTask.
 /// </summary>
 public sealed class LibraryScheduleService : IHostedService, IDisposable
 {
     private static readonly TimeSpan TickInterval = TimeSpan.FromMinutes(1);
 
-    // How long after the configured time a slot still counts as "now". Wide enough that a
-    // server which was asleep or busy for a few minutes doesn't skip the day entirely.
+    // how late a slot can still fire, so a server that was busy for a few minutes doesn't skip the day
     private static readonly TimeSpan SlotWindow = TimeSpan.FromMinutes(10);
 
     private readonly LibraryService _libraryService;
@@ -37,9 +32,6 @@ public sealed class LibraryScheduleService : IHostedService, IDisposable
     /// <summary>
     /// Initializes a new instance of the <see cref="LibraryScheduleService"/> class.
     /// </summary>
-    /// <param name="libraryService">Finds the items in a library.</param>
-    /// <param name="queueManager">Where scheduled items get queued.</param>
-    /// <param name="logger">Logger.</param>
     public LibraryScheduleService(LibraryService libraryService, SyncQueueManager queueManager, ILogger<LibraryScheduleService> logger)
     {
         _libraryService = libraryService;
@@ -51,8 +43,7 @@ public sealed class LibraryScheduleService : IHostedService, IDisposable
     /// <inheritdoc />
     public Task StartAsync(CancellationToken cancellationToken)
     {
-        // First tick goes in almost straight away rather than a minute out, so a server
-        // that was off over a slot picks it up on startup instead of waiting.
+        // first tick soon after startup so a slot missed while the server was off gets picked up
         _timer.Change(TimeSpan.FromSeconds(20), TickInterval);
         _logger.LogInformation("LAPSE per-library schedules are running, checking every {Interval}", TickInterval);
         return Task.CompletedTask;
@@ -73,14 +64,13 @@ public sealed class LibraryScheduleService : IHostedService, IDisposable
 
     private void OnTick(object? state)
     {
-        // Walking a big library can outlast the tick interval. A second tick piling in
-        // on top would read and save the same configuration at the same time.
+        // a big library can take longer than a tick, don't overlap
         if (Interlocked.Exchange(ref _running, 1) == 1)
         {
             return;
         }
 
-        // A timer callback that throws takes the whole server down with it.
+        // an exception out of a timer callback takes the server down
         try
         {
             QueueDueLibraries();
@@ -103,21 +93,19 @@ public sealed class LibraryScheduleService : IHostedService, IDisposable
             return;
         }
 
-        // Schedules are wall clock times the user typed into the dashboard, so they're
-        // compared against local time. Only the "last run" bookkeeping is stored in UTC.
+        // schedules are wall clock times, only the last-run bookkeeping is UTC
         var now = DateTime.Now;
         var saveNeeded = false;
 
-        // ToArray because enqueuing can end up touching the configuration, and iterating
-        // the live list while that happens throws.
-        foreach (var library in plugin.Configuration.Libraries.ToArray())
+        LibraryConfig[] libraries;
+        lock (Plugin.ConfigurationLock)
         {
-            if (!library.Enabled || !library.ScheduleEnabled)
-            {
-                continue;
-            }
+            libraries = plugin.Configuration.Libraries.ToArray();
+        }
 
-            if (!IsDue(library, now))
+        foreach (var library in libraries)
+        {
+            if (!library.Enabled || !library.ScheduleEnabled || !IsDue(library, now))
             {
                 continue;
             }
@@ -133,10 +121,7 @@ public sealed class LibraryScheduleService : IHostedService, IDisposable
                 library.ScheduleTime,
                 items.Count);
 
-            foreach (var item in items)
-            {
-                _queueManager.EnqueueItem(item);
-            }
+            _queueManager.EnqueueRange(items);
         }
 
         if (saveNeeded)
@@ -146,16 +131,9 @@ public sealed class LibraryScheduleService : IHostedService, IDisposable
     }
 
     /// <summary>
-    /// Says whether a library's schedule should fire right now.
-    ///
-    /// The day and time are wall clock, and the "has it already run" guard is a minimum
-    /// gap rather than a calendar calculation. That's deliberate: a gap slightly shorter
-    /// than the nominal interval means a server that was asleep across the exact slot
-    /// still catches the following one, instead of silently skipping a whole month.
+    /// Says whether a library's schedule should fire now. "Already ran" is a minimum gap a
+    /// bit shorter than the interval, so a server asleep over the exact slot still catches the next.
     /// </summary>
-    /// <param name="library">The library's settings.</param>
-    /// <param name="now">Local time now.</param>
-    /// <returns>True if the sync is due.</returns>
     internal static bool IsDue(LibraryConfig library, DateTime now)
     {
         if (library.ScheduleFrequency != Data.ScheduleFrequency.Daily
@@ -170,14 +148,8 @@ public sealed class LibraryScheduleService : IHostedService, IDisposable
             return false;
         }
 
-        // don't run the same slot twice, whether that's two ticks inside the window or a
-        // restart that lands back in it
-        if (library.LastScheduledRunUtc.HasValue
-            && DateTime.UtcNow - library.LastScheduledRunUtc.Value < library.GetMinimumGap())
-        {
-            return false;
-        }
-
-        return true;
+        // same slot twice (two ticks in the window, or a restart inside it)
+        return !library.LastScheduledRunUtc.HasValue
+            || DateTime.UtcNow - library.LastScheduledRunUtc.Value >= library.GetMinimumGap();
     }
 }

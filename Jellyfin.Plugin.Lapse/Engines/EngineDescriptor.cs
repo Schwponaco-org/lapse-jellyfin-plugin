@@ -25,8 +25,7 @@ public enum EnginePackaging
     TarGz,
 
     /// <summary>
-    /// The download is a .zip that has the executable inside it. This is how the Windows
-    /// builds of alass and ffsubsync are published.
+    /// A .zip with the executable inside (alass and ffsubsync on Windows).
     /// </summary>
     Zip
 }
@@ -39,8 +38,6 @@ public class EngineDownload
     /// <summary>
     /// Initializes a new instance of the <see cref="EngineDownload"/> class.
     /// </summary>
-    /// <param name="url">Where to get it.</param>
-    /// <param name="packaging">How it's wrapped.</param>
     public EngineDownload(string url, EnginePackaging packaging)
     {
         Url = url;
@@ -58,28 +55,14 @@ public class EngineDownload
     public EnginePackaging Packaging { get; }
 
     /// <summary>
-    /// Gets the extra files published alongside the main executable that should sit next
-    /// to it once installed - a shared library or a model file the binary looks for beside
-    /// itself, say. Optional on purpose: an engine whose binary works fine without one of
-    /// these (falls back to something built in, for example) shouldn't fail an install just
-    /// because GitHub renamed or dropped the sidecar asset.
-    /// </summary>
-    public List<EngineSidecarAsset> Sidecars { get; } = new();
-
-    /// <summary>
-    /// Gets the file names inside the archive that belong next to the executable once it's
-    /// unpacked. LAPSE ships its onnxruntime library and the Silero model in the same
-    /// tarball as the binary, and the binary looks for both beside itself, so pulling out
-    /// only the executable would quietly drop it back to the weaker built-in voice
-    /// detection. Same best-effort rule as <see cref="Sidecars"/>: a name that isn't in
-    /// the archive is skipped rather than failing the install.
+    /// Gets files in the archive that go next to the executable (LAPSE's onnxruntime and
+    /// Silero model). Best effort, a missing one is skipped since the engine still runs.
     /// </summary>
     public List<string> CompanionFiles { get; } = new();
 }
 
 /// <summary>
-/// How strongly the plugin stands behind an engine. This is what the backend picker shows
-/// next to each name.
+/// How much we stand behind an engine, shown as a badge in the picker.
 /// </summary>
 public enum EngineTier
 {
@@ -89,8 +72,7 @@ public enum EngineTier
     Recommended,
 
     /// <summary>
-    /// A third party engine that works and is kept wired up, but isn't what the plugin is
-    /// designed around.
+    /// Third party, works and is kept wired up, but not what the plugin is built around.
     /// </summary>
     Supported,
 
@@ -101,47 +83,13 @@ public enum EngineTier
 }
 
 /// <summary>
-/// A file published next to an engine's main download that isn't the executable itself,
-/// but needs to sit beside it once installed.
-/// </summary>
-public class EngineSidecarAsset
-{
-    /// <summary>
-    /// Initializes a new instance of the <see cref="EngineSidecarAsset"/> class.
-    /// </summary>
-    /// <param name="url">Where to get it.</param>
-    /// <param name="fileName">What to name it once it's sitting next to the executable.</param>
-    public EngineSidecarAsset(string url, string fileName)
-    {
-        Url = url;
-        FileName = fileName;
-    }
-
-    /// <summary>
-    /// Gets the download URL.
-    /// </summary>
-    public string Url { get; }
-
-    /// <summary>
-    /// Gets the file name to save it under, in the engine's own install folder.
-    /// </summary>
-    public string FileName { get; }
-}
-
-/// <summary>
-/// One alignment mode an engine offers, with a line saying what it's for. These are per
-/// engine because the modes aren't the same set: LAPSE works out the shape of the problem
-/// on its own, alass always searches for splits unless told not to, and ffsubsync's
-/// piecewise mode only exists when it's given a split penalty.
+/// One alignment mode an engine offers. Per engine because they differ a lot between them.
 /// </summary>
 public class EngineModeOption
 {
     /// <summary>
     /// Initializes a new instance of the <see cref="EngineModeOption"/> class.
     /// </summary>
-    /// <param name="mode">The mode.</param>
-    /// <param name="label">What the dropdown shows.</param>
-    /// <param name="description">One line saying what it does.</param>
     public EngineModeOption(SyncMode mode, string label, string description)
     {
         Mode = mode;
@@ -166,8 +114,7 @@ public class EngineModeOption
 }
 
 /// <summary>
-/// Everything static we know about one engine: what to call it, what it can do, and
-/// where to get a build of it for this machine.
+/// Everything static about an engine: name, capabilities, downloads.
 /// </summary>
 public class EngineDescriptor
 {
@@ -192,27 +139,22 @@ public class EngineDescriptor
     public string ProjectUrl { get; set; } = string.Empty;
 
     /// <summary>
-    /// Gets or sets the "owner/name" of the GitHub repo releases come from, used for the
-    /// update check. Null means the plugin can't tell what version is out there.
+    /// Gets or sets the GitHub "owner/name" for update checks. Null = can't check.
     /// </summary>
     public string? GitHubRepo { get; set; }
 
     /// <summary>
-    /// Gets or sets a page explaining how to build this engine from source, shown when
-    /// there's no download for the machine the server is running on.
+    /// Gets or sets a build-from-source page, shown when there's no download for this machine.
     /// </summary>
     public string? BuildGuideUrl { get; set; }
 
     /// <summary>
-    /// Gets or sets how strongly the plugin stands behind this engine. Shown as a badge
-    /// next to the name in the backend picker.
+    /// Gets or sets the tier badge.
     /// </summary>
     public EngineTier Tier { get; set; } = EngineTier.Supported;
 
     /// <summary>
-    /// Gets or sets a page backing up the tier badge, linked straight under it. For LAPSE
-    /// this is the benchmark write-up, which is the actual reason it's recommended rather
-    /// than an assertion that it is.
+    /// Gets or sets a page backing up the badge (LAPSE links its benchmarks).
     /// </summary>
     public string? WhyUrl { get; set; }
 
@@ -227,44 +169,29 @@ public class EngineDescriptor
     public EngineCapabilities Capabilities { get; set; } = new();
 
     /// <summary>
-    /// Gets the tunables this engine's binary actually accepts, read off its source
-    /// rather than assumed. These become the engine's own Advanced section.
+    /// Gets the tunables the binary accepts, shown in the Advanced section.
     /// </summary>
     public List<EngineParameter> Parameters { get; } = new();
 
     /// <summary>
-    /// Gets or sets a read-only line at the top of the Advanced section, for saying why
-    /// something an admin might go looking for is deliberately not there.
+    /// Gets or sets a note at the top of the Advanced section, e.g. why something isn't there.
     /// </summary>
     public string? AdvancedNote { get; set; }
 
     /// <summary>
-    /// Gets or sets a line about running this engine outside Jellyfin, shown on the
-    /// engine card under the links.
+    /// Gets or sets a note about running the engine outside Jellyfin, shown on the card.
     /// </summary>
     public string? DeploymentNote { get; set; }
 
     /// <summary>
-    /// Gets the alignment modes this engine can run in, in the order they should be
-    /// offered. The first one is what a fresh install uses for the context menu's Sync
-    /// button until someone picks something else.
+    /// Gets the modes in display order. The first is the default for a fresh install.
     /// </summary>
     public List<EngineModeOption> Modes { get; } = new();
 
     /// <summary>
-    /// Gets or sets the name of the executable once it's installed, without any platform
-    /// extension - use <see cref="GetExecutableFileName"/> to get the real file name.
+    /// Gets or sets the executable name without extension, see <see cref="GetExecutableFileName"/>.
     /// </summary>
     public string ExecutableName { get; set; } = string.Empty;
-
-    /// <summary>
-    /// Gets or sets a value indicating whether the engine rewrites the subtitle it is
-    /// pointed at instead of taking a separate output path. LAPSE works this way, alass
-    /// and ffsubsync both take an explicit output argument. The runner needs to know so
-    /// it can seed the work file for in-place engines, and so that "did the engine
-    /// actually write anything" stays a meaningful check for the ones that don't.
-    /// </summary>
-    public bool EditsInPlace { get; set; }
 
     /// <summary>
     /// Gets or sets the Linux build for 64 bit Intel/AMD, or null if there isn't one.
@@ -295,7 +222,6 @@ public class EngineDescriptor
     /// Gets the file name the executable has on this platform, which is the same as
     /// <see cref="ExecutableName"/> everywhere except Windows.
     /// </summary>
-    /// <returns>The executable file name.</returns>
     public string GetExecutableFileName()
     {
         return OperatingSystem.IsWindows() ? ExecutableName + ".exe" : ExecutableName;
@@ -305,15 +231,13 @@ public class EngineDescriptor
     /// Gets the build to download for the OS and CPU this server is running on, or null
     /// if the project doesn't publish one.
     /// </summary>
-    /// <returns>The download, or null.</returns>
     public EngineDownload? GetDownloadForThisMachine()
     {
         var arm = RuntimeInformation.OSArchitecture == Architecture.Arm64;
 
         if (OperatingSystem.IsWindows())
         {
-            // Nobody here ships a Windows ARM build, and x64 runs fine under emulation on
-            // the machines that would want one, so both architectures get the x64 asset.
+            // no Windows ARM builds anywhere, x64 runs fine under emulation
             return WindowsAmd64;
         }
 

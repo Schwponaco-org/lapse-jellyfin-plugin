@@ -19,10 +19,7 @@ public class MovieSyncRecord
     public Guid ItemId { get; set; }
 
     /// <summary>
-    /// Gets or sets the outcome of the last attempt. This says what happened last time,
-    /// not how much of the item is synced - that's worked out from
-    /// <see cref="SyncedSubtitles"/>, because a single flag can't tell a fully synced item
-    /// from one where only one of four tracks was done.
+    /// Gets or sets how the last attempt went. How much is synced comes from <see cref="SyncedSubtitles"/>.
     /// </summary>
     public MovieSyncStatus Status { get; set; } = MovieSyncStatus.Pending;
 
@@ -65,4 +62,26 @@ public class MovieSyncRecord
     /// Gets or sets the intercept (in seconds) from the last Standard OLS sync.
     /// </summary>
     public double? Intercept { get; set; }
+
+    /// <summary>
+    /// Copies the record (with its own list), so it can be read outside <see cref="Plugin.ConfigurationLock"/>.
+    /// </summary>
+    public MovieSyncRecord Snapshot()
+    {
+        var copy = new MovieSyncRecord
+        {
+            ItemId = ItemId,
+            Status = Status,
+            LastSyncUtc = LastSyncUtc,
+            LastError = LastError,
+            Mode = Mode,
+            Penalty = Penalty,
+            OffsetMs = OffsetMs,
+            Slope = Slope,
+            Intercept = Intercept
+        };
+
+        copy.SyncedSubtitles.AddRange(SyncedSubtitles);
+        return copy;
+    }
 }

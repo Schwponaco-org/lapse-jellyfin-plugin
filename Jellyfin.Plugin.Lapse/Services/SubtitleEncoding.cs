@@ -12,25 +12,17 @@ using System.Threading.Tasks;
 namespace Jellyfin.Plugin.Lapse.Services;
 
 /// <summary>
-/// Reads subtitle files without assuming they're UTF-8.
+/// Reads subtitle files without assuming UTF-8.
 ///
-/// Plenty of subtitles in the wild aren't. Arabic ones are usually Windows-1256, Russian
-/// ones Windows-1251, Greek ones Windows-1253, and older Western European ones
-/// Windows-1252. Reading those as UTF-8 doesn't fail loudly, it just replaces every byte
-/// it doesn't understand with a question mark, and anything written back out afterwards -
-/// a shift, a translation, a conversion - saves that damage permanently.
-///
-/// So: honour a byte order mark if there is one, take UTF-8 when the bytes really are
-/// valid UTF-8, and otherwise work out which legacy code page makes the most sense of the
-/// file. A new file the plugin writes goes out as UTF-8 without a BOM, which every player
-/// and browser reads correctly regardless of the language or its writing direction. A file
-/// edited in place - a shift by hand - goes back out the way it came in, see
-/// <see cref="ReadDocumentAsync"/>.
+/// Lots of subs aren't (Arabic is usually 1256, Russian 1251, Greek 1253, old Western
+/// ones 1252). Reading those as UTF-8 silently turns letters into question marks, and the
+/// next write makes it permanent. So: BOM if there is one, UTF-8 if the bytes are valid
+/// UTF-8, otherwise guess the legacy code page that makes most sense. New files go out as
+/// UTF-8 without BOM, files edited in place keep their encoding (<see cref="ReadDocumentAsync"/>).
 /// </summary>
 public static class SubtitleEncoding
 {
-    // Code pages worth trying, in the order they're most likely to turn up. Each one is
-    // paired with the Unicode block its text should land in when the guess is right.
+    // code pages to try, each with the Unicode block its text should land in if it's the right guess
     private static readonly (int CodePage, char RangeStart, char RangeEnd)[] Candidates =
     {
         (1256, '؀', 'ۿ'), // Arabic
@@ -48,13 +40,6 @@ public static class SubtitleEncoding
     /// <summary>
     /// Reads a subtitle file as text, working out its encoding first.
     /// </summary>
-    /// <param name="path">The file to read.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>The file's contents.</returns>
-    [System.Diagnostics.CodeAnalysis.SuppressMessage(
-        "Security",
-        "CA3003:Review code for file path injection vulnerabilities",
-        Justification = "Callers pass a subtitle path the library reported for an item, or one an admin picked in the file browser.")]
     public static async Task<string> ReadAllTextAsync(string path, CancellationToken cancellationToken = default)
     {
         var bytes = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
@@ -64,9 +49,6 @@ public static class SubtitleEncoding
     /// <summary>
     /// Reads a subtitle file as lines, working out its encoding first.
     /// </summary>
-    /// <param name="path">The file to read.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>The file's lines, with the line endings taken off.</returns>
     public static async Task<string[]> ReadAllLinesAsync(string path, CancellationToken cancellationToken = default)
     {
         var text = await ReadAllTextAsync(path, cancellationToken).ConfigureAwait(false);
@@ -74,19 +56,9 @@ public static class SubtitleEncoding
     }
 
     /// <summary>
-    /// Reads a subtitle file for editing in place: its lines, plus what it takes to write
-    /// them back the way the file was, encoding, byte order mark and line endings
-    /// included. A shift moves a few digits, and turning a Windows-1251 file into UTF-8 or
-    /// its CRLF endings into LF on the way through is a change nobody asked for, which some
-    /// players then read wrongly.
+    /// Reads a file for editing in place, keeping its encoding, BOM and line endings so a
+    /// shift only changes the numbers (some players choke on a quietly re-encoded file).
     /// </summary>
-    /// <param name="path">The file to read.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>The file, ready to be edited and written back.</returns>
-    [System.Diagnostics.CodeAnalysis.SuppressMessage(
-        "Security",
-        "CA3003:Review code for file path injection vulnerabilities",
-        Justification = "Callers pass a subtitle path the library reported for an item.")]
     public static async Task<SubtitleDocument> ReadDocumentAsync(string path, CancellationToken cancellationToken = default)
     {
         var bytes = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
@@ -96,8 +68,7 @@ public static class SubtitleEncoding
         var endsWithNewLine = text.EndsWith('\n') || text.EndsWith('\r');
         var lines = SplitLines(text);
 
-        // A file that ends with a line break splits into one empty line too many, which
-        // would come back as an extra blank line on every save.
+        // a trailing newline splits into one empty line too many
         if (endsWithNewLine && lines.Length > 0)
         {
             Array.Resize(ref lines, lines.Length - 1);
@@ -109,9 +80,6 @@ public static class SubtitleEncoding
     /// <summary>
     /// Turns lines back into the bytes of a file shaped like the one they were read from.
     /// </summary>
-    /// <param name="document">What the file was read as.</param>
-    /// <param name="lines">The lines to write.</param>
-    /// <returns>The file contents.</returns>
     public static byte[] Encode(SubtitleDocument document, IReadOnlyList<string> lines)
     {
         var text = string.Join(document.NewLine, lines) + (document.EndsWithNewLine ? document.NewLine : string.Empty);
@@ -132,36 +100,27 @@ public static class SubtitleEncoding
     /// <summary>
     /// Splits text into lines on any of the three line ending conventions.
     /// </summary>
-    /// <param name="text">The text.</param>
-    /// <returns>The lines.</returns>
     public static string[] SplitLines(string text)
     {
         return text.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n').Split('\n');
     }
 
     /// <summary>
-    /// Gets the encoding everything written by the plugin uses: UTF-8, no byte order
-    /// mark. Right for every language, and the one thing every player agrees on.
+    /// Gets what we write new files in: UTF-8 without BOM, which every player agrees on.
     /// </summary>
     public static UTF8Encoding Utf8NoBom { get; } = new(encoderShouldEmitUTF8Identifier: false);
 
     /// <summary>
     /// Turns subtitle file bytes into text.
     /// </summary>
-    /// <param name="bytes">The raw file.</param>
-    /// <returns>The decoded text, with any byte order mark removed.</returns>
     public static string Decode(byte[] bytes)
     {
         return DecodeWithEncoding(bytes).Text;
     }
 
     /// <summary>
-    /// Turns subtitle file bytes into text, and says which encoding that took, so the
-    /// file can be written back in it. The encoding carries the byte order mark when the
-    /// file had one.
+    /// Turns bytes into text and says which encoding it was (with BOM if the file had one).
     /// </summary>
-    /// <param name="bytes">The raw file.</param>
-    /// <returns>The decoded text, with any byte order mark removed, and its encoding.</returns>
     public static (string Text, Encoding Encoding) DecodeWithEncoding(byte[] bytes)
     {
         if (bytes.Length == 0)
@@ -174,11 +133,10 @@ public static class SubtitleEncoding
             return fromBom;
         }
 
-        // Real UTF-8 is unambiguous enough that valid UTF-8 is essentially never anything
-        // else, so this is the one check that doesn't have to guess.
-        if (TryDecodeStrictUtf8(bytes) is { } utf8)
+        // valid UTF-8 is basically never anything else, no guessing needed
+        if (System.Text.Unicode.Utf8.IsValid(bytes))
         {
-            return (utf8, Utf8NoBom);
+            return (Encoding.UTF8.GetString(bytes), Utf8NoBom);
         }
 
         return DecodeLegacy(bytes);
@@ -204,17 +162,6 @@ public static class SubtitleEncoding
         return null;
     }
 
-    private static string? TryDecodeStrictUtf8(byte[] bytes)
-    {
-        try
-        {
-            return new UTF8Encoding(false, throwOnInvalidBytes: true).GetString(bytes);
-        }
-        catch (DecoderFallbackException)
-        {
-            return null;
-        }
-    }
 
     private static (string Text, Encoding Encoding) DecodeLegacy(byte[] bytes)
     {
@@ -248,14 +195,13 @@ public static class SubtitleEncoding
             }
         }
 
-        // Windows-1252 maps every byte to something, so there is always an answer here.
+        // 1252 maps every byte, so we always end up with something
         return best is not null && bestEncoding is not null
             ? (best, bestEncoding)
             : (Encoding.Latin1.GetString(bytes), Encoding.Latin1);
     }
 
-    // Rewards text that lands inside one script's own block and punishes the giveaways of
-    // a wrong guess: replacement characters, unassigned slots and stray control codes.
+    // + for text inside the script's block, - for signs of a wrong guess (replacement chars, C1 controls)
     private static double Score(string text, char rangeStart, char rangeEnd)
     {
         var inScript = 0;
@@ -266,8 +212,7 @@ public static class SubtitleEncoding
         {
             if (c < 0x80)
             {
-                // Timestamps, tags and cue numbers are ASCII in every one of these
-                // encodings, so they say nothing about which is right.
+                // ASCII is the same in all of these, tells us nothing
                 continue;
             }
 
@@ -285,8 +230,7 @@ public static class SubtitleEncoding
 
         if (counted == 0)
         {
-            // Nothing but ASCII: every candidate decodes it identically, so the first one
-            // asked wins and it doesn't matter which.
+            // pure ASCII, they're all the same
             return 0;
         }
 
@@ -295,8 +239,7 @@ public static class SubtitleEncoding
 
     private static void EnsureCodePagesRegistered()
     {
-        // .NET Core ships only the Unicode encodings and Latin-1 out of the box; the
-        // legacy code pages come from a provider that has to be registered once.
+        // .NET only has Unicode and Latin-1 built in, the code pages need this provider
         if (Interlocked.Exchange(ref _providerRegistered, 1) == 0)
         {
             Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
@@ -305,11 +248,6 @@ public static class SubtitleEncoding
 }
 
 /// <summary>
-/// A subtitle file read for editing in place, with what it takes to write it back the way
-/// it was.
+/// A subtitle read for editing in place, with what's needed to write it back the same way.
 /// </summary>
-/// <param name="Lines">The file's lines, without their line endings.</param>
-/// <param name="Encoding">The encoding it was in, with its byte order mark if it had one.</param>
-/// <param name="NewLine">The line ending it used.</param>
-/// <param name="EndsWithNewLine">Whether the last line had a line ending after it.</param>
 public sealed record SubtitleDocument(IReadOnlyList<string> Lines, Encoding Encoding, string NewLine, bool EndsWithNewLine);

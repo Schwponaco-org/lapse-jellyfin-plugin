@@ -2,11 +2,8 @@
    Copyright (C) 2026 Rasmus Stisen Jensen (rs-jensen)
    Licensed under GPL v3 - see LICENSE for details
 
-   Everything here leans on Jellyfin's own colours (currentColor and the --theme-*
-   variables) so the page follows whatever theme the user has picked. Where an accent
-   is genuinely needed it's Jellyfin's own blue, taken from --accent-color when the
-   theme exposes it and falling back to the stock #00A4DC otherwise. Status is said in
-   words rather than shown as a coloured dot. */
+   Uses Jellyfin's own colours (currentColor, --theme-*) so it follows the user's theme.
+   Accent is --accent-color or the stock #00A4DC. Status is words, not coloured dots. */
 
 .lapseLayout {
     --lapse-accent: var(--accent-color, #00A4DC);
@@ -63,9 +60,7 @@
 }
 
 /* --- sidebar layout ---
-   Sections used to be a stack of fold-downs, which meant scrolling past four other
-   things to reach the one you wanted. Now the sections are a list on the left and one
-   panel renders on the right, the way Jellyfin's own settings pages read. */
+   Sections on the left, one panel on the right, like Jellyfin's own settings pages. */
 
 .lapseLayout {
     display: flex;
@@ -159,9 +154,7 @@
     font-weight: 500;
 }
 
-/* A second heading within one panel, for a section that belongs with what's above it but
-   works a different way - readable subtitles sit under appearance, but write a file
-   rather than restyling playback. */
+/* second heading inside a panel (e.g. readable subtitles under appearance, they write a file instead) */
 .lapsePanelSubtitle {
     margin: 2em 0 .6em;
     padding-top: 1.2em;
@@ -245,25 +238,9 @@
     font-weight: 500;
 }
 
-.lapseEngineStateLabel {
-    font-size: .78em;
-}
-
-.lapseEngineDesc {
-    font-size: .82em;
-    opacity: .65;
-    line-height: 1.35;
-}
-
 .lapseEngineVersion {
     font-size: .76em;
     opacity: .55;
-}
-
-.lapseEngineChips {
-    display: flex;
-    gap: .3em;
-    flex-wrap: wrap;
 }
 
 .lapseChip {
@@ -274,19 +251,11 @@
     white-space: nowrap;
 }
 
-.lapseChip-on {
-    background: rgba(0, 164, 220, .25);
-}
-
 .lapseEngineActions {
     display: flex;
     gap: .35em;
     flex-wrap: wrap;
     margin-top: .1em;
-}
-
-.lapseAutoUpdateRow {
-    font-size: .8em;
 }
 
 .lapseEngineError {
@@ -296,8 +265,7 @@
     word-break: break-word;
 }
 
-/* Not an error - this is the "there's no build for your OS, here's what to do instead"
-   note, which is the most useful thing on the card for anyone not on Linux. */
+/* not an error, it's the "no build for your OS, do this instead" note */
 .lapseEngineNotice {
     font-size: .78em;
     line-height: 1.4;
@@ -329,9 +297,7 @@
     border-bottom: 0;
 }
 
-/* Just enough dimming to read as "nothing here can be turned on right now" without
-   making the row hard to read - the library name and type stay full strength since
-   those are what you'd click to turn it back on. */
+/* dimmed enough to say "can't turn this on right now", name and type stay readable */
 .lapseLibraryRowDisabled .lapseLibrarySchedule {
     opacity: .5;
 }
@@ -438,10 +404,8 @@
     margin-bottom: 1em;
 }
 
-/* The accent bar on the left marks the option that is currently picked, not the one
-   somebody thinks you should pick. A radio dot alone is easy to lose in a list of
-   four options that each run to three lines, so the whole row carries the state. The
-   transparent border is always there so nothing shifts sideways when it lights up. */
+/* the accent bar marks the picked row (a radio dot alone is easy to miss in tall rows).
+   The transparent border is always there so nothing jumps when the selection moves. */
 .lapseRadioRow {
     display: flex;
     align-items: flex-start;
@@ -491,14 +455,6 @@
 .lapseRadioLabel {
     display: flex;
     flex-direction: column;
-}
-
-.lapseEngineSettingBlock {
-    margin-bottom: 1.2em;
-}
-
-.lapseEngineSettingName {
-    margin-bottom: .3em;
 }
 
 /* --- item list --- */
@@ -615,39 +571,6 @@
     flex-grow: 1;
 }
 
-.lapseIframeOverlay {
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, .75);
-    z-index: 10000;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.lapseIframeCard {
-    position: relative;
-    width: 92vw;
-    height: 92vh;
-    background: var(--theme-body-background, #202124);
-    border-radius: .3em;
-    overflow: hidden;
-    box-shadow: 0 4px 24px rgba(0, 0, 0, .5);
-}
-
-.lapseIframeCard iframe {
-    width: 100%;
-    height: 100%;
-    border: 0;
-}
-
-.lapseIframeCloseButton {
-    position: absolute;
-    top: .3em;
-    right: .3em;
-    z-index: 1;
-}
-
 /* --- injection warning strip --- */
 
 /* Shown only when the plugin can't reach the web client, which is what makes the item
@@ -676,8 +599,7 @@
 }
 
 /* --- reference boxes under the engine cards ---
-   Reading material rather than settings, so it sits at the bottom of the panel in its own
-   box instead of repeating a line inside every card. */
+   reading material, so one box at the bottom instead of a line in every card */
 
 .lapseInfoBox {
     margin: 0 0 .9em;
@@ -743,9 +665,7 @@
     font-size: .92em;
 }
 
-/* The three formats that share the .sub extension: what each one looks like inside, and
-   whether it needs a frame rate. Same grid idea as the format lists above, stacking on a
-   narrow screen rather than squeezing three columns into a phone. */
+/* the three .sub formats, stacks on narrow screens */
 .lapseSubKinds {
     display: grid;
     grid-template-columns: auto auto 1fr;
@@ -944,8 +864,7 @@
 }
 
 /* --- partially synced items ---
-   Distinct from both "synced" and "not synced", because "3 of 5 synced" is genuinely a
-   third state and reading it as either of the others is misleading. */
+   "3 of 5 synced" is its own state, not synced and not unsynced */
 
 .lapseStatusPill-partial {
     background: rgba(230, 160, 40, .28);
@@ -961,10 +880,7 @@
 }
 
 /* ---------------------------------------------------------------- settings group
-
-   The sidebar used to be nine flat entries, which made opening the plugin feel like
-   opening a settings form. The everyday things stay at the top level and everything that
-   is really configuration folds away under here. */
+   everyday stuff at the top level, real configuration folds away under here */
 
 .lapseNavGroup {
     display: flex;
@@ -1411,9 +1327,7 @@
     font-size: .85em;
 }
 
-/* The left bar used to mark the recommended option, which read as "this one is
-   selected" and fought with the row that actually was. Recommended is a badge now;
-   the bar belongs to .lapseRadioRow-active. */
+/* recommended is a badge, the bar belongs to .lapseRadioRow-active */
 
 /* --------------------------------------------------------------- ignore list */
 

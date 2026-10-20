@@ -9,17 +9,14 @@ using System.Linq;
 namespace Jellyfin.Plugin.Lapse.Engines;
 
 /// <summary>
-/// What the binary that's actually installed turned out to support, as opposed to
+/// What the installed binary actually supports, as opposed to
 /// <see cref="EngineCapabilities"/> which is what we statically know about the project.
-/// Two people running the same plugin can have very different builds of an engine on
-/// disk, so anything version dependent gets asked of the binary rather than assumed.
+/// Two installs can have very different builds, so we ask instead of assuming.
 /// </summary>
 public class EngineRuntimeInfo
 {
     /// <summary>
-    /// Gets the runtime info to use when the binary couldn't be probed at all. Nothing
-    /// optional is assumed to be there, which is the conservative fallback the plugin
-    /// wants for an engine it can't ask.
+    /// Gets the info for a binary we couldn't probe. Assumes no optional flags.
     /// </summary>
     public static EngineRuntimeInfo Unknown { get; } = new();
 
@@ -34,22 +31,17 @@ public class EngineRuntimeInfo
     public List<string> Flags { get; } = new();
 
     /// <summary>
-    /// Gets the subtitle extensions the binary said it reads, from its <c>--formats</c>
-    /// call. Empty when the binary has no such call, in which case the caller falls back
-    /// to <see cref="EngineFormats.ForEngine"/>.
+    /// Gets the extensions from --formats. Empty if it has no such call (then <see cref="EngineFormats.ForEngine"/> is used).
     /// </summary>
     public List<string> ReportedExtensions { get; } = new();
 
     /// <summary>
-    /// Gets or sets a value indicating whether the probe actually got an answer. False
-    /// means everything else here is the conservative default rather than measured.
+    /// Gets or sets a value indicating whether the probe got an answer at all.
     /// </summary>
     public bool Probed { get; set; }
 
     /// <summary>
-    /// Gets or sets how the flags were worked out, for the dashboard tooltip: either
-    /// "capabilities" (the engine has a --capabilities call) or "usage" (we read them
-    /// out of the usage text it prints).
+    /// Gets or sets where the flags came from: "capabilities", "usage" or "version".
     /// </summary>
     public string? Source { get; set; }
 
@@ -64,45 +56,33 @@ public class EngineRuntimeInfo
     public bool SupportsNoBackupFlag => HasFlag("--no-backup");
 
     /// <summary>
-    /// Gets a value indicating whether the binary takes --batch, which keeps one process
-    /// running across many jobs fed to it on stdin. LAPSE 2.2.3 and later.
+    /// Gets a value indicating whether it takes --batch (LAPSE 2.2.3+).
     /// </summary>
     public bool SupportsBatch => HasFlag("--batch");
 
     /// <summary>
-    /// Gets or sets the usage text the binary printed, trimmed to something sane. Kept
-    /// because not everything worth knowing is a flag: LAPSE's auto mode is a positional
-    /// argument, so the only way to tell a build that has it from one that doesn't is to
-    /// look at the mode list it prints.
+    /// Gets or sets the usage text (trimmed). Kept because auto mode is positional, the
+    /// only way to tell if a build has it is the mode list in the usage text.
     /// </summary>
     public string? UsageText { get; set; }
 
     /// <summary>
-    /// Gets a value indicating whether the binary offers LAPSE's auto mode. Builds from
-    /// before it existed reject "auto" as an unknown mode rather than ignoring it, so
-    /// this has to be checked before asking for it.
+    /// Gets a value indicating whether it has auto mode. Older builds reject "auto" outright.
     /// </summary>
     public bool SupportsAutoMode =>
         UsageText is not null && UsageText.Contains("auto|", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
-    /// Gets the subtitle formats this engine reads: what the binary reported if it
-    /// reported anything, otherwise the list the plugin knows the project by.
+    /// Gets what this engine reads: what the binary said, else the built-in list.
     /// </summary>
-    /// <param name="engineId">The engine id, for the fallback list.</param>
-    /// <returns>The extensions, each with a leading dot.</returns>
     public IReadOnlyList<string> GetSubtitleExtensions(string engineId)
     {
         return ReportedExtensions.Count > 0 ? ReportedExtensions : EngineFormats.ForEngine(engineId);
     }
 
     /// <summary>
-    /// Says whether this binary reads a subtitle file as it stands, so it can be handed
-    /// over without being converted first.
+    /// Says whether this binary reads a file as is, without converting.
     /// </summary>
-    /// <param name="engineId">The engine id, for the fallback list.</param>
-    /// <param name="path">The subtitle path.</param>
-    /// <returns>True if the engine takes the file directly.</returns>
     public bool CanRead(string engineId, string? path)
     {
         return EngineFormats.Contains(GetSubtitleExtensions(engineId), path);
@@ -111,8 +91,6 @@ public class EngineRuntimeInfo
     /// <summary>
     /// Checks whether the binary said it understands a flag.
     /// </summary>
-    /// <param name="flag">The flag, including its leading dashes.</param>
-    /// <returns>True if it's in the list.</returns>
     public bool HasFlag(string flag)
     {
         return Flags.Any(f => string.Equals(f, flag, StringComparison.OrdinalIgnoreCase));

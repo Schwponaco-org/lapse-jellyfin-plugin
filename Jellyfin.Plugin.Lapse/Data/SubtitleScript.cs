@@ -2,21 +2,18 @@
 // Copyright (C) 2026 Rasmus Stisen Jensen (rs-jensen)
 // Licensed under GPL v3 - see LICENSE for details
 
-using System;
 using System.Collections.Generic;
 
 namespace Jellyfin.Plugin.Lapse.Data;
 
 /// <summary>
-/// The writing system a subtitle's dialogue is in. Restyling has to know this: the
-/// readable preset is built around the Latin alphabet, and applying it unchanged to
-/// Arabic or Thai makes those harder to read rather than easier.
+/// The writing system of a subtitle's dialogue. The readable preset is built for Latin and makes
+/// Arabic or Thai harder to read if applied as is.
 /// </summary>
 public enum SubtitleScript
 {
     /// <summary>
-    /// Nothing to go on - an empty file, or one with no letters in it at all. Treated as
-    /// Latin, which is what it was before any of this existed.
+    /// Nothing to go on (empty, or no letters). Treated as Latin.
     /// </summary>
     Unknown = 0,
 
@@ -36,8 +33,7 @@ public enum SubtitleScript
     Greek = 3,
 
     /// <summary>
-    /// Arabic, and the languages that borrow its alphabet - Persian, Urdu, Pashto. Written
-    /// right to left, and its letters join up, which is why spacing them apart is wrong.
+    /// Arabic script (Arabic, Persian, Urdu, Pashto). RTL and joined letters, so no letter spacing.
     /// </summary>
     Arabic = 4,
 
@@ -53,8 +49,7 @@ public enum SubtitleScript
     Thai = 6,
 
     /// <summary>
-    /// The Indic abugidas - Devanagari, Bengali, Tamil and their neighbours. Letters
-    /// combine into clusters, which pulling them apart breaks.
+    /// Indic scripts (Devanagari, Bengali, Tamil...). Letters form clusters that spacing breaks.
     /// </summary>
     Indic = 7,
 
@@ -71,10 +66,8 @@ public enum SubtitleScript
 /// </summary>
 public static class SubtitleScripts
 {
-    // Where each script lives in Unicode, written as escapes so the table stays readable
-    // in an editor that would otherwise reorder the right to left rows on screen. Only the
-    // blocks worth telling apart are here - the point is picking a font and a direction,
-    // not cataloguing Unicode.
+    // Unicode ranges per script, as escapes so editors don't reorder the RTL rows on screen.
+    // Only what's needed to pick a font and a direction.
     private static readonly (char Start, char End, SubtitleScript Script)[] Ranges =
     {
         ('A', '\u024F', SubtitleScript.Latin),     // Latin, with its extensions
@@ -106,9 +99,7 @@ public static class SubtitleScripts
     public const int AutoEncoding = 1;
 
     /// <summary>
-    /// The Arabic charset number, as VSFilter and every ASS file in the wild use it.
-    /// libass reads anything above 1 as "this paragraph runs right to left", which is the
-    /// same answer by a different route, so the one number is right for both renderers.
+    /// The Arabic charset number (VSFilter). libass reads anything above 1 as RTL, so it works for both.
     /// </summary>
     public const int ArabicEncoding = 178;
 
@@ -118,17 +109,9 @@ public static class SubtitleScripts
     public const int HebrewEncoding = 177;
 
     /// <summary>
-    /// Works out the writing system a piece of subtitle text is in by counting letters and
-    /// taking whichever script has the most of them.
-    ///
-    /// Counting rather than looking at the first non-ASCII character matters, because an
-    /// Arabic subtitle is full of Latin - song titles, names, the odd English line - and a
-    /// Danish one is almost all ASCII. The majority is what the styling should follow.
+    /// Works out the script by counting letters and taking the most common one. An Arabic subtitle is
+    /// full of Latin names and song titles, so the first non-ASCII char would get it wrong.
     /// </summary>
-    /// <param name="text">The dialogue. Timestamps and tags can be left in; they are
-    /// ASCII punctuation and digits, which aren't counted either way.</param>
-    /// <returns>The dominant script, or <see cref="SubtitleScript.Unknown"/> when there
-    /// are no letters at all.</returns>
     public static SubtitleScript Detect(string? text)
     {
         if (string.IsNullOrEmpty(text))
@@ -171,15 +154,9 @@ public static class SubtitleScripts
     }
 
     /// <summary>
-    /// Gets the ASS Encoding value to write for a script.
-    ///
-    /// Only the right to left scripts get a number of their own. In libass every value
-    /// above 1 forces the paragraph right to left, so writing the Cyrillic or Greek
-    /// charset numbers that VSFilter defines would reverse text that reads perfectly well
-    /// left to right. Those stay on the automatic setting, which is correct for them.
+    /// Gets the ASS Encoding value. Only RTL scripts get a number, in libass anything above 1 forces RTL,
+    /// so Cyrillic/Greek charset numbers would reverse perfectly fine text.
     /// </summary>
-    /// <param name="script">The script.</param>
-    /// <returns>The Encoding field's value.</returns>
     public static int GetAssEncoding(SubtitleScript script) => script switch
     {
         SubtitleScript.Arabic => ArabicEncoding,
@@ -188,32 +165,20 @@ public static class SubtitleScripts
     };
 
     /// <summary>
-    /// Says whether extra space between letters would damage the text rather than open it
-    /// up. True where letters join into one another or stack marks on each other: Arabic
-    /// joins, the Indic scripts form clusters, and Thai hangs vowels and tones off the
-    /// consonant they belong to. Pulling those apart isn't wider tracking, it's broken
-    /// words.
+    /// Says whether letter spacing would break the text (joined Arabic, Indic clusters, Thai marks).
     /// </summary>
-    /// <param name="script">The script.</param>
-    /// <returns>True when letter spacing has to be left at zero.</returns>
     public static bool RejectsLetterSpacing(SubtitleScript script) =>
         script is SubtitleScript.Arabic or SubtitleScript.Indic or SubtitleScript.Thai;
 
     /// <summary>
-    /// Says whether a Latin-only typeface - which is what OpenDyslexic is - has the glyphs
-    /// for this script. When it doesn't, asking for it gives a line of empty boxes or a
-    /// silent substitution, so the font has to be swapped for one that covers the script.
+    /// Says whether a Latin-only font like OpenDyslexic can draw this script.
     /// </summary>
-    /// <param name="script">The script.</param>
-    /// <returns>True when a Latin typeface can render it.</returns>
     public static bool IsLatinTypefaceEnough(SubtitleScript script) =>
         script is SubtitleScript.Latin or SubtitleScript.Unknown;
 
     /// <summary>
     /// Gets the script's name, for telling somebody what was detected.
     /// </summary>
-    /// <param name="script">The script.</param>
-    /// <returns>A word for it.</returns>
     public static string GetName(SubtitleScript script) => script switch
     {
         SubtitleScript.Latin => "Latin",

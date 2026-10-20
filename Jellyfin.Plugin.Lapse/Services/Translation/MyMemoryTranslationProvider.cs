@@ -17,21 +17,15 @@ using Microsoft.Extensions.Logging;
 namespace Jellyfin.Plugin.Lapse.Services.Translation;
 
 /// <summary>
-/// MyMemory's public translation API, the documented one at mymemory.translated.net. It
-/// needs no key and no hosting, which makes it the only provider that works on a fresh
-/// install, so it's the default.
-///
-/// Its API is one line per request and it rate limits anonymous callers by the day, so
-/// this paces itself and gives up with a clear message rather than hammering it. It's
-/// also the only provider here that hands back a real confidence number, which the
-/// threshold slider then means something concrete against.
+/// MyMemory (mymemory.translated.net). No key, nothing to host, so it's the default and
+/// works on a fresh install. One line per request and a daily limit for anonymous use, so
+/// it paces itself. Only provider that returns a real confidence score.
 /// </summary>
 public class MyMemoryTranslationProvider : ITranslationProvider
 {
     private const string Endpoint = "https://api.mymemory.translated.net/get";
 
-    // Their guidance for anonymous use is to keep it gentle. A small gap between calls
-    // keeps a long subtitle file from tripping the daily limit halfway through.
+    // be gentle so a long file doesn't hit the limit halfway through
     private static readonly TimeSpan BetweenCalls = TimeSpan.FromMilliseconds(120);
 
     private readonly IHttpClientFactory _httpClientFactory;
@@ -40,8 +34,6 @@ public class MyMemoryTranslationProvider : ITranslationProvider
     /// <summary>
     /// Initializes a new instance of the <see cref="MyMemoryTranslationProvider"/> class.
     /// </summary>
-    /// <param name="httpClientFactory">Factory to grab an HttpClient from.</param>
-    /// <param name="logger">Logger.</param>
     public MyMemoryTranslationProvider(IHttpClientFactory httpClientFactory, ILogger<MyMemoryTranslationProvider> logger)
     {
         _httpClientFactory = httpClientFactory;
@@ -73,14 +65,16 @@ public class MyMemoryTranslationProvider : ITranslationProvider
         string targetLanguage,
         CancellationToken cancellationToken)
     {
-        // MyMemory always wants a source language, it has no auto-detect. English is the
-        // overwhelmingly common source for subtitles people want translated, and its own
-        // matching is forgiving enough that a wrong guess degrades rather than fails.
+        // no auto-detect here, English is by far the most common source anyway
         var source = string.IsNullOrWhiteSpace(sourceLanguage) ? "en" : sourceLanguage;
         var pair = source + "|" + targetLanguage;
 
         var client = _httpClientFactory.CreateClient("Lapse");
         var results = new List<TranslatedLine>(lines.Count);
+
+        // subtitles repeat themselves a lot ("What?", "Yeah."), only ask once per line
+        var seen = new Dictionary<string, TranslatedLine>(StringComparer.Ordinal);
+        var asked = 0;
 
         for (var i = 0; i < lines.Count; i++)
         {
@@ -90,6 +84,17 @@ public class MyMemoryTranslationProvider : ITranslationProvider
             {
                 results.Add(new TranslatedLine { Text = lines[i] });
                 continue;
+            }
+
+            if (seen.TryGetValue(lines[i], out var repeat))
+            {
+                results.Add(repeat);
+                continue;
+            }
+
+            if (asked++ > 0)
+            {
+                await Task.Delay(BetweenCalls, cancellationToken).ConfigureAwait(false);
             }
 
             var url = Endpoint
@@ -107,19 +112,16 @@ public class MyMemoryTranslationProvider : ITranslationProvider
                     (int)response.StatusCode,
                     i,
                     lines.Count,
-                    Shorten(body)));
+                    TranslationBatches.Shorten(body)));
             }
 
             using var document = await response.Content
                 .ReadFromJsonAsync<JsonDocument>(cancellationToken)
                 .ConfigureAwait(false);
 
-            results.Add(ReadTranslation(document, source));
-
-            if (i < lines.Count - 1)
-            {
-                await Task.Delay(BetweenCalls, cancellationToken).ConfigureAwait(false);
-            }
+            var line = ReadTranslation(document, source);
+            seen[lines[i]] = line;
+            results.Add(line);
         }
 
         return results;
@@ -132,9 +134,7 @@ public class MyMemoryTranslationProvider : ITranslationProvider
             return new TranslatedLine();
         }
 
-        // A quota message comes back with a 200 and the text of the complaint where the
-        // translation should be, so treat that as the failure it is rather than writing
-        // "MYMEMORY WARNING" into someone's subtitle file.
+        // quota errors come back as a 200 with the complaint as the "translation", don't write that into a subtitle
         if (document.RootElement.TryGetProperty("responseStatus", out var status)
             && TryReadStatus(status, out var statusCode)
             && statusCode != 200)
@@ -159,8 +159,7 @@ public class MyMemoryTranslationProvider : ITranslationProvider
             Text = text,
             DetectedSourceLanguage = source,
 
-            // MyMemory scores its own match from 0 to 1, which is a far better answer
-            // than anything the plugin could infer from the text alone.
+            // their own 0..1 match score, better than anything we could guess
             Confidence = data.TryGetProperty("match", out var match) ? ReadMatch(match) : null
         };
     }
@@ -187,11 +186,5 @@ public class MyMemoryTranslationProvider : ITranslationProvider
             JsonValueKind.String when double.TryParse(match.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed) => Math.Clamp(parsed, 0, 1),
             _ => null
         };
-    }
-
-    private static string Shorten(string text)
-    {
-        var trimmed = text.Trim();
-        return trimmed.Length > 300 ? trimmed[..300] : trimmed;
     }
 }
