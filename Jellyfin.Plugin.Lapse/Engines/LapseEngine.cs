@@ -438,6 +438,12 @@ public partial class LapseEngine : IEngine
                 result.Penalty = (int)parts.Value;
             }
 
+            var snapped = ReadDouble(root, "snapped");
+            if (snapped is > 0)
+            {
+                result.Snapped = (int)snapped.Value;
+            }
+
             if (!written)
             {
                 result.Error = ReadString(root, "why") ?? "The engine decided not to write anything.";

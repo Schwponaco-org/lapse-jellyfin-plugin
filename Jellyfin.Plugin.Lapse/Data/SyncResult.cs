@@ -40,6 +40,11 @@ public class SyncResult
     public int? Penalty { get; set; }
 
     /// <summary>
+    /// Gets or sets how many cues --snap moved onto a picture cut, when the engine reports it.
+    /// </summary>
+    public int? Snapped { get; set; }
+
+    /// <summary>
     /// Gets or sets how much of the subtitle sits on speech, 0..1. Below ~0.5 usually means wrong content. Newer LAPSE only.
     /// </summary>
     public double? Confidence { get; set; }
