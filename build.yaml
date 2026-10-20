@@ -1,7 +1,7 @@
 ---
 name: "LAPSE"
 guid: "486090e1-ca92-46e1-8549-9f6bb914a1d0"
-version: "2.1.1.0"
+version: "2.2.0.0"
 targetAbi: "10.11.0.0"
 framework: "net9.0"
 overview: "Sync subtitles to audio (or subtitle to subtitle) using the LAPSE engine. Open Settings after installing to set it up."
@@ -21,10 +21,22 @@ owner: "rs-jensen"
 artifacts:
 - "Jellyfin.Plugin.Lapse.dll"
 changelog: >
-  Syncing a subtitle that was embedded in the video no longer leaves an extra
-  copy behind. LAPSE pulls the track out to a file first, and with output set
-  to write a new file it used to keep that copy and put the synced result
-  next to it, so Jellyfin listed the same subtitle three times. The copy is
-  now replaced by the synced result, since the original is still inside the
-  video, and undoing the sync removes it again. Shifting an embedded track by
-  hand works the same way.
+  Brings the plugin up to LAPSE 2.3.0.
+
+  A subtitle that fits another copy of a film can now be moved onto this one.
+  LAPSE listens to both copies and moves every line the way the speech around
+  it moved, so a TV recording, a PAL release or a cut with a scene missing all
+  come out right, short forced tracks included. It's in the item menu as Move
+  Subtitles from Another Copy, and in the dashboard's Advanced dialog, and it
+  finds the other versions Jellyfin groups with an item as well as the same
+  film in another library. The result is named after this video and never
+  goes over a subtitle that's already there.
+
+  The engine's advanced settings take a whisper.cpp model, which makes LAPSE
+  only trust the stretches of speech whisper hears words in. The card says
+  when the model or whisper-cli can't be found, and when a setting needs a
+  newer LAPSE than the one installed.
+
+  A split file now shows where each part went instead of one offset for the
+  lot, and counts as already in sync when no part would move further than the
+  tolerance. Snapping to picture cuts moves cue ends too with 2.3.0.
