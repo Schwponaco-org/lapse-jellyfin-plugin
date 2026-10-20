@@ -158,7 +158,7 @@ The [engine repo](https://github.com/Schwponaco-org/lapse) has the details, plus
 
 - **The menu entries don't show up.** Check that you're an admin or have subtitle access, then hard refresh the browser once. The LAPSE dashboard shows a warning when the plugin can't reach the web client.
 - **A sync fails straight away.** Open Engines and make sure LAPSE is installed. The engine card also warns you if LAPSE has fallen back to its weaker voice detector because the Silero model or onnxruntime is missing.
-- **LAPSE says unsure or nothing about a subtitle you know is right.** A long quiet or musical opening can throw it. Turn on **Listen to the whole file** in the engine's advanced settings.
+- **LAPSE says unsure or nothing about a subtitle you know is right.** Music or crowd noise under the speech can throw it. If you're sure the subtitle belongs to this release, tick **Sync even when the engine is unsure** on the engine card, or line it up against a subtitle you trust with **Sync Subtitles to Reference**.
 - **OpenSubtitles doesn't work.** Press **Test the connection** under Settings > Experimental. It tells you whether the key or the account is the problem.
 - **The Radarr or Sonarr webhook does nothing.** The webhook settings show the last call that arrived and when.
 
