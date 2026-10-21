@@ -4,7 +4,9 @@
 
 using System;
 using System.Collections.Generic;
+using System.IO;
 using Jellyfin.Data.Enums;
+using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Plugin.Lapse.Data;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
@@ -31,6 +33,7 @@ public class LibraryService
     private static readonly TimeSpan LibraryIdsCacheFor = TimeSpan.FromSeconds(10);
 
     private readonly ILibraryManager _libraryManager;
+    private readonly IMediaSourceManager _mediaSourceManager;
 
     // swapped as a whole so readers never see half an update
     private LibraryIdSnapshot? _libraryIds;
@@ -38,9 +41,10 @@ public class LibraryService
     /// <summary>
     /// Initializes a new instance of the <see cref="LibraryService"/> class.
     /// </summary>
-    public LibraryService(ILibraryManager libraryManager)
+    public LibraryService(ILibraryManager libraryManager, IMediaSourceManager mediaSourceManager)
     {
         _libraryManager = libraryManager;
+        _mediaSourceManager = mediaSourceManager;
     }
 
     /// <summary>
@@ -236,6 +240,119 @@ public class LibraryService
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Finds other copies of a film or episode that a subtitle could be moved from: the other
+    /// versions Jellyfin groups with it, and items in any library with the same IMDb, TMDb or
+    /// TVDb id. Only real files, and for a user only what they can see.
+    /// </summary>
+    public List<(Video Copy, bool IsVersion)> FindOtherCopies(BaseItem item, User? user)
+    {
+        var found = new List<(Video Copy, bool IsVersion)>();
+        if (item is not Video video || string.IsNullOrEmpty(video.Path))
+        {
+            return found;
+        }
+
+        var paths = new HashSet<string>(StringComparer.Ordinal) { video.Path };
+
+        void Add(BaseItem? candidate, bool isVersion)
+        {
+            if (candidate is Video copy && !copy.IsVirtualItem && !string.IsNullOrEmpty(copy.Path)
+                && File.Exists(copy.Path) && paths.Add(copy.Path))
+            {
+                found.Add((copy, isVersion));
+            }
+        }
+
+        // We can be handed either end of a version group, so start from the primary. The
+        // versions come with the item, a user who can see one can see them all.
+        //
+        // Version groups changed shape in Jellyfin 12 (PrimaryVersionId became a Guid and the
+        // versions moved out of the item into their own table), so this goes through the media
+        // sources, the same list the player's version picker shows, which both have.
+        var primary = ReadPrimaryVersionId(video) is { } primaryId && _libraryManager.GetItemById(primaryId) is Video main
+            ? main
+            : FindLocalPrimary(video) ?? video;
+
+        Add(primary, true);
+
+        foreach (var source in _mediaSourceManager.GetStaticMediaSources(primary, false))
+        {
+            if (Guid.TryParse(source.Id, out var versionId))
+            {
+                Add(_libraryManager.GetItemById(versionId), true);
+            }
+        }
+
+        var ids = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var provider in new[] { MetadataProvider.Imdb, MetadataProvider.Tmdb, MetadataProvider.Tvdb })
+        {
+            var value = item.GetProviderId(provider);
+            if (!string.IsNullOrWhiteSpace(value) && value != "0")
+            {
+                ids[provider.ToString()] = value;
+            }
+        }
+
+        if (ids.Count == 0)
+        {
+            return found;
+        }
+
+        var query = new InternalItemsQuery
+        {
+            IncludeItemTypes = new[] { item.GetBaseItemKind() },
+            HasAnyProviderId = ids,
+            IsVirtualItem = false,
+            Recursive = true
+        };
+
+        foreach (var other in _libraryManager.GetItemList(query))
+        {
+            if (user is null || other.IsVisibleStandalone(user))
+            {
+                Add(other, false);
+            }
+        }
+
+        return found;
+    }
+
+    // A string on 10.11 and a Guid? on 12, so it's read without binding to either
+    private static Guid? ReadPrimaryVersionId(Video video)
+    {
+        var value = typeof(Video).GetProperty(nameof(Video.PrimaryVersionId))?.GetValue(video)?.ToString();
+        return Guid.TryParse(value, out var id) ? id : null;
+    }
+
+    // A version found next to the main file ("Film - TV.mkv" beside "Film - Bluray.mkv") has
+    // no PrimaryVersionId pointing back on 10.11, only the main item lists it. So look at the
+    // videos in the same folder for the one whose versions include this file.
+    private Video? FindLocalPrimary(Video video)
+    {
+        var folder = Path.GetDirectoryName(video.Path);
+        if (string.IsNullOrEmpty(folder) || !Directory.Exists(folder))
+        {
+            return null;
+        }
+
+        foreach (var file in Directory.EnumerateFiles(folder))
+        {
+            if (string.Equals(file, video.Path, StringComparison.Ordinal) || SubtitleFormats.IsSubtitle(file))
+            {
+                continue;
+            }
+
+            if (_libraryManager.FindByPath(file, false) is Video candidate
+                && _mediaSourceManager.GetStaticMediaSources(candidate, false).Any(s => string.Equals(s.Path, video.Path, StringComparison.Ordinal)))
+            {
+                return candidate;
+            }
+        }
+
+        return null;
     }
 
     private sealed record LibraryIdSnapshot(HashSet<Guid> Ids, DateTime ReadUtc);

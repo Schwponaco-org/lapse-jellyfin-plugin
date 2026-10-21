@@ -72,6 +72,10 @@
     line-height: 1.4;
 }
 
+.lapseDialogCard .lapseDialogIntro {
+    margin-bottom: 1.2em;
+}
+
 .lapseDialogRule {
     border: 0;
     border-top: 1px solid rgba(255, 255, 255, .12);

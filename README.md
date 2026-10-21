@@ -29,6 +29,7 @@ Every film, episode and video gets some new entries in its three dot menu. Admin
 
 - **Sync Subtitles** is the one you'll use most. Pick a subtitle if there's more than one and press Sync. **Advanced** lets you choose the engine and mode, write the result in another format, translate it in the same go, or nudge it by hand.
 - **Sync Subtitles to Reference** lines the other subtitles on an item up against one you know is right. It skips the audio, so it's quick, and very accurate when the reference is good. On a series or a season it does every episode.
+- **Move Subtitles from Another Copy** takes a subtitle that fits another copy of the film and moves it onto this one, see [Another copy of the film](#another-copy-of-the-film). It only shows up on items that have another copy.
 - **Shift Subtitles** moves a subtitle by hand, in milliseconds, with a preview of the first line. It works without an engine.
 - **Convert Subtitles** writes a subtitle out as `.srt`, `.vtt`, `.ass` or `.ssa`.
 - **Extract Embedded Subtitles** writes the subtitle tracks inside a video out as files next to it. It can also rebuild the video without them, which helps with direct play. Nothing is re-encoded, and picture tracks (PGS, VobSub) always stay in the video.
@@ -63,9 +64,28 @@ LAPSE is the only one of the supported engines that says how sure it is. Every a
 
 A doubtful answer doesn't count as synced, so the item stays on your list until you've dealt with it. If you know a subtitle belongs to the video and LAPSE is being too careful, turn on **Sync even when the engine is unsure** on the engine's card.
 
-Very short subtitles, like a forced track with five lines, give LAPSE too little to check its answer against. The plugin still has a go and treats the result as unsure. The reliable way to time those is **Sync Subtitles to Reference** against the full subtitle in the same language.
+Very short subtitles, like a forced track with five lines, give LAPSE too little to check its answer against. The plugin still has a go and treats the result as unsure. The reliable way to time those is **Sync Subtitles to Reference** against the full subtitle in the same language, or, when you have the copy the forced track was made for, **Move Subtitles from Another Copy**.
 
 When you sync a track that came out of the video, LAPSE listens to the audio for it. The copy still inside the video would only ever agree with itself.
+
+A split file gets one offset per part, and the result says where each part went, like `moved -895ms then -4900ms`. When the video has chapters, LAPSE takes them as likely places for a cut.
+
+### Busy soundtracks
+
+Voice detection hears a voice, not whether it says anything, so music, crowds and shouting all count as speech. With LAPSE 2.3.0 you can point the engine's advanced settings at a [whisper.cpp](https://github.com/ggml-org/whisper.cpp) model, and LAPSE then only trusts the stretches where whisper hears words. LAPSE doesn't ship whisper.cpp, so you need `whisper-cli` on the server as well, either on the PATH or set under **whisper-cli program**. Keep the model's own file name (`ggml-base.en.bin` for English, `ggml-base.bin` for anything else), that's how LAPSE knows which one it is.
+
+The first sync of a film transcribes it, about two minutes for a two hour film on a recent machine and a lot longer on a small server without a GPU. After that it's cached. If the model or `whisper-cli` can't be found, the engine card says so and syncs carry on without it.
+
+## Another copy of the film
+
+A subtitle that's right for one copy of a film is often wrong for another: the TV recording against the Blu-ray, PAL against NTSC, a cut with a scene missing. When you still have the copy it fits, LAPSE 2.3.0 can listen to both and move every line the way the speech around it moved. Two soundtracks say far more about how the copies differ than a subtitle against speech does, so this beats a normal sync, and it works on short forced tracks too.
+
+**Move Subtitles from Another Copy** in the item menu, or **From another copy** in the dashboard's Advanced dialog, offers:
+
+- the other versions Jellyfin groups with the item (`Film - TV.mkv` next to `Film - Bluray.mkv`), and
+- the same film or episode in another library, matched by its IMDb, TMDb or TVDb id.
+
+Pick the copy and one of its subtitles. The result is written next to this video and named after it, keeping the language and flags, so `Film - TV.en.forced.srt` becomes `Film - Bluray.en.forced.srt`. It never goes over a subtitle that's already there: if the name is taken, it gets the sidecar suffix instead. Undo deletes it again.
 
 ## File output
 
@@ -142,13 +162,15 @@ Three formats share `.sub`, so the engine looks inside the file to tell them apa
 
 PGS and VobSub are pictures of text. LAPSE can still move their timing, though converting, translating or restyling them needs OCR first. alass and ffsubsync read `.srt`, `.ass`, `.ssa` and `.vtt`, and the plugin converts anything else to `.srt` for them.
 
+LAPSE 2.3.0 also reads the broadcast formats `.stl` (EBU STL) and `.scc` (Scenarist). Jellyfin can't show either of them, so the plugin leaves them out of its lists.
+
 ### Text encoding
 
 A synced subtitle goes back out in the encoding it came in, so a Windows-1252 file stays Windows-1252 and a UTF-8 file stays UTF-8. Shifting by hand keeps the encoding and the line endings too. If you'd like everything in one encoding, **Write every result in one encoding** in the engine's advanced settings converts every result to UTF-8, UTF-16 or Latin-1. The engine can't tell one old 8-bit code page from another, so that works for Western European subtitles and goes wrong for Cyrillic and CJK ones stored in those code pages.
 
 ## Engines
 
-- **LAPSE** is the engine this plugin is built around and the one to use. It works out on its own whether a subtitle is early, drifting or cut differently, tells you how sure it is, and reads the most formats. Every download is checked against the checksums published with the release.
+- **LAPSE** is the engine this plugin is built around and the one to use. It works out on its own whether a subtitle is early, drifting or cut differently, tells you how sure it is, and reads the most formats. Every download is checked against the checksums published with the release. Moving a subtitle between copies and whisper need LAPSE 2.3.0, and the engine card says when a setting needs a newer build than the one installed.
 - **alass** splits a file into sections and times each one separately, which suits recordings cut around ad breaks. Linux and Windows on x86-64.
 - **ffsubsync** shifts the whole subtitle and can fix framerate mismatches. Linux, Windows and macOS.
 
