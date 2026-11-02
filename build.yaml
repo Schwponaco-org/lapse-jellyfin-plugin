@@ -1,7 +1,7 @@
 ---
 name: "LAPSE"
 guid: "486090e1-ca92-46e1-8549-9f6bb914a1d0"
-version: "2.1.2.0"
+version: "2.1.3.0"
 targetAbi: "10.11.0.0"
 framework: "net9.0"
 overview: "Sync subtitles to audio (or subtitle to subtitle) using the LAPSE engine. Open Settings after installing to set it up."
@@ -21,22 +21,14 @@ owner: "rs-jensen"
 artifacts:
 - "Jellyfin.Plugin.Lapse.dll"
 changelog: >
-  Brings the plugin up to LAPSE 2.3.0.
+  Works with LAPSE 2.3.2.
 
-  A subtitle that fits another copy of a film can now be moved onto this one.
-  LAPSE listens to both copies and moves every line the way the speech around
-  it moved, so a TV recording, a PAL release or a cut with a scene missing all
-  come out right, short forced tracks included. It's in the item menu as Move
-  Subtitles from Another Copy, and in the dashboard's Advanced dialog, and it
-  finds the other versions Jellyfin groups with an item as well as the same
-  film in another library. The result is named after this video and never
-  goes over a subtitle that's already there.
+  Since 2.3.1 the engine reports a subtitle with too few lines in its JSON
+  answer instead of only on stderr, and the plugin stopped recognising it. A
+  short forced track then just failed, where it used to get a second try with
+  --force. It gets that second try again, in batch runs too, and the result no
+  longer says it was "matched against none".
 
-  The engine's advanced settings take a whisper.cpp model, which makes LAPSE
-  only trust the stretches of speech whisper hears words in. The card says
-  when the model or whisper-cli can't be found, and when a setting needs a
-  newer LAPSE than the one installed.
-
-  A split file now shows where each part went instead of one offset for the
-  lot, and counts as already in sync when no part would move further than the
-  tolerance. Snapping to picture cuts moves cue ends too with 2.3.0.
+  The engine's format notes now say where .stl and .scc files can go
+  instead. LAPSE syncs them, Jellyfin just can't show them, so they're
+  pointed at LAPSE in the browser or the Docker image.
