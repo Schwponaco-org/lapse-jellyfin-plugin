@@ -39,7 +39,10 @@ public class RunnerTests
               prev="$a"
             done
             cp "$2" "$out"
-            cat "$0.reply" ;;
+            case "$*" in
+              *--force*) [ -f "$0.forced" ] && cat "$0.forced" || cat "$0.reply" ;;
+              *) cat "$0.reply" ;;
+            esac ;;
         esac
         """;
 
@@ -79,6 +82,27 @@ public class RunnerTests
         Assert.True(result.AlreadyInSync);
         Assert.Null(result.Snapped);
         Assert.False(File.Exists(Path.Combine(folder, "Film.en.shifted.srt")));
+    }
+
+    [Fact]
+    public async Task AShortSubtitleIsTriedAgainWithForce()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        // what 2.3.2 prints for a file with too few cues, it no longer mentions --force
+        var (runner, folder, engine) = NewRunner("{\"mode\":\"auto\",\"reference\":\"none\",\"offset_ms\":0,\"ratio\":1,\"verdict\":\"nothing\",\"cues\":2,\"parts\":1,\"snapped\":0,\"written\":false,\"unchanged\":false,\"why\":\"only 2 cues to line up, not enough to go on\",\"output\":\"x\",\"splits\":[],\"offsets\":[]}");
+        File.WriteAllText(engine + ".forced", "{\"mode\":\"auto/shifted\",\"reference\":\"vad\",\"offset_ms\":1500,\"ratio\":1,\"verdict\":\"solid\",\"cues\":2,\"parts\":1,\"snapped\":0,\"written\":true,\"output\":\"x\",\"splits\":[],\"offsets\":[1500]}\n");
+        var (video, subtitle) = Film(folder);
+
+        var result = await WithSettings(engine, () => runner.RunAsync(new LapseEngine(), video, subtitle, SyncMode.Auto, 6, OutputMode.SidecarOnly));
+
+        Assert.True(result.Success, result.Error);
+        Assert.True(result.Forced);
+        Assert.True(result.LowConfidence);
+        Assert.Contains("--force", Calls(engine), StringComparison.Ordinal);
     }
 
     [Fact]

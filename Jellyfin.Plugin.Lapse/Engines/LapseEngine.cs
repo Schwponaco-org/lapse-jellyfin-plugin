@@ -533,7 +533,7 @@ public partial class LapseEngine : IEngine
 
         var parts = new List<string> { "verdict " + verdict };
 
-        if (reference is not null)
+        if (reference is not null and not "none")
         {
             parts.Add("matched against " + reference switch
             {

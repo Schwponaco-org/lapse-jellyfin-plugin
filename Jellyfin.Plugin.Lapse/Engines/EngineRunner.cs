@@ -471,7 +471,7 @@ public class EngineRunner
 
             // A short subtitle (forced signs, a few lines) has too few cues for the engine to be
             // sure and it says so, pointing at --force. Someone pressed Sync, so try that.
-            if (!result.Success && IsTooFewCues(result.Error))
+            if (!result.Success && IsTooFewCues(result))
             {
                 _logger.LogInformation("{Engine} says {Subtitle} is too short to judge, trying again with force", engine.Descriptor.DisplayName, subtitlePath);
 
@@ -747,10 +747,16 @@ public class EngineRunner
         return Math.Abs(offset) <= tolerance;
     }
 
-    // The engine's own "not enough cues, use --force" message. Only the text tells us, there's
-    // no separate exit code for it.
-    private static bool IsTooFewCues(string? error)
+    // The engine's "not enough cues, use --force". 2.3.1+ answers it in JSON with reference
+    // "none", older ones only say so on stderr.
+    private static bool IsTooFewCues(SyncResult result)
     {
+        if (string.Equals(result.Reference, "none", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        var error = result.Error;
         return !string.IsNullOrEmpty(error)
             && error.Contains("--force", StringComparison.OrdinalIgnoreCase)
             && (error.Contains("not enough", StringComparison.OrdinalIgnoreCase)
