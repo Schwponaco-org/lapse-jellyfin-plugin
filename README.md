@@ -162,7 +162,7 @@ Three formats share `.sub`, so the engine looks inside the file to tell them apa
 
 PGS and VobSub are pictures of text. LAPSE can still move their timing, though converting, translating or restyling them needs OCR first. alass and ffsubsync read `.srt`, `.ass`, `.ssa` and `.vtt`, and the plugin converts anything else to `.srt` for them.
 
-LAPSE 2.3.0 also reads the broadcast formats `.stl` (EBU STL) and `.scc` (Scenarist). Jellyfin can't show either of them, so the plugin leaves them out of its lists.
+LAPSE also reads the broadcast formats `.stl` (EBU STL) and `.scc` (Scenarist), but Jellyfin can't show either of them, so the plugin leaves them out of its lists. For those, use [LAPSE in the browser](https://schwponaco.org/lapse/) or the engine's [Docker image](https://github.com/Schwponaco-org/lapse#docker), which take them as they are.
 
 ### Text encoding
 
