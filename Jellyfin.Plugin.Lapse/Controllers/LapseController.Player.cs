@@ -350,10 +350,14 @@ public partial class LapseController
                 return BadRequest("Could not tell which subtitle you're watching. Pick one from the list instead.");
             }
 
-            if (MultiEngineSyncService.MatchPlaying(request.ItemId, path) is null)
+            var playing = MultiEngineSyncService.MatchPlaying(request.ItemId, path);
+            if (playing is null)
             {
                 return BadRequest("The subtitle playing right now isn't one of the answers waiting to be chosen.");
             }
+
+            // the match ignores case, Keep doesn't
+            path = playing.Path;
         }
 
         var decision = _multiEngine.Keep(request.ItemId, path);

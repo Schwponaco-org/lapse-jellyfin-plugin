@@ -166,9 +166,7 @@ public class SubtitleLocator
     {
         foreach (var file in files)
         {
-            // ".lapse-" files are the runner's scratch files mid-sync, not real subtitles
-            if (!SubtitleFormats.IsSubtitle(file)
-                || Path.GetFileName(file).Contains(".lapse-", StringComparison.OrdinalIgnoreCase)
+            if (!SubtitleFormats.IsRealSubtitle(file)
                 || (restrictToStem && !stem.Matches(file))
                 || !seenPaths.Add(file))
             {

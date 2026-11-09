@@ -298,7 +298,7 @@ public class MultiEngineSyncService
                 return new CandidateDecision { Message = "Could not write the subtitle you chose: " + ex.Message };
             }
 
-            var removed = set.Candidates.Count(c => !string.Equals(c.Path, winner.Path, StringComparison.Ordinal) && TryDelete(c.Path));
+            var removed = set.Candidates.Count(c => !string.Equals(c.Path, winner.Path, StringComparison.Ordinal) && QuietFile.TryDelete(c.Path));
             config.PendingCandidates.Remove(set);
 
             // normal bookkeeping, so the item counts as synced and Undo works like for any sync
@@ -412,7 +412,7 @@ public class MultiEngineSyncService
             var removed = 0;
             foreach (var set in matches)
             {
-                removed += set.Candidates.Count(c => TryDelete(c.Path));
+                removed += set.Candidates.Count(c => QuietFile.TryDelete(c.Path));
                 config.PendingCandidates.Remove(set);
             }
 
@@ -461,7 +461,7 @@ public class MultiEngineSyncService
             else
             {
                 await _converter.ConvertAsync(written, target, cancellationToken: cancellationToken).ConfigureAwait(false);
-                TryDelete(written);
+                QuietFile.TryDelete(written);
             }
 
             return Describe(engine, target, lapseResult);
@@ -600,24 +600,6 @@ public class MultiEngineSyncService
     private bool IsInstalled(IEngine engine)
     {
         return File.Exists(_runner.ResolvePath(engine));
-    }
-
-    // a candidate that won't delete is a stray file, not a reason to fail what someone just chose
-    private static bool TryDelete(string path)
-    {
-        try
-        {
-            if (File.Exists(path))
-            {
-                File.Delete(path);
-                return true;
-            }
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-        }
-
-        return false;
     }
 }
 

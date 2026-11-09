@@ -315,7 +315,7 @@ public class SubtitleExtractor
     {
         var results = new TrackExtractionResult?[jobs.Count];
         var runnable = new List<int>();
-        var hasFfmpeg = HasFfmpeg();
+        var hasFfmpeg = FfmpegPaths.IsThere(_mediaEncoder.EncoderPath);
 
         for (var i = 0; i < jobs.Count; i++)
         {
@@ -579,7 +579,7 @@ public class SubtitleExtractor
         }
         finally
         {
-            temps.ForEach(TryDelete);
+            temps.ForEach(temp => QuietFile.TryDelete(temp));
         }
     }
 
@@ -795,28 +795,7 @@ public class SubtitleExtractor
         }
         finally
         {
-            TryDelete(temp);
-        }
-    }
-
-    private bool HasFfmpeg()
-    {
-        var path = _mediaEncoder.EncoderPath;
-        return !string.IsNullOrWhiteSpace(path) && File.Exists(path);
-    }
-
-    private static void TryDelete(string path)
-    {
-        try
-        {
-            if (File.Exists(path))
-            {
-                File.Delete(path);
-            }
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            // a stray temp file isn't worth reporting over whatever actually went wrong
+            QuietFile.TryDelete(temp);
         }
     }
 }

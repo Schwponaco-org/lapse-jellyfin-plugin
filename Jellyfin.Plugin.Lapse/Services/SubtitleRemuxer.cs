@@ -76,7 +76,7 @@ public class SubtitleRemuxer
         // only the rebuild needs these, extraction alone works on any container
         if (removeFromVideo)
         {
-            if (!HasFfmpeg())
+            if (!FfmpegPaths.IsThere(_mediaEncoder.EncoderPath))
             {
                 result.Error = "The server hasn't told the plugin where its ffmpeg is, and rebuilding a video file needs it.";
                 return result;
@@ -198,14 +198,14 @@ public class SubtitleRemuxer
         }
         catch (Exception ex) when (ex is NotSupportedException or InvalidDataException or TimeoutException)
         {
-            TryDelete(destination);
+            QuietFile.TryDelete(destination);
             result.Error = ex.Message;
             return result;
         }
         catch (OperationCanceledException)
         {
             // stopped mid rebuild, original is untouched, drop the half written copy
-            TryDelete(destination);
+            QuietFile.TryDelete(destination);
             throw;
         }
 
@@ -251,7 +251,7 @@ public class SubtitleRemuxer
         }
 
         // the rebuilt video is in place by now, a stuck .lapse-old doesn't make this a failure
-        TryDelete(reprieve);
+        QuietFile.TryDelete(reprieve);
 
         result.VideoPath = videoPath;
         result.ReplacedOriginal = true;
@@ -307,12 +307,6 @@ public class SubtitleRemuxer
         }
     }
 
-    private bool HasFfmpeg()
-    {
-        var path = _mediaEncoder.EncoderPath;
-        return !string.IsNullOrWhiteSpace(path) && File.Exists(path);
-    }
-
     private static string Describe(MediaStream stream)
     {
         var language = string.IsNullOrWhiteSpace(stream.Language) ? "unknown language" : stream.Language;
@@ -356,21 +350,6 @@ public class SubtitleRemuxer
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             // nothing more we can do, the .lapse-old file is still there to rename by hand
-        }
-    }
-
-    private static void TryDelete(string path)
-    {
-        try
-        {
-            if (File.Exists(path))
-            {
-                File.Delete(path);
-            }
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            // untidy but not worth reporting
         }
     }
 }

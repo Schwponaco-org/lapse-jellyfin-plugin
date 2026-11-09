@@ -492,9 +492,10 @@ public class EngineRunner
             var doubtful = result.Verdict is not null && !string.Equals(result.Verdict, "solid", StringComparison.OrdinalIgnoreCase);
 
             // Since 2.3.3 LAPSE writes a doubtful answer beside --output instead of on it
-            if (doubtful && File.Exists(UnsureBeside(workPath)))
+            var unsurePath = UnsureBeside(workPath);
+            if (doubtful && File.Exists(unsurePath))
             {
-                File.Move(UnsureBeside(workPath), workPath, overwrite: true);
+                File.Move(unsurePath, workPath, overwrite: true);
             }
 
             if (!File.Exists(workPath) || new FileInfo(workPath).Length == 0)
@@ -536,14 +537,10 @@ public class EngineRunner
                     // Put the doubtful answer next to the original whatever the output mode says.
                     // A caller that picked the file itself still gets it there, as long as that
                     // doesn't mean writing over something.
-                    if (string.IsNullOrWhiteSpace(destinationOverride))
+                    var callerPicked = !string.IsNullOrWhiteSpace(destinationOverride);
+                    if (!callerPicked || File.Exists(destination))
                     {
-                        destination = ResolveDestination(subtitlePath, OutputMode.SidecarOnly, outputFormat);
-                        resolvedOutputMode = OutputMode.SidecarOnly;
-                    }
-                    else if (File.Exists(destination))
-                    {
-                        destination = ResolveDestination(destination, OutputMode.SidecarOnly, outputFormat);
+                        destination = ResolveDestination(callerPicked ? destination : subtitlePath, OutputMode.SidecarOnly, outputFormat);
                         resolvedOutputMode = OutputMode.SidecarOnly;
                     }
 

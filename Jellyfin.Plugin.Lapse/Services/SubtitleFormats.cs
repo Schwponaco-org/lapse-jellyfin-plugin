@@ -119,6 +119,15 @@ public static class SubtitleFormats
     }
 
     /// <summary>
+    /// Gets whether a path is a subtitle someone could want, not one of our scratch files
+    /// from a sync that's running (".lapse-" somewhere in the name).
+    /// </summary>
+    public static bool IsRealSubtitle(string? path)
+    {
+        return IsSubtitle(path) && !Path.GetFileName(path!).Contains(".lapse-", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
     /// Gets whether we can get text out of it (needed to convert, translate or shift).
     /// </summary>
     public static bool IsTextBased(string? path)

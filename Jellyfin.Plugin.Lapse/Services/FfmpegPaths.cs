@@ -25,6 +25,14 @@ public static class FfmpegPaths
     }
 
     /// <summary>
+    /// Says whether Jellyfin has given us an ffmpeg that's really on disk.
+    /// </summary>
+    public static bool IsThere(string? path)
+    {
+        return !string.IsNullOrWhiteSpace(path) && File.Exists(path);
+    }
+
+    /// <summary>
     /// Timeout for reading a whole file: 10 minutes + 1 per GB. A flat limit is either too
     /// short for a 60GB remux on a NAS or way too long for an episode.
     /// </summary>

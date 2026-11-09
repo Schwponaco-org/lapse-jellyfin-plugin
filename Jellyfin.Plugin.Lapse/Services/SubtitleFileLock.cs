@@ -108,17 +108,7 @@ public static class SubtitleFileLock
         }
         finally
         {
-            if (File.Exists(temp))
-            {
-                try
-                {
-                    File.Delete(temp);
-                }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-                {
-                    // oh well, a stray temp file
-                }
-            }
+            QuietFile.TryDelete(temp);
         }
     }
 

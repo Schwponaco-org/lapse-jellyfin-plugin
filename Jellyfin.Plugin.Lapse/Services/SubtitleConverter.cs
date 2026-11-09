@@ -110,7 +110,7 @@ public partial class SubtitleConverter
                 return null;
 
             case SubtitleFormatKind.Convertible:
-                return HasFfmpeg()
+                return FfmpegPaths.IsThere(_mediaEncoder.EncoderPath)
                     ? null
                     : $"Converting {SubtitleFormats.GetName(sourcePath)} files needs ffmpeg, and the server hasn't told the plugin where its copy is.";
 
@@ -231,12 +231,6 @@ public partial class SubtitleConverter
                 }
             }
         }
-    }
-
-    private bool HasFfmpeg()
-    {
-        var path = _mediaEncoder.EncoderPath;
-        return !string.IsNullOrWhiteSpace(path) && File.Exists(path);
     }
 
     // plenty to tell one alphabet from another, no need to read the whole film
