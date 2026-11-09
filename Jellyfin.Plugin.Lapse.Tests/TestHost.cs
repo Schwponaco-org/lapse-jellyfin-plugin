@@ -6,6 +6,11 @@ using System.Xml.Serialization;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Model.Serialization;
 using Microsoft.Extensions.Logging.Abstractions;
+using Xunit;
+
+// The tests write little scripts and run them straight away. A process another test forks at
+// that moment inherits the open file for an instant, and Linux then refuses to run it.
+[assembly: CollectionBehavior(DisableTestParallelization = true)]
 
 namespace Jellyfin.Plugin.Lapse.Tests;
 
