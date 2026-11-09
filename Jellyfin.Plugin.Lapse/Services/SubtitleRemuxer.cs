@@ -233,7 +233,6 @@ public class SubtitleRemuxer
         {
             File.Move(videoPath, reprieve, overwrite: true);
             File.Move(destination, videoPath, overwrite: true);
-            File.Delete(reprieve);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -250,6 +249,9 @@ public class SubtitleRemuxer
                 " The rebuilt file is still there under its own name.";
             return result;
         }
+
+        // the rebuilt video is in place by now, a stuck .lapse-old doesn't make this a failure
+        TryDelete(reprieve);
 
         result.VideoPath = videoPath;
         result.ReplacedOriginal = true;
