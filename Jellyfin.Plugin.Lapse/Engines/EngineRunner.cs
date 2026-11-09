@@ -489,6 +489,14 @@ public class EngineRunner
                 return result;
             }
 
+            var doubtful = result.Verdict is not null && !string.Equals(result.Verdict, "solid", StringComparison.OrdinalIgnoreCase);
+
+            // Since 2.3.3 LAPSE writes a doubtful answer beside --output instead of on it
+            if (doubtful && File.Exists(UnsureBeside(workPath)))
+            {
+                File.Move(UnsureBeside(workPath), workPath, overwrite: true);
+            }
+
             if (!File.Exists(workPath) || new FileInfo(workPath).Length == 0)
             {
                 result.Success = false;
@@ -500,8 +508,7 @@ public class EngineRunner
             // configured confidence. Engines without a verdict (alass, ffsubsync) always get
             // written. A forced retry is always doubtful: with a handful of cues --force
             // calls anything solid, and in testing that wrote a result 11 seconds out.
-            result.LowConfidence = result.Forced
-                || (result.Verdict is not null && !string.Equals(result.Verdict, "solid", StringComparison.OrdinalIgnoreCase));
+            result.LowConfidence = result.Forced || doubtful;
 
             // Candidate runs skip this, they were asked for because LAPSE was unsure and
             // the whole point is to get the answer on disk to compare.
@@ -701,11 +708,17 @@ public class EngineRunner
         }
     }
 
-    // Removes the work file and the .bak older LAPSE builds always write next to whatever
-    // they edit (newer ones take --no-backup).
+    // Same name LAPSE gives it: ".lapse-unsure" goes in front of the last extension
+    private static string UnsureBeside(string path)
+    {
+        return Path.ChangeExtension(path, ".lapse-unsure" + Path.GetExtension(path));
+    }
+
+    // Removes the work file, the guess a cancelled run can leave beside it, and the .bak
+    // older LAPSE builds always write next to whatever they edit (newer ones take --no-backup).
     private void CleanUp(string workPath)
     {
-        foreach (var path in new[] { workPath, workPath + ".bak" })
+        foreach (var path in new[] { workPath, workPath + ".bak", UnsureBeside(workPath) })
         {
             try
             {

@@ -21,7 +21,7 @@ If you only have a file or two to fix and no Jellyfin, try **[LAPSE in the brows
 2. Find LAPSE in the **Catalog**, install it and restart Jellyfin.
 3. Open **LAPSE** in the dashboard sidebar and press **Install** on the LAPSE engine. Nothing can sync until an engine is installed.
 
-It needs Jellyfin 10.11.11 or newer and runs on Jellyfin 12 too. The engine has builds for Linux and macOS on Intel and ARM and for Windows, and works in the official Jellyfin Docker image.
+It needs Jellyfin 10.11.11 or newer and runs on Jellyfin 12 too. The engine has builds for Linux and macOS on Intel and ARM and for Windows, and works in the official Jellyfin Docker image. On Linux outside Docker it needs glibc 2.35 or newer (Ubuntu 22.04, Debian 12 or later).
 
 ## Using it
 

@@ -38,6 +38,7 @@ public class RunnerTests
               [ "$prev" = "--output" ] && out="$a"
               prev="$a"
             done
+            [ -f "$0.beside" ] && out="${out%.*}.lapse-unsure.${out##*.}"
             cp "$2" "$out"
             case "$*" in
               *--force*) [ -f "$0.forced" ] && cat "$0.forced" || cat "$0.reply" ;;
@@ -192,6 +193,28 @@ public class RunnerTests
         Assert.False(result.CountsAsSynced);
         Assert.Equal(Path.Combine(folder, "Copy.en.shifted.srt"), result.OutputPath);
         Assert.Equal("keep me", File.ReadAllText(taken));
+    }
+
+    [Fact]
+    public async Task ADoubtfulResultBesideTheWorkFileStillLands()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        // 2.3.3 writes anything short of solid to name.lapse-unsure.srt instead of --output
+        var (runner, folder, engine) = NewRunner("{\"mode\":\"auto/shifted\",\"reference\":\"vad\",\"offset_ms\":2500,\"ratio\":1,\"verdict\":\"unsure\",\"parts\":1,\"written\":true,\"output\":\"x\",\"splits\":[],\"offsets\":[2500]}");
+        File.WriteAllText(engine + ".beside", string.Empty);
+        var (video, subtitle) = Film(folder);
+
+        var result = await WithSettings(engine, () => runner.RunAsync(new LapseEngine(), video, subtitle, SyncMode.Auto, 6, OutputMode.SidecarOnly));
+
+        Assert.True(result.Success, result.Error);
+        Assert.True(result.Unconfirmed);
+        Assert.Equal(Path.Combine(folder, "Film.en.shifted.srt"), result.OutputPath);
+        Assert.True(File.Exists(result.OutputPath));
+        Assert.Empty(Directory.GetFiles(folder, "*.lapse-*"));
     }
 
     [Fact]
