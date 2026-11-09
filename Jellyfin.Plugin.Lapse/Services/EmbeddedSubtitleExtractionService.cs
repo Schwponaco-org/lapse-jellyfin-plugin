@@ -571,8 +571,7 @@ public class EmbeddedSubtitleExtractionService
         foreach (var path in files)
         {
             if (seen.Contains(path)
-                || !SubtitleFormats.IsSubtitle(path)
-                || Path.GetFileName(path).Contains(".lapse-", StringComparison.OrdinalIgnoreCase)
+                || !SubtitleFormats.IsRealSubtitle(path)
                 || !ExistingSubtitleNames.IsNamedAfter(videoPath, path))
             {
                 continue;
