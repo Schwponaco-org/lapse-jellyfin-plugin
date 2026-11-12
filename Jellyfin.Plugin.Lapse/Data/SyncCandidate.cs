@@ -51,6 +51,12 @@ public class SyncCandidate
     public string? Verdict { get; set; }
 
     /// <summary>
+    /// Gets the cue each part after the first starts at, when LAPSE split the file. The
+    /// review list jumps to those, a split is where a wrong answer shows first.
+    /// </summary>
+    public List<int> PartStarts { get; } = new();
+
+    /// <summary>
     /// Gets or sets a short line describing what this engine did, for the picker.
     /// </summary>
     public string? Detail { get; set; }

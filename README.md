@@ -64,6 +64,8 @@ LAPSE is the only one of the supported engines that says how sure it is. Every a
 
 A doubtful answer doesn't count as synced, so the item stays on your list until you've dealt with it. If you know a subtitle belongs to the video and LAPSE is being too careful, turn on **Sync even when the engine is unsure** on the engine's card.
 
+Every answer written next to the original that way shows up under **Review** on the dashboard, from a sync you started or a bulk run. Each one has a few times to check it at: the first line, the start of each part when LAPSE split the file, and a line near the end. Pressing one plays the item in your browser from just before that line, with the answer as the subtitle. **Looks right** keeps it the way File output says, the same as keeping an answer in the player. **Wrong** deletes it and leaves the original as it was. The answers from [multi engine sync](#multi-engine-sync-experimental) are listed there too.
+
 Very short subtitles, like a forced track with five lines, give LAPSE too little to check its answer against. The plugin still has a go and treats the result as unsure. The reliable way to time those is **Sync Subtitles to Reference** against the full subtitle in the same language, or, when you have the copy the forced track was made for, **Move Subtitles from Another Copy**.
 
 When you sync a track that came out of the video, LAPSE listens to the audio for it. The copy still inside the video would only ever agree with itself.

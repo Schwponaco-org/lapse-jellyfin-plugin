@@ -169,6 +169,36 @@ public class SubtitleTimingTests
     }
 
     [Fact]
+    public async Task SpotChecksAreTheFirstLineEachSplitAndOneNearTheEnd()
+    {
+        var folder = TestHost.NewFolder();
+        var path = Path.Combine(folder, "Film.en.shifted.srt");
+        var cues = Enumerable.Range(0, 20).Select(i => $"{i + 1}\n00:{i:00}:05,000 --> 00:{i:00}:06,000\nLine {i}\n");
+        await File.WriteAllTextAsync(path, string.Join("\n", cues));
+
+        var times = await SubtitleShifter.ReadSpotChecksAsync(path, new[] { 7, 12, 15 });
+
+        // two splits at most, and 90% in is cue 18
+        Assert.Equal(new[] { 5.0, 425.0, 725.0, 1085.0 }, times.ConvertAll(t => t.TotalSeconds));
+    }
+
+    [Fact]
+    public async Task SpotChecksReadAssDialogueAndSkipWhatIsGone()
+    {
+        var folder = TestHost.NewFolder();
+        var path = Path.Combine(folder, "Film.en.ass");
+        await File.WriteAllTextAsync(
+            path,
+            "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+            + "Dialogue: 0,0:00:01.50,0:00:03.00,Default,,0,0,0,,One\n"
+            + "Comment: 0,0:00:02.00,0:00:03.00,Default,,0,0,0,,Not shown\n"
+            + "Dialogue: 0,0:01:00.00,0:01:02.00,Default,,0,0,0,,Two\n");
+
+        Assert.Equal(new[] { 1.5, 60.0 }, (await SubtitleShifter.ReadSpotChecksAsync(path, new[] { 1, 9 })).ConvertAll(t => t.TotalSeconds));
+        Assert.Empty(await SubtitleShifter.ReadSpotChecksAsync(Path.Combine(folder, "gone.srt"), Array.Empty<int>()));
+    }
+
+    [Fact]
     public void LegacyCodePageIsDetectedAndKept()
     {
         System.Text.Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);

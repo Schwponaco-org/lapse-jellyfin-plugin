@@ -53,6 +53,12 @@ public class SyncResult
     public IReadOnlyList<int>? PartOffsetsMs { get; set; }
 
     /// <summary>
+    /// Gets or sets the cue each part after the first starts at, counted from 0 in file
+    /// order. Null for a file that wasn't split.
+    /// </summary>
+    public IReadOnlyList<int>? PartStarts { get; set; }
+
+    /// <summary>
     /// Gets or sets how many lines were kept out of the measuring (sound effects, music,
     /// credit and advert lines). They still get moved with the rest.
     /// </summary>

@@ -891,6 +891,8 @@ public class SyncQueueManager : IDisposable
                 await _multiEngine.BuildAsync(item, referencePath, workPath, result, cancellationToken).ConfigureAwait(false);
             }
 
+            _multiEngine.AddForReview(item, engine, workPath, result);
+
             if (!result.Success)
             {
                 lastError = result.Error;

@@ -165,6 +165,7 @@ public partial class LapseController
             }
         }
 
+        _multiEngine.AddForReview(item, engine, subtitlePath, result);
         SaveSyncRecord(request.ItemId, result, subtitlePath);
         return result;
     }
