@@ -66,6 +66,9 @@ public class SyncQueueManager : IDisposable
     private string? _unitName;
     private string? _referenceKey;
 
+    // The user who started the job when it wasn't an admin. Only they and admins see or stop it.
+    private Guid? _startedBy;
+
     // Stop button. Replaced when the next job starts.
     private CancellationTokenSource _jobCancellation = new();
     private bool _cancelRequested;
@@ -126,10 +129,16 @@ public class SyncQueueManager : IDisposable
     /// Builds a progress snapshot for the dashboard.
     /// </summary>
     /// <param name="includeItems">Include a row per item. The progress bar polls every couple of seconds and only needs counts.</param>
-    public QueueSnapshot GetSnapshot(bool includeItems = false)
+    /// <param name="viewer">The user asking when it isn't an admin. Someone else's job looks like no job.</param>
+    public QueueSnapshot GetSnapshot(bool includeItems = false, Guid? viewer = null)
     {
         lock (_lock)
         {
+            if (viewer is not null && viewer != _startedBy)
+            {
+                return new QueueSnapshot();
+            }
+
             var current = _runningCount > 0 ? _items.Find(i => i.Status == QueueItemStatus.Running) : null;
             return new QueueSnapshot
             {
@@ -169,9 +178,10 @@ public class SyncQueueManager : IDisposable
     /// <param name="jobName">Name for the progress readout.</param>
     /// <param name="unitName">What one item is called, e.g. "episode".</param>
     /// <param name="referenceKey">Key from <see cref="SeriesSyncService.GetReferenceOptions"/>, or null for audio.</param>
-    public bool EnqueueItems(IReadOnlyList<BaseItem> items, string jobName, string unitName, string? referenceKey = null)
+    /// <param name="startedBy">The user starting it when it isn't an admin.</param>
+    public bool EnqueueItems(IReadOnlyList<BaseItem> items, string jobName, string unitName, string? referenceKey = null, Guid? startedBy = null)
     {
-        return StartBulkJob(items, jobName, unitName, referenceKey);
+        return StartBulkJob(items, jobName, unitName, referenceKey, startedBy);
     }
 
     /// <summary>
@@ -217,6 +227,11 @@ public class SyncQueueManager : IDisposable
                 // new job, don't carry the last one's rows or reference track along
                 StartFreshJobLocked(null, null, null);
             }
+            else
+            {
+                // automatic items joining a user's own job make it one for admins only
+                _startedBy = null;
+            }
 
             foreach (var item in items)
             {
@@ -235,15 +250,16 @@ public class SyncQueueManager : IDisposable
     /// Stops the running job: drops what's queued and cancels the current item (which kills
     /// the engine). Files already written stay written.
     /// </summary>
+    /// <param name="viewer">The user asking when it isn't an admin, who may only stop their own job.</param>
     /// <returns>How many queued items were dropped, or null if nothing was running.</returns>
-    public int? Cancel()
+    public int? Cancel(Guid? viewer = null)
     {
         CancellationTokenSource cancellation;
         int dropped;
 
         lock (_lock)
         {
-            if (IsIdleLocked())
+            if (IsIdleLocked() || (viewer is not null && viewer != _startedBy))
             {
                 return null;
             }
@@ -565,7 +581,8 @@ public class SyncQueueManager : IDisposable
         IReadOnlyList<BaseItem> items,
         string? jobName = null,
         string? unitName = null,
-        string? referenceKey = null)
+        string? referenceKey = null,
+        Guid? startedBy = null)
     {
         if (items.Count == 0)
         {
@@ -580,6 +597,7 @@ public class SyncQueueManager : IDisposable
             }
 
             StartFreshJobLocked(jobName, unitName, referenceKey);
+            _startedBy = startedBy;
 
             foreach (var item in items)
             {
@@ -740,6 +758,7 @@ public class SyncQueueManager : IDisposable
         _jobName = jobName;
         _unitName = unitName ?? "item";
         _referenceKey = referenceKey;
+        _startedBy = null;
 
         if (_jobCancellation.IsCancellationRequested)
         {

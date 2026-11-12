@@ -389,12 +389,12 @@ public partial class LapseController
             return denied;
         }
 
-        return _queueManager.GetSnapshot(includeItems);
+        return _queueManager.GetSnapshot(includeItems, QueueViewer());
     }
 
     /// <summary>
-    /// Stops the running job. Anyone who can start one from the context menu can stop it,
-    /// a series sync started by mistake shouldn't need an admin.
+    /// Stops the running job. Anyone who can start one from the context menu can stop their
+    /// own, a series sync started by mistake shouldn't need an admin. Other jobs are for admins.
     /// </summary>
     [HttpPost("Lapse/Queue/Cancel")]
     public ActionResult CancelQueue()
@@ -404,11 +404,17 @@ public partial class LapseController
             return denied;
         }
 
-        var dropped = _queueManager.Cancel();
+        var dropped = _queueManager.Cancel(QueueViewer());
 
         return dropped is null
             ? Conflict("There is no sync job running")
             : Ok(new { Dropped = dropped.Value });
+    }
+
+    // null for an admin, who sees every job. Anyone else only their own.
+    private Guid? QueueViewer()
+    {
+        return User.IsInRole(AdministratorRole) ? null : GetCallingUser()?.Id ?? Guid.Empty;
     }
 
     /// <summary>
@@ -466,7 +472,7 @@ public partial class LapseController
 
         var referenceKey = Blank(request.ReferenceKey);
 
-        return _queueManager.EnqueueItems(episodes, item.Name ?? "Series", "episode", referenceKey)
+        return _queueManager.EnqueueItems(episodes, item.Name ?? "Series", "episode", referenceKey, QueueViewer())
             ? Accepted(new { Queued = episodes.Count })
             : Conflict("A sync job is already running");
     }
