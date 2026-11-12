@@ -30,6 +30,15 @@ public class RunnerTests
             if [ -f "$0.usage" ]; then cat "$0.usage" >&2; exit 255; fi
             echo "Usage: lapse <video_or_subtitle> [subtitle] [auto|ols|nosplit|split] [penalty] [--output <path>] [--no-backup] [--no-sidecar] [--no-embedded] [--full-scan] [--no-cache] [--force] [--json] [--quiet] [--dry-run] [--strict] [--confidence N] [--audio-track N] [--sub-track N] [--fps N] [--snap [ms]] [--encoding NAME] [--from video] [--min-shift ms] [--whisper model]" >&2
             exit 255 ;;
+          --shift)
+            out=""
+            prev=""
+            for a in "$@"; do
+              [ "$prev" = "--output" ] && out="$a"
+              prev="$a"
+            done
+            cp "$prev" "$out"
+            echo '{"mode":"shift","reference":"none","offset_ms":'"$2"',"cues":2,"written":true}' ;;
           *)
             echo "env LAPSE_WHISPER_CLI=$LAPSE_WHISPER_CLI" >> "$0.calls"
             out=""
@@ -283,7 +292,7 @@ public class RunnerTests
     }
 
     // Points LAPSE at the fake, turns the skip on and sets any parameters, then puts it all back.
-    internal static async Task<SyncResult> WithSettings(string engine, Func<Task<SyncResult>> run, params (string Key, string? Value)[] parameters)
+    internal static async Task<T> WithSettings<T>(string engine, Func<Task<T>> run, params (string Key, string? Value)[] parameters)
     {
         var config = TestHost.Plugin.Configuration;
         var settings = config.GetEngineSettings("lapse");

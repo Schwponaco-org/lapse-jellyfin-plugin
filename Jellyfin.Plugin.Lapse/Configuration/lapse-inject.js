@@ -2789,13 +2789,13 @@
 
         lapseGet('Lapse/Items/' + context.id + '/Subtitles').then(function (subtitles) {
             var shiftable = subtitles.filter(function (s) {
-                return /\.(srt|vtt|ass|ssa)$/i.test(s.Path);
+                return /\.(srt|vtt|ass|ssa|sub|mpl2|sup|sbv|idx|smi|sami|ttml|dfxp)$/i.test(s.Path);
             });
 
             if (shiftable.length === 0) {
                 showLapseToast(subtitles.length === 0
                     ? 'No external subtitle found for this item.'
-                    : 'Shifting works on .srt, .vtt, .ass and .ssa files, and this item has none of those. Convert it first.');
+                    : 'None of this item\'s subtitles is in a format that can be shifted. Convert one to .srt first.');
                 return;
             }
 

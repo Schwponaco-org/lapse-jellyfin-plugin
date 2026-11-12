@@ -4,6 +4,7 @@
 
 using System.Text;
 using Jellyfin.Plugin.Lapse.Data;
+using Jellyfin.Plugin.Lapse.Engines;
 using Jellyfin.Plugin.Lapse.Services;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
@@ -50,8 +51,7 @@ public class SubtitleTimingTests
         var cp1251 = System.Text.Encoding.GetEncoding(1251);
         await File.WriteAllBytesAsync(path, cp1251.GetBytes(text));
 
-        var shifter = new SubtitleShifter();
-        var result = await shifter.ShiftAsync(path, -1.0, OutputMode.SidecarOnly);
+        var result = await NewShifter().ShiftAsync(path, -1.0, OutputMode.SidecarOnly);
 
         var bytes = await File.ReadAllBytesAsync(result.OutputPath);
         Assert.Equal(cp1251.GetBytes(text.Replace("00:00:05,000", "00:00:04,000").Replace("00:00:06,000", "00:00:05,000").Replace("00:00:07,000", "00:00:06,000").Replace("00:00:08,500", "00:00:07,500")), bytes);
@@ -65,7 +65,7 @@ public class SubtitleTimingTests
         var path = Path.Combine(folder, "Film.en.srt");
         await File.WriteAllTextAsync(path, "1\n00:00:05,000 --> 00:00:06,000\nHi\n", new UTF8Encoding(true));
 
-        var result = await new SubtitleShifter().ShiftAsync(path, 0.5, OutputMode.OverwriteNoBackup);
+        var result = await NewShifter().ShiftAsync(path, 0.5, OutputMode.OverwriteNoBackup);
         var bytes = await File.ReadAllBytesAsync(result.OutputPath);
 
         Assert.Equal(new byte[] { 0xEF, 0xBB, 0xBF }, bytes[..3]);
@@ -79,7 +79,7 @@ public class SubtitleTimingTests
         var path = Path.Combine(folder, "Film.en.vtt");
         await File.WriteAllTextAsync(path, "WEBVTT\n\n00:01.000 --> 00:04.000\nOne <00:02.000>two <00:03.000>three\n");
 
-        var result = await new SubtitleShifter().ShiftAsync(path, 2.0, OutputMode.SidecarOnly);
+        var result = await NewShifter().ShiftAsync(path, 2.0, OutputMode.SidecarOnly);
 
         Assert.Equal(
             "WEBVTT\n\n00:03.000 --> 00:06.000\nOne <00:04.000>two <00:05.000>three\n",
@@ -93,9 +93,49 @@ public class SubtitleTimingTests
         var path = Path.Combine(folder, "Film.en.ass");
         await File.WriteAllTextAsync(path, "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\nDialogue: 0,0:00:01.00,0:00:02.00,Default,,0,0,0,,At 0:00:09.00 we leave\n");
 
-        var result = await new SubtitleShifter().ShiftAsync(path, 1.004, OutputMode.SidecarOnly);
+        var result = await NewShifter().ShiftAsync(path, 1.004, OutputMode.SidecarOnly);
 
         Assert.Contains("Dialogue: 0,0:00:02.00,0:00:03.00,Default,,0,0,0,,At 0:00:09.00 we leave", await File.ReadAllTextAsync(result.OutputPath), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ShiftHandsVobSubToLapseAndCopiesThePictures()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var (runner, folder, engine) = RunnerTests.NewRunner(string.Empty, "Usage: lapse <video_or_subtitle> [subtitle] [--output <path>] [--no-backup] [--json]\n       lapse --shift <ms> <subtitle>");
+        var idx = Path.Combine(folder, "Film.en.idx");
+        await File.WriteAllTextAsync(idx, "timestamp: 00:00:01:000, filepos: 000000000\n");
+        await File.WriteAllTextAsync(Path.Combine(folder, "Film.en.sub"), "pictures");
+
+        var result = await RunnerTests.WithSettings(engine, () => new SubtitleShifter(new EngineRegistry(), runner).ShiftAsync(idx, 1.5, OutputMode.SidecarOnly));
+
+        Assert.Equal(Path.Combine(folder, "Film.en.shifted.idx"), result.OutputPath);
+        Assert.Equal(4, result.Shifted);
+        Assert.True(File.Exists(Path.Combine(folder, "Film.en.shifted.sub")));
+        Assert.Contains("--shift 1500 --json --no-backup --output " + result.OutputPath + " " + idx, await File.ReadAllTextAsync(engine + ".calls"), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ShiftAsksForANewerLapseWhenItCannotShift()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var (runner, folder, engine) = RunnerTests.NewRunner(string.Empty);
+        var sup = Path.Combine(folder, "Film.en.sup");
+        await File.WriteAllBytesAsync(sup, new byte[] { 0x50, 0x47 });
+
+        var error = await Assert.ThrowsAsync<NotSupportedException>(
+            () => RunnerTests.WithSettings(engine, () => new SubtitleShifter(new EngineRegistry(), runner).ShiftAsync(sup, 1.5, OutputMode.SidecarOnly)));
+
+        Assert.Contains("LAPSE 2.5.0", error.Message, StringComparison.Ordinal);
+        Assert.False(File.Exists(Path.Combine(folder, "Film.en.shifted.sup")));
     }
 
     [Fact]
@@ -138,5 +178,10 @@ public class SubtitleTimingTests
 
         Assert.Contains("مرحبا", text, StringComparison.Ordinal);
         Assert.Equal(1256, encoding.CodePage);
+    }
+
+    private static SubtitleShifter NewShifter()
+    {
+        return new SubtitleShifter(new EngineRegistry(), RunnerTests.NewRunner(string.Empty).Runner);
     }
 }

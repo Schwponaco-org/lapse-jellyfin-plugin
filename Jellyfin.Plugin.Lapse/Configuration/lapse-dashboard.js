@@ -989,8 +989,8 @@
             'in use cannot read is converted to .srt first and synced as that, so nothing is ' +
             'turned away for its format alone.</p>' +
             '<p>.sup (PGS) and .idx (VobSub, point it at the .idx file) are pictures of text ' +
-            'rather than text. LAPSE can still move their timing, because timing is timing, but ' +
-            'converting, translating and shifting by hand all need words and cannot touch them. ' +
+            'rather than text. LAPSE can still move their timing, because timing is timing, and from ' +
+            '2.5.0 shift them by hand too, but converting and translating need words and cannot touch them. ' +
             'Those need OCR first, with something like Subtitle Edit.</p>' +
             (broadcastFormats(withFormats)
                 ? '<p>.stl (EBU STL) and .scc (Scenarist) are broadcast formats. The engine syncs them fine, but ' +
@@ -2324,7 +2324,7 @@
             '      <input is="emby-input" id="lapseAdvNudge" type="number" step="0.1" value="0" />' +
             '      <button is="emby-button" type="button" class="raised lapseSmallButton" id="lapseAdvNudgeApply" ' + (subtitles.length === 0 ? 'disabled' : '') + '><span>Shift</span></button>' +
             '    </div>' +
-            '    <div class="fieldDescription">Still slightly off? Minus makes subtitles show up earlier, plus later. Works on .srt, .vtt, .ass and .ssa, and does not use an engine.</div>' +
+            '    <div class="fieldDescription">Still slightly off? Minus makes subtitles show up earlier, plus later. Works on .srt, .vtt, .ass and .ssa without an engine, and on the other formats LAPSE reads with LAPSE 2.5.0 or newer.</div>' +
             '  </div>');
 
         var engineSelect = overlay.querySelector('#lapseAdvEngine');

@@ -676,9 +676,11 @@ public class EngineRunner
         return Path.ChangeExtension(path, "." + outputFormat);
     }
 
-    // VobSub is two files: .idx has the timings, .sub the pictures, and players find the
-    // .sub by the .idx's name. A sidecar .idx needs its own copy of the pictures.
-    private void CopyVobSubCompanion(string subtitlePath, string destination)
+    /// <summary>
+    /// VobSub is two files: .idx has the timings, .sub the pictures, and players find the
+    /// .sub by the .idx's name. A sidecar .idx needs its own copy of the pictures.
+    /// </summary>
+    public void CopyVobSubCompanion(string subtitlePath, string destination)
     {
         if (!string.Equals(Path.GetExtension(subtitlePath), ".idx", StringComparison.OrdinalIgnoreCase)
             || string.Equals(subtitlePath, destination, StringComparison.OrdinalIgnoreCase))
@@ -701,7 +703,7 @@ public class EngineRunner
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             // the .idx is written anyway, it just won't show anything. worth a log line, not a failed run
-            _logger.LogWarning(ex, "Synced {Idx} but could not copy its .sub pictures to {Target}", subtitlePath, target);
+            _logger.LogWarning(ex, "Wrote {Idx} but could not copy its .sub pictures to {Target}", subtitlePath, target);
         }
     }
 
