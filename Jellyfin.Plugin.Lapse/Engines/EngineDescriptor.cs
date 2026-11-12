@@ -246,6 +246,9 @@ public class EngineDescriptor
             return arm ? MacArm64 ?? MacAmd64 : MacAmd64;
         }
 
-        return arm ? LinuxArm64 : LinuxAmd64;
+        // 32 bit ARM (Raspberry Pi OS) has nothing, an amd64 build there just won't start
+        return arm ? LinuxArm64
+            : RuntimeInformation.OSArchitecture == Architecture.X64 ? LinuxAmd64
+            : null;
     }
 }
