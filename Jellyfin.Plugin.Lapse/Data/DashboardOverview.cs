@@ -48,6 +48,11 @@ public class RecentActivityEntry
     public string? OutputPath { get; set; }
 
     /// <summary>
+    /// Gets or sets a value indicating whether LAPSE was unsure and the result is waiting to be checked.
+    /// </summary>
+    public bool Unsure { get; set; }
+
+    /// <summary>
     /// Gets or sets a value indicating whether this has already been put back.
     /// </summary>
     public bool Reverted { get; set; }

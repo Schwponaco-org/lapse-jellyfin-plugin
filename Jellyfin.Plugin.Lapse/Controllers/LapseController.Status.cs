@@ -122,6 +122,9 @@ public partial class LapseController
                 WhenUtc = entry.WhenUtc,
                 Detail = entry.Detail,
                 OutputPath = entry.OutputPath,
+
+                // older entries only said so in the detail line
+                Unsure = entry.Unsure || (entry.Detail?.EndsWith("written beside the original to check", StringComparison.Ordinal) ?? false),
                 Reverted = entry.Reverted,
                 Superseded = entry.Superseded,
                 CanRevert = SyncHistoryService.CanRevert(entry)

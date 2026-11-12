@@ -1274,42 +1274,47 @@ public class SyncQueueManager : IDisposable
             OutputWriteUtc = WriteTimeOf(result.OutputPath),
 
             // keep it short, a paragraph here pushed the name off the row
-            Detail = DescribeForHistory(result)
+            Detail = DescribeForHistory(result),
+            Unsure = result.Unconfirmed
         };
 
         SyncHistoryService.Append(plugin.Configuration, entry);
         return entry;
     }
 
-    private static string DescribeForHistory(SyncResult result)
+    // Read on the dashboard by people who never see the engine, so plain words, not its output
+    internal static string DescribeForHistory(SyncResult result)
     {
-        var parts = new List<string>();
+        string moved;
 
         // a split file's one offset_ms only covers one part, 2.3.0 says where each went
         if (result.PartOffsetsMs is { Count: > 1 } split)
         {
-            parts.Add("moved " + string.Join(" then ", split.Select(o => o + "ms")));
+            moved = $"Moved in {split.Count} parts, from {Seconds(split.Min())} to {Seconds(split.Max())}";
         }
         else if (result.OffsetMs is not null and not 0)
         {
-            parts.Add($"moved {result.OffsetMs}ms");
+            moved = "Moved " + Seconds(result.OffsetMs.Value);
         }
-
-        if (result.Slope.HasValue)
+        else
         {
-            parts.Add($"stretched {result.Slope.Value * 100:0.###}%");
+            moved = result.Slope.HasValue ? "Stretched to fit" : "Lined up";
         }
 
-        if (result.Verdict is not null)
+        if (string.Equals(result.Verdict, "nothing", StringComparison.Ordinal))
         {
-            parts.Add(result.Verdict);
+            moved = "No match in the audio";
         }
 
-        if (result.Unconfirmed)
-        {
-            parts.Add("written beside the original to check");
-        }
+        return result.Unconfirmed
+            ? moved + ". Written beside the original for you to check."
+            : moved + ".";
+    }
 
-        return parts.Count == 0 ? "synced" : string.Join(", ", parts);
+    // positive means the subtitles come later
+    private static string Seconds(int ms)
+    {
+        var text = (Math.Abs(ms) / 1000.0).ToString(Math.Abs(ms) < 10000 ? "0.0" : "0", CultureInfo.InvariantCulture) + " s";
+        return ms < 0 ? text + " earlier" : text + " later";
     }
 }

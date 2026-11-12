@@ -63,6 +63,21 @@ public class BulkRunTests
     }
 
     [Fact]
+    public void DescribesASyncInPlainWords()
+    {
+        Assert.Equal("Moved 4.2 s earlier.", SyncQueueManager.DescribeForHistory(new SyncResult { OffsetMs = -4230 }));
+        Assert.Equal(
+            "Moved 534 s later. Written beside the original for you to check.",
+            SyncQueueManager.DescribeForHistory(new SyncResult { OffsetMs = 534080, Unconfirmed = true }));
+        Assert.Equal(
+            "No match in the audio. Written beside the original for you to check.",
+            SyncQueueManager.DescribeForHistory(new SyncResult { OffsetMs = -8707, Verdict = "nothing", Unconfirmed = true }));
+        Assert.Equal(
+            "Moved in 2 parts, from 1.5 s earlier to 0.3 s later.",
+            SyncQueueManager.DescribeForHistory(new SyncResult { PartOffsetsMs = new[] { -1500, 300 } }));
+    }
+
+    [Fact]
     public async Task PostsToNtfyAndDiscordAndSwallowsFailures()
     {
         var config = TestHost.Plugin.Configuration;
