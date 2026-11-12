@@ -124,7 +124,15 @@ public partial class LapseController
 
         // a subtitle LAPSE can't read goes in as srt and comes out as srt, so name it that way
         var outputFormat = EngineRunner.ResolveConversionTarget(runtime, engine, subtitlePath);
-        var destination = CopiedSubtitleNames.ResolveDestination(item.Path, source.Path, subtitlePath, subtitle.Language, outputFormat);
+        string destination;
+        try
+        {
+            destination = CopiedSubtitleNames.ResolveDestination(item.Path, source.Path, subtitlePath, subtitle.Language, outputFormat);
+        }
+        catch (IOException ex)
+        {
+            return BadRequest(ex.Message);
+        }
 
         var result = await _runner
             .RunAsync(

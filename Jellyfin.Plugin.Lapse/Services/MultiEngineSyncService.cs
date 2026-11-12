@@ -314,11 +314,12 @@ public class MultiEngineSyncService
                 ? null
                 : winnerFormat;
 
-            var destination = EngineRunner.ResolveDestination(set.OriginalPath, outputMode, outputFormat);
+            string destination;
             string? backupPath;
 
             try
             {
+                destination = EngineRunner.ResolveDestination(set.OriginalPath, outputMode, outputFormat);
                 backupPath = EngineRunner.TakeBackup(destination, outputMode);
 
                 if (!string.Equals(winner.Path, destination, StringComparison.Ordinal))
@@ -328,7 +329,7 @@ public class MultiEngineSyncService
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                _logger.LogWarning(ex, "Could not put the chosen subtitle at {Destination}", destination);
+                _logger.LogWarning(ex, "Could not put the chosen subtitle in place of {Subtitle}", set.OriginalPath);
                 return new CandidateDecision { Message = "Could not write the subtitle you chose: " + ex.Message };
             }
 

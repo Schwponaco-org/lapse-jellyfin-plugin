@@ -369,6 +369,13 @@ public partial class LapseController
             return BadRequest("That isn't a Discord webhook. Copy it from the channel's Integrations, Webhooks, it starts with https://discord.com/api/webhooks/");
         }
 
+        // Movie.srt would get Movie.en.srt, and Movie.en.srt would pass for its own sidecar and be written over
+        var suffix = Blank(settings.SidecarSuffix) ?? ".shifted";
+        if (suffix.Split('.', StringSplitOptions.RemoveEmptyEntries).Any(_languages.IsLanguage))
+        {
+            return BadRequest($"The sidecar suffix {suffix} reads as a language, so sidecars would land on other subtitles or on the original itself. Pick something like .shifted or .synced.");
+        }
+
         // outside the lock, GetVirtualFolders hits the disk
         var libraryIds = _libraryService.GetLibraryIdSet();
 
@@ -377,7 +384,7 @@ public partial class LapseController
             var config = Plugin.Instance!.Configuration;
 
             config.OutputMode = settings.OutputMode;
-            config.SidecarSuffix = Blank(settings.SidecarSuffix) ?? ".shifted";
+            config.SidecarSuffix = suffix;
             config.LowConfidenceAction = settings.LowConfidenceAction;
             config.SkipAlreadyInSync = settings.SkipAlreadyInSync;
 

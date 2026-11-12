@@ -211,7 +211,17 @@ public class EngineRunner
             stem = stem[..^suffix.Length];
         }
 
-        return ApplyFormat(Path.Combine(directory, stem + suffix + Path.GetExtension(subtitlePath)), outputFormat);
+        var sidecar = ApplyFormat(Path.Combine(directory, stem + suffix + Path.GetExtension(subtitlePath)), outputFormat);
+
+        // A suffix like ".en" (saved before it was refused) makes Movie.en.srt its own sidecar.
+        // Only an actual sidecar of another subtitle may be written over in place.
+        if (string.Equals(sidecar, subtitlePath, StringComparison.Ordinal)
+            && !(Directory.Exists(directory) && IsSidecarOfAnother(subtitlePath, Directory.EnumerateFiles(directory).Where(SubtitleFormats.IsSubtitle))))
+        {
+            throw new IOException($"The sidecar suffix {suffix} would write over {Path.GetFileName(subtitlePath)} itself. Change it under File output.");
+        }
+
+        return sidecar;
     }
 
     /// <summary>
@@ -415,9 +425,22 @@ public class EngineRunner
         }
 
         var resolvedOutputMode = ResolveOutputMode(outputMode, referencePath, subtitlePath);
-        var destination = string.IsNullOrWhiteSpace(destinationOverride)
-            ? ResolveDestination(subtitlePath, resolvedOutputMode, outputFormat)
-            : destinationOverride;
+        string destination;
+        try
+        {
+            destination = string.IsNullOrWhiteSpace(destinationOverride)
+                ? ResolveDestination(subtitlePath, resolvedOutputMode, outputFormat)
+                : destinationOverride;
+        }
+        catch (IOException ex)
+        {
+            if (convertedInput is not null)
+            {
+                CleanUp(convertedInput);
+            }
+
+            return Failed(engine, mode, ex.Message);
+        }
 
         var workPath = subtitlePath + ".lapse-tmp" + Path.GetExtension(engineInput);
 

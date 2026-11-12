@@ -207,7 +207,6 @@ public class EngineArgumentTests
 
     [Theory]
     [InlineData("/m/Film.en.srt", OutputMode.SidecarOnly, null, "/m/Film.en.shifted.srt")]
-    [InlineData("/m/Film.en.shifted.srt", OutputMode.SidecarWithBackup, null, "/m/Film.en.shifted.srt")]
     [InlineData("/m/Film.en.srt", OutputMode.OverwriteWithBackup, null, "/m/Film.en.srt")]
     [InlineData("/m/Film.en.sub", OutputMode.OverwriteNoBackup, "srt", "/m/Film.en.srt")]
     [InlineData("/m/Film.en.sub", OutputMode.SidecarOnly, "srt", "/m/Film.en.shifted.srt")]
@@ -215,6 +214,33 @@ public class EngineArgumentTests
     public void ResultsLandWhereTheOutputModeSays(string input, OutputMode mode, string? format, string expected)
     {
         Assert.Equal(expected, EngineRunner.ResolveDestination(input, mode, format));
+    }
+
+    [Fact]
+    public void ASidecarIsOnlyWrittenOverWhenItIsOne()
+    {
+        var folder = TestHost.NewFolder();
+        var original = Path.Combine(folder, "Film.en.srt");
+        var sidecar = Path.Combine(folder, "Film.en.shifted.srt");
+        File.WriteAllText(sidecar, "synced");
+
+        // without its original it's the only copy left
+        Assert.Throws<IOException>(() => EngineRunner.ResolveDestination(sidecar, OutputMode.SidecarWithBackup));
+
+        File.WriteAllText(original, "original");
+        Assert.Equal(sidecar, EngineRunner.ResolveDestination(sidecar, OutputMode.SidecarWithBackup));
+
+        var config = TestHost.Plugin.Configuration;
+        config.SidecarSuffix = ".en";
+        try
+        {
+            var error = Assert.Throws<IOException>(() => EngineRunner.ResolveDestination(original, OutputMode.SidecarOnly));
+            Assert.Contains("write over Film.en.srt", error.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            config.SidecarSuffix = ".shifted";
+        }
     }
 
     [Fact]
