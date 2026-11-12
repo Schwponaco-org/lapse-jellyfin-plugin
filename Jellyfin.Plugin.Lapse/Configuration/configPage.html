@@ -962,6 +962,21 @@
                             </button>
                         </div>
 
+                        <h3 class="lapseSubHeading">Tell me when a bulk run is done</h3>
+                        <div class="fieldDescription lapseTightNote">
+                            When a bulk, series or scheduled run finishes, LAPSE posts how many items synced,
+                            how many it was unsure of, failed or skipped, and how long it took. Leave a box
+                            empty to turn that one off. Both addresses work like passwords.
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="lapseNtfyUrl">ntfy topic URL</label>
+                            <input is="emby-input" id="lapseNtfyUrl" type="text" placeholder="https://ntfy.sh/your-topic" />
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="lapseDiscordWebhookUrl">Discord webhook URL</label>
+                            <input is="emby-input" id="lapseDiscordWebhookUrl" type="text" placeholder="https://discord.com/api/webhooks/..." />
+                        </div>
+
                         <h3 class="lapseSubHeading">
                             Extract embedded subtitles to files
                             <span class="lapseChip lapseChip-experimental">Experimental</span>

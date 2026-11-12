@@ -378,6 +378,16 @@ public class PluginConfiguration : BasePluginConfiguration
     /// </summary>
     public string? ArrWebhookToken { get; set; }
 
+    /// <summary>
+    /// Gets or sets the ntfy topic URL told when a bulk run finishes. Null is off.
+    /// </summary>
+    public string? NtfyUrl { get; set; }
+
+    /// <summary>
+    /// Gets or sets the Discord webhook told when a bulk run finishes. Null is off.
+    /// </summary>
+    public string? DiscordWebhookUrl { get; set; }
+
     // Scheduled extraction (experimental): write chosen embedded tracks out as files.
 
     /// <summary>

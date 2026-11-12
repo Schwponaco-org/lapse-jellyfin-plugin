@@ -225,6 +225,16 @@ public class PluginSettings
     public string? ArrWebhookToken { get; set; }
 
     /// <summary>
+    /// Gets or sets the ntfy topic URL for bulk run notifications.
+    /// </summary>
+    public string? NtfyUrl { get; set; }
+
+    /// <summary>
+    /// Gets or sets the Discord webhook URL for bulk run notifications.
+    /// </summary>
+    public string? DiscordWebhookUrl { get; set; }
+
+    /// <summary>
     /// Gets or sets a value indicating whether the scheduled extraction of embedded
     /// subtitles is on.
     /// </summary>

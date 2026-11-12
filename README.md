@@ -108,6 +108,7 @@ All of this is off until you turn it on, and pressing a button yourself always w
 - **Schedules**: a library can be synced daily or weekly at a time you pick.
 - **Radarr and Sonarr**: add a Webhook connection pointing at LAPSE and imports get synced as soon as Jellyfin has them. Paths are matched on folder and file name as well, so it works when Radarr and Jellyfin see the media under different mount points.
 - **What a run does**: sync, convert, or both, and optionally translate the result or add a readable copy.
+- **When a run is done**: a bulk, series or scheduled run can post to an ntfy topic or a Discord webhook how many items synced, were unsure, failed or were skipped, and how long it took. A notification that doesn't get through is logged and changes nothing else.
 
 A run nobody is watching skips any subtitle that's already synced and hasn't changed since, so a nightly schedule only works on what's new. It also leaves the subtitle tracks inside videos alone, since those came with the release and are usually right.
 

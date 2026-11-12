@@ -3168,6 +3168,8 @@
         view.querySelector('#lapseOpenSubtitlesPassword').value = currentSettings.OpenSubtitlesPassword || '';
         view.querySelector('#lapseArrWebhookEnabled').checked = !!currentSettings.ArrWebhookEnabled;
         renderWebhookUrl(view);
+        view.querySelector('#lapseNtfyUrl').value = currentSettings.NtfyUrl || '';
+        view.querySelector('#lapseDiscordWebhookUrl').value = currentSettings.DiscordWebhookUrl || '';
 
         view.querySelector('#lapseExtractEnabled').checked = !!currentSettings.ExtractEmbeddedEnabled;
         view.querySelector('#lapseExtractLanguages').value = currentSettings.ExtractLanguages || '';
@@ -3746,6 +3748,8 @@
             OpenSubtitlesPassword: view.querySelector('#lapseOpenSubtitlesPassword').value || null,
             OpenSubtitlesLanguage: view.querySelector('#lapseOpenSubtitlesLanguage').value || 'en',
             ArrWebhookEnabled: view.querySelector('#lapseArrWebhookEnabled').checked,
+            NtfyUrl: view.querySelector('#lapseNtfyUrl').value.trim() || null,
+            DiscordWebhookUrl: view.querySelector('#lapseDiscordWebhookUrl').value.trim() || null,
             ExtractEmbeddedEnabled: view.querySelector('#lapseExtractEnabled').checked,
             ExtractLibraryIds: selectedExtractLibraryIds(view),
             ExtractLanguages: view.querySelector('#lapseExtractLanguages').value.trim() || null,

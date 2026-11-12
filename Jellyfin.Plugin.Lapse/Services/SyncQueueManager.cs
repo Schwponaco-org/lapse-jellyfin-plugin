@@ -33,6 +33,7 @@ public class SyncQueueManager : IDisposable
     private readonly Translation.TranslationService _translationService;
     private readonly ReadableSubtitleService _readable;
     private readonly MultiEngineSyncService _multiEngine;
+    private readonly RunNotifier _notifier;
     private readonly ILogger<SyncQueueManager> _logger;
     private readonly object _lock = new();
 
@@ -68,6 +69,14 @@ public class SyncQueueManager : IDisposable
     private CancellationTokenSource _jobCancellation = new();
     private bool _cancelRequested;
 
+    // What the job adds up to, for the notification when it's done. The counters go up
+    // from the item being synced, so outside _lock.
+    private bool _runOpen;
+    private DateTime _startedUtc;
+    private int _synced;
+    private int _unsure;
+    private int _failed;
+
     /// <summary>
     /// Initializes a new instance of the <see cref="SyncQueueManager"/> class.
     /// </summary>
@@ -81,6 +90,7 @@ public class SyncQueueManager : IDisposable
         Translation.TranslationService translationService,
         ReadableSubtitleService readable,
         MultiEngineSyncService multiEngine,
+        RunNotifier notifier,
         ILogger<SyncQueueManager> logger)
     {
         _libraryManager = libraryManager;
@@ -92,6 +102,7 @@ public class SyncQueueManager : IDisposable
         _translationService = translationService;
         _readable = readable;
         _multiEngine = multiEngine;
+        _notifier = notifier;
         _logger = logger;
     }
 
@@ -256,6 +267,7 @@ public class SyncQueueManager : IDisposable
         CancellationToken cancellationToken)
     {
         var succeeded = 0;
+        BulkRun? finished = null;
 
         lock (_lock)
         {
@@ -296,10 +308,12 @@ public class SyncQueueManager : IDisposable
             lock (_lock)
             {
                 _scheduledRuns--;
+                finished = TakeFinishedRunLocked();
             }
 
             await CloseBatchSessionAsync().ConfigureAwait(false);
             Plugin.Instance?.FlushDeferredSave();
+            Report(finished);
         }
 
         return succeeded;
@@ -571,6 +585,8 @@ public class SyncQueueManager : IDisposable
     {
         try
         {
+            BulkRun? finished = null;
+
             while (true)
             {
                 Guid itemId;
@@ -579,6 +595,7 @@ public class SyncQueueManager : IDisposable
                     if (_pending.Count == 0)
                     {
                         _workerRunning = false;
+                        finished = TakeFinishedRunLocked();
                         break;
                     }
 
@@ -595,6 +612,7 @@ public class SyncQueueManager : IDisposable
 
             await CloseBatchSessionAsync().ConfigureAwait(false);
             Plugin.Instance?.FlushDeferredSave();
+            Report(finished);
         }
         catch (Exception ex)
         {
@@ -657,6 +675,7 @@ public class SyncQueueManager : IDisposable
             // letting this out would kill the worker with the item still marked running
             _logger.LogError(ex, "Syncing item {ItemId} failed unexpectedly", itemId);
             SetItemStatus(itemId, QueueItemStatus.Failed);
+            Interlocked.Increment(ref _failed);
 
             try
             {
@@ -701,6 +720,49 @@ public class SyncQueueManager : IDisposable
         }
 
         _cancelRequested = false;
+
+        _runOpen = true;
+        _startedUtc = DateTime.UtcNow;
+        _synced = 0;
+        _unsure = 0;
+        _failed = 0;
+    }
+
+    // The job's summary once the queue has gone idle, null while there's more to come. One
+    // item on its own (a new episode, a webhook call) isn't a bulk run.
+    private BulkRun? TakeFinishedRunLocked()
+    {
+        if (!_runOpen || !IsIdleLocked())
+        {
+            return null;
+        }
+
+        _runOpen = false;
+
+        if (_items.Count < 2)
+        {
+            return null;
+        }
+
+        return new BulkRun
+        {
+            Name = _jobName ?? "Bulk sync",
+            StartedUtc = _startedUtc,
+            FinishedUtc = DateTime.UtcNow,
+            Synced = _synced,
+            Unsure = _unsure,
+            Failed = _failed,
+            Skipped = _items.Count - _synced - _unsure - _failed,
+            Stopped = _cancelRequested
+        };
+    }
+
+    private void Report(BulkRun? run)
+    {
+        if (run is not null)
+        {
+            _ = Task.Run(() => _notifier.NotifyAsync(run));
+        }
     }
 
     private void AddRowLocked(BaseItem item)
@@ -759,6 +821,15 @@ public class SyncQueueManager : IDisposable
         SaveRecord(itemId, status, message, result, syncedPaths, deferSave: true);
 
         var failed = status == MovieSyncStatus.Failed;
+        if (failed)
+        {
+            Interlocked.Increment(ref _failed);
+        }
+        else if (status == MovieSyncStatus.Synced)
+        {
+            Interlocked.Increment(ref _synced);
+        }
+
         SetItemStatus(itemId, failed ? QueueItemStatus.Failed : QueueItemStatus.Done);
         return !failed;
     }
@@ -941,6 +1012,11 @@ public class SyncQueueManager : IDisposable
         // Stays pending with the reason, unless every subtitle was simply already right.
         if (lastSkip is not null)
         {
+            if (doubted)
+            {
+                Interlocked.Increment(ref _unsure);
+            }
+
             return Finish(itemId, doubted ? MovieSyncStatus.Pending : MovieSyncStatus.Synced, lastSkip, lastResult, syncedPaths);
         }
 
