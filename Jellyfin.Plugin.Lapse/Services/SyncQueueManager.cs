@@ -1369,7 +1369,7 @@ public partial class SyncQueueManager : IDisposable
     private static partial Regex OldDetailRegex();
 
     // positive means the subtitles come later
-    private static string Seconds(int ms)
+    internal static string Seconds(int ms)
     {
         var size = Math.Abs(ms);
         var text = size < 1000
