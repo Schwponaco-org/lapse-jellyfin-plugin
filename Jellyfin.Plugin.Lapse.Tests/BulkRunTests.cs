@@ -80,6 +80,12 @@ public class BulkRunTests
             SyncQueueManager.ReadableDetail("moved -8707ms, nothing, written beside the original to check"));
         Assert.Equal("Moved 4.2 s earlier.", SyncQueueManager.ReadableDetail("moved -4230ms, solid"));
         Assert.Equal("Wrote a readable copy in Arial", SyncQueueManager.ReadableDetail("Wrote a readable copy in Arial"));
+        Assert.Equal(
+            "Moved 3.3 s earlier. Written beside the original for you to check.",
+            SyncQueueManager.ReadableDetail("moved -3256ms, stretched -4.096%, unsure, written beside the original to check"));
+        Assert.Equal("Moved in 2 parts, from 1.5 s earlier to 0.3 s later.", SyncQueueManager.ReadableDetail("moved -1500ms then 300ms, solid"));
+        Assert.Equal("Stretched to fit.", SyncQueueManager.ReadableDetail("stretched 0,1%, solid"));
+        Assert.Equal("Lined up.", SyncQueueManager.ReadableDetail("synced"));
     }
 
     [Fact]

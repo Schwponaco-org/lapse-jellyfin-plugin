@@ -1356,25 +1356,50 @@ public partial class SyncQueueManager : IDisposable
         return moved;
     }
 
-    // History written before the plain words, "moved -8707ms, nothing, written beside the original to check"
+    // History written before the plain words, "moved -8707ms, stretched -4.096%, unsure, written beside the original to check"
     internal static string? ReadableDetail(string? detail)
     {
-        var old = detail is null ? null : OldDetailRegex().Match(detail);
-        if (old is null || !old.Success)
+        if (detail is null)
         {
-            return detail;
+            return null;
         }
 
-        return DescribeForHistory(new SyncResult
+        var result = new SyncResult();
+
+        foreach (var part in detail.Split(", "))
         {
-            OffsetMs = int.Parse(old.Groups["ms"].Value, CultureInfo.InvariantCulture),
-            Verdict = old.Groups["verdict"].Success ? old.Groups["verdict"].Value : null,
-            Unconfirmed = old.Groups["check"].Success
-        });
+            var moved = OldMoveRegex().Match(part);
+
+            if (moved.Success)
+            {
+                var offsets = moved.Groups["ms"].Captures.Select(c => int.Parse(c.Value, CultureInfo.InvariantCulture)).ToArray();
+                result.OffsetMs = offsets[0];
+                result.PartOffsetsMs = offsets.Length > 1 ? offsets : null;
+            }
+            else if (part.StartsWith("stretched ", StringComparison.Ordinal))
+            {
+                // only whether it was stretched shows up in the plain words
+                result.Slope = 1;
+            }
+            else if (part is "solid" or "unsure" or "nothing")
+            {
+                result.Verdict = part;
+            }
+            else if (part == "written beside the original to check")
+            {
+                result.Unconfirmed = true;
+            }
+            else if (part != "synced")
+            {
+                return detail;
+            }
+        }
+
+        return DescribeForHistory(result);
     }
 
-    [GeneratedRegex(@"^moved (?<ms>-?\d+)ms(, (?<verdict>solid|unsure|nothing))?(?<check>, written beside the original to check)?$")]
-    private static partial Regex OldDetailRegex();
+    [GeneratedRegex(@"^moved (?<ms>-?\d+)ms( then (?<ms>-?\d+)ms)*$")]
+    private static partial Regex OldMoveRegex();
 
     // "4.2 s later", "8:54 earlier", positive means the subtitles come later
     internal static string Seconds(int ms)
