@@ -391,6 +391,21 @@ public class MultiEngineSyncService
     }
 
     /// <summary>
+    /// Takes an answer off the waiting list once its file was removed some other way, by an
+    /// Undo say. Hold <see cref="Plugin.ConfigurationLock"/>, the caller saves.
+    /// </summary>
+    public static void Forget(string candidatePath)
+    {
+        var config = Plugin.Instance!.Configuration;
+        foreach (var set in config.PendingCandidates)
+        {
+            set.Candidates.RemoveAll(c => string.Equals(c.Path, candidatePath, StringComparison.Ordinal));
+        }
+
+        config.PendingCandidates.RemoveAll(s => s.Candidates.Count == 0);
+    }
+
+    /// <summary>
     /// Finds the candidate the caller is watching, so keeping it is one press.
     /// </summary>
     public static SyncCandidate? MatchPlaying(Guid itemId, string? sessionSubtitlePath)

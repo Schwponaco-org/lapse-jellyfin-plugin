@@ -136,6 +136,10 @@ public class BulkRunTests
         var added = Written(folder, "Film.en.shifted.srt", "synced");
         added.WroteNewFile = true;
 
+        // that sidecar is an unsure answer still up for review
+        var waiting = new SyncCandidateSet { OriginalPath = replaced.OutputPath! };
+        waiting.Candidates.Add(new SyncCandidate { Path = added.OutputPath! });
+
         // Bazarr put a new one there after the run
         var newer = Written(folder, "Film.da.srt", "synced");
         File.WriteAllText(newer.OutputPath + ".bak", "original");
@@ -153,6 +157,7 @@ public class BulkRunTests
         lock (Plugin.ConfigurationLock)
         {
             run.Files.ForEach(f => SyncHistoryService.Append(config, f));
+            config.PendingCandidates.Add(waiting);
         }
 
         try
@@ -164,6 +169,7 @@ public class BulkRunTests
             Assert.Equal("original", File.ReadAllText(replaced.OutputPath!));
             Assert.False(File.Exists(replaced.BackupPath));
             Assert.False(File.Exists(added.OutputPath));
+            Assert.DoesNotContain(waiting, config.PendingCandidates);
             Assert.Equal("from bazarr", File.ReadAllText(newer.OutputPath!));
             Assert.True(File.Exists(newer.BackupPath));
             Assert.Contains("left alone", outcomes[2].Outcome, StringComparison.Ordinal);

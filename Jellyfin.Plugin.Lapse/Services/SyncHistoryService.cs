@@ -195,6 +195,7 @@ public class SyncHistoryService
             if (entry.WroteNewFile)
             {
                 File.Delete(entry.OutputPath!);
+                MultiEngineSyncService.Forget(entry.OutputPath!);
                 _logger.LogInformation("Reverted a sync by removing {Path}", entry.OutputPath);
             }
             else
