@@ -1346,7 +1346,7 @@
                 '    <span class="lapseMuted lapseLibraryType">' + escapeHtml(library.CollectionType || 'mixed') + '</span>' +
                 '  </div>' +
                 '  <div class="lapseLibrarySchedule">' +
-                '    <label class="emby-checkbox-label lapseInlineCheck" title="Sync anything added to this library as it turns up. Nothing already in the library is touched.">' +
+                '    <label class="emby-checkbox-label lapseInlineCheck" title="Sync anything added to this library as it turns up, and a new subtitle on something already here. Nothing else already in the library is touched.">' +
                 '      <input type="checkbox" is="emby-checkbox" class="lapseChkAutoSync"' + (library.AutoSyncEnabled ? ' checked' : '') + ' />' +
                 '      <span>New items</span>' +
                 '    </label>' +
@@ -3050,6 +3050,7 @@
         view.querySelector('#lapseAutoTranslateLanguage').value = settings.AutoTranslateLanguage || '';
         view.querySelector('#lapseAutoTranslateSkipExisting').checked = settings.AutoTranslateSkipExisting !== false;
         view.querySelector('#lapseSkipSyncedInUnattendedRuns').checked = settings.SkipSyncedInUnattendedRuns !== false;
+        view.querySelector('#lapseAutoSyncNewSubtitles').checked = settings.AutoSyncNewSubtitles !== false;
 
         updateAutomationHint(view);
     }
@@ -3363,6 +3364,9 @@
         input.value = token
             ? (ApiClient.getUrl('Lapse/Webhook/Arr') + '?token=' + token)
             : 'Press "Generate a new URL" to create one.';
+        view.querySelector('#lapseBazarrCommand').value = token
+            ? 'curl -fsS -H "Content-Type: text/plain" --data-binary {{episode}} "' + ApiClient.getUrl('Lapse/Webhook/Path') + '?token=' + token + '"'
+            : '';
 
         // A webhook that quietly does nothing looks exactly like one that was never set
         // up, so say whether anything has ever called it.
@@ -3874,6 +3878,7 @@
             AutoTranslateLanguage: view.querySelector('#lapseAutoTranslateLanguage').value.trim() || null,
             AutoTranslateSkipExisting: view.querySelector('#lapseAutoTranslateSkipExisting').checked,
             SkipSyncedInUnattendedRuns: view.querySelector('#lapseSkipSyncedInUnattendedRuns').checked,
+            AutoSyncNewSubtitles: view.querySelector('#lapseAutoSyncNewSubtitles').checked,
             SubtitleAccessUserIds: selectedAccessUserIds(view),
             SidecarSuffix: view.querySelector('#lapseSidecarSuffix').value,
             LowConfidenceAction: selectedRadio(view, 'lapseLowConfidence', 'Sidecar'),

@@ -296,6 +296,12 @@ public class PluginConfiguration : BasePluginConfiguration
     public bool SkipSyncedInUnattendedRuns { get; set; } = true;
 
     /// <summary>
+    /// Gets or sets a value indicating whether a new subtitle file on an item that's already in
+    /// the library gets it synced, in libraries with auto-sync on.
+    /// </summary>
+    public bool AutoSyncNewSubtitles { get; set; } = true;
+
+    /// <summary>
     /// Gets or sets who besides admins may work on subtitles.
     /// </summary>
     public SubtitleAccessMode SubtitleAccess { get; set; } = SubtitleAccessMode.AdminsOnly;

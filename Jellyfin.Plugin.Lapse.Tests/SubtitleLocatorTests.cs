@@ -3,6 +3,7 @@
 // Licensed under GPL v3 - see LICENSE for details
 
 using System.Reflection;
+using Jellyfin.Plugin.Lapse.Data;
 using Jellyfin.Plugin.Lapse.Services;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.Movies;
@@ -133,6 +134,37 @@ public class SubtitleLocatorTests
         // The folder's own write time moved, so the remembered listing is not used.
         Directory.SetLastWriteTimeUtc(folder, DateTime.UtcNow.AddSeconds(5));
         Assert.Equal(new[] { added }, locator.GetExternalSubtitles(item).Select(s => s.Path));
+    }
+
+    [Fact]
+    public void OnlySubtitlesWrittenSinceTheLastSyncCountAsNew()
+    {
+        var folder = TestHost.NewFolder();
+        var video = Touch(Path.Combine(folder, "Film.mkv"));
+        var english = Touch(Path.Combine(folder, "Film.en.srt"));
+        var sidecar = Touch(Path.Combine(folder, "Film.en.shifted.srt"));
+        var danish = Touch(Path.Combine(folder, "Film.da.srt"));
+        var started = DateTime.UtcNow.AddMinutes(-10);
+
+        var item = Item(
+            video,
+            new MediaStream { Type = MediaStreamType.Subtitle, Index = 0, Path = english, IsExternal = true },
+            new MediaStream { Type = MediaStreamType.Subtitle, Index = 1, Path = sidecar, IsExternal = true },
+            new MediaStream { Type = MediaStreamType.Subtitle, Index = 2, Path = danish, IsExternal = true },
+            new MediaStream { Type = MediaStreamType.Subtitle, Index = 3, Codec = "subrip" });
+
+        // Never synced: everything but LAPSE's own sidecar, and nothing from before the server started.
+        Assert.Equal(new[] { english, danish }, AutoSyncHostedService.NewSubtitles(item, null, started));
+        Assert.Empty(AutoSyncHostedService.NewSubtitles(item, null, DateTime.UtcNow.AddMinutes(1)));
+
+        // English synced, Danish judged unsure in the same run so only the item's sync time covers it.
+        var record = new MovieSyncRecord { ItemId = item.Id, LastSyncUtc = DateTime.UtcNow.AddSeconds(5) };
+        record.SyncedSubtitles.Add(new SubtitleSyncRecord { Path = english, LastSyncUtc = DateTime.UtcNow, FileWriteUtc = File.GetLastWriteTimeUtc(english) });
+        Assert.Empty(AutoSyncHostedService.NewSubtitles(item, record, started));
+
+        // Then Bazarr or Jellyfin puts a different Danish one in its place.
+        File.SetLastWriteTimeUtc(danish, DateTime.UtcNow.AddMinutes(1));
+        Assert.Equal(new[] { danish }, AutoSyncHostedService.NewSubtitles(item, record, started));
     }
 
     /// <summary>

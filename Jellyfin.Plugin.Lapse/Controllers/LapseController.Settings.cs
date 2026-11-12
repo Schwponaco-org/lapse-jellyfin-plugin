@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
@@ -77,6 +78,7 @@ public partial class LapseController
             AutoTranslateLanguage = config.AutoTranslateLanguage,
             AutoTranslateSkipExisting = config.AutoTranslateSkipExisting,
             SkipSyncedInUnattendedRuns = config.SkipSyncedInUnattendedRuns,
+            AutoSyncNewSubtitles = config.AutoSyncNewSubtitles,
             SubtitleAccess = config.SubtitleAccess,
             SubtitleAccessUserIds = new List<string>(config.SubtitleAccessUserIds),
             OpenSubtitlesEnabled = config.OpenSubtitlesEnabled,
@@ -260,17 +262,9 @@ public partial class LapseController
     [AllowAnonymous]
     public ActionResult ArrWebhook([FromQuery] string? token, [FromBody] JsonElement payload)
     {
-        var config = Plugin.Instance!.Configuration;
-
-        if (!config.ArrWebhookEnabled || string.IsNullOrWhiteSpace(config.ArrWebhookToken))
+        if (RefuseWebhook(token) is { } refused)
         {
-            return NotFound();
-        }
-
-        if (token is null
-            || !CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(token), Encoding.UTF8.GetBytes(config.ArrWebhookToken)))
-        {
-            return Unauthorized();
+            return refused;
         }
 
         var eventType = ArrWebhookService.ReadEventType(payload);
@@ -296,9 +290,39 @@ public partial class LapseController
         }
 
         // answer right away, both apps count a slow webhook as failed and the item isn't scanned in yet anyway
-        _ = Task.Run(() => _arrWebhookService.SyncWhenScannedAsync(paths, CancellationToken.None));
+        _ = Task.Run(() => _arrWebhookService.SyncWhenScannedAsync(paths, cancellationToken: CancellationToken.None));
 
         return Ok(new { Queued = paths.Count });
+    }
+
+    /// <summary>
+    /// Syncs the video at a path, for Bazarr's post-processing command. Bazarr hands each
+    /// variable over as an argument of its own, so curl can't wrap it in JSON for the webhook
+    /// above and the path is the whole request body instead. Same switch and token.
+    /// </summary>
+    [HttpPost("Lapse/Webhook/Path")]
+    [AllowAnonymous]
+    public async Task<ActionResult> PathWebhook([FromQuery] string? token)
+    {
+        if (RefuseWebhook(token) is { } refused)
+        {
+            return refused;
+        }
+
+        using var reader = new StreamReader(Request.Body);
+        var path = (await reader.ReadToEndAsync().ConfigureAwait(false)).Trim();
+
+        ArrWebhookService.LastEvent = "path";
+        ArrWebhookService.LastEventUtc = DateTime.UtcNow;
+
+        if (!ArrWebhookService.LooksLikeVideo(path))
+        {
+            return BadRequest("Send the path of the video ({{episode}} in Bazarr), not of the subtitle");
+        }
+
+        _ = Task.Run(() => _arrWebhookService.SyncWhenScannedAsync(new[] { path }, alreadyScanned: true, CancellationToken.None));
+
+        return Ok(new { Queued = 1 });
     }
 
     /// <summary>
@@ -362,6 +386,7 @@ public partial class LapseController
             config.AutoTranslateEnabled = settings.AutoTranslateEnabled && config.AutoTranslateLanguage is not null;
             config.AutoTranslateSkipExisting = settings.AutoTranslateSkipExisting;
             config.SkipSyncedInUnattendedRuns = settings.SkipSyncedInUnattendedRuns;
+            config.AutoSyncNewSubtitles = settings.AutoSyncNewSubtitles;
 
             config.SubtitleAccess = settings.SubtitleAccess;
 
@@ -530,6 +555,24 @@ public partial class LapseController
     }
 
     // The caller's user id the way we store it, or null if we can't tell who it is.
+    private ActionResult? RefuseWebhook(string? token)
+    {
+        var config = Plugin.Instance!.Configuration;
+
+        if (!config.ArrWebhookEnabled || string.IsNullOrWhiteSpace(config.ArrWebhookToken))
+        {
+            return NotFound();
+        }
+
+        if (token is null
+            || !CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(token), Encoding.UTF8.GetBytes(config.ArrWebhookToken)))
+        {
+            return Unauthorized();
+        }
+
+        return null;
+    }
+
     private string? CallingUserKey()
     {
         return GetCallingUser()?.Id.ToString("N", CultureInfo.InvariantCulture);
