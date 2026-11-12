@@ -1322,6 +1322,16 @@ public partial class SyncQueueManager : IDisposable
     // Read on the dashboard by people who never see the engine, so plain words, not its output
     internal static string DescribeForHistory(SyncResult result)
     {
+        var moved = DescribeMove(result);
+
+        return result.Unconfirmed
+            ? moved + ". Written beside the original for you to check."
+            : moved + ".";
+    }
+
+    // "Moved 4.2 s earlier", the same words in the history and under Review
+    internal static string DescribeMove(SyncResult result)
+    {
         string moved;
 
         // a split file's one offset_ms only covers one part, 2.3.0 says where each went
@@ -1343,9 +1353,7 @@ public partial class SyncQueueManager : IDisposable
             moved = "No match in the audio";
         }
 
-        return result.Unconfirmed
-            ? moved + ". Written beside the original for you to check."
-            : moved + ".";
+        return moved;
     }
 
     // History written before the plain words, "moved -8707ms, nothing, written beside the original to check"

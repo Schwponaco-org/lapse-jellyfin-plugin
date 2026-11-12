@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using Jellyfin.Plugin.Lapse.Data;
 using Jellyfin.Plugin.Lapse.Engines;
+using Jellyfin.Plugin.Lapse.Services;
 using MediaBrowser.Model.Plugins;
 
 namespace Jellyfin.Plugin.Lapse.Configuration;
@@ -622,6 +623,26 @@ public class PluginConfiguration : BasePluginConfiguration
         }
 
         ClearBadAlassEncodings();
+
+        // answers from 2.1 read "moved it -4230ms, LAPSE called this unsure"
+        foreach (var set in PendingCandidates)
+        {
+            foreach (var candidate in set.Candidates)
+            {
+                if (candidate.Detail is { } detail
+                    && (detail.StartsWith("moved it ", StringComparison.Ordinal)
+                        || detail.StartsWith("left the timing alone", StringComparison.Ordinal)
+                        || detail.StartsWith("stretched it ", StringComparison.Ordinal)))
+                {
+                    candidate.Detail = SyncQueueManager.DescribeMove(new SyncResult
+                    {
+                        OffsetMs = candidate.OffsetMs,
+                        Slope = candidate.Slope,
+                        Verdict = candidate.Verdict
+                    }) + ".";
+                }
+            }
+        }
     }
 
     // An old version defaulted alass' encoding args to "auto", which alass 2.0 panics on.

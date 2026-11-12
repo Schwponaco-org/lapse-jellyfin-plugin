@@ -108,6 +108,21 @@ public class ConfigurationTests
     }
 
     [Fact]
+    public void AnAnswerWaitingFrom21ReadsLikeTheHistory()
+    {
+        var config = new PluginConfiguration();
+        var set = new SyncCandidateSet();
+        set.Candidates.Add(new SyncCandidate { OffsetMs = -4230, Verdict = "unsure", Detail = "moved it -4230ms, LAPSE called this unsure" });
+        set.Candidates.Add(new SyncCandidate { OffsetMs = 0, Verdict = "unsure", Detail = "left the timing alone, LAPSE called this unsure" });
+        set.Candidates.Add(new SyncCandidate { Detail = "something alass said" });
+        config.PendingCandidates.Add(set);
+
+        config.MigrateLegacySettings();
+
+        Assert.Equal(new[] { "Moved 4.2 s earlier.", "Lined up.", "something alass said" }, set.Candidates.Select(c => c.Detail));
+    }
+
+    [Fact]
     public void ASnapshotDoesNotFollowTheRecordItWasTakenFrom()
     {
         var record = new MovieSyncRecord { ItemId = Guid.NewGuid(), Status = MovieSyncStatus.Synced };

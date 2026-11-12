@@ -564,23 +564,6 @@ public class MultiEngineSyncService
 
     private static SyncCandidate Describe(IEngine engine, string path, SyncResult result)
     {
-        var parts = new List<string>();
-
-        if (result.OffsetMs is { } offset)
-        {
-            parts.Add(offset == 0 ? "Left the timing alone" : "Moved " + SyncQueueManager.Seconds(offset));
-        }
-
-        if (result.Slope.HasValue)
-        {
-            parts.Add(parts.Count == 0 ? "Stretched to fit" : "stretched to fit");
-        }
-
-        if (result.Verdict is "unsure" or "nothing")
-        {
-            parts.Add(result.Verdict == "unsure" ? "LAPSE was unsure" : "LAPSE found no match in the audio");
-        }
-
         var candidate = new SyncCandidate
         {
             EngineId = engine.Descriptor.Id,
@@ -590,7 +573,7 @@ public class MultiEngineSyncService
             OffsetMs = result.OffsetMs,
             Slope = result.Slope,
             Verdict = result.Verdict,
-            Detail = parts.Count == 0 ? result.EngineOutput : string.Join(", ", parts)
+            Detail = SyncQueueManager.DescribeMove(result) + "."
         };
 
         candidate.PartStarts.AddRange(result.PartStarts ?? Array.Empty<int>());
