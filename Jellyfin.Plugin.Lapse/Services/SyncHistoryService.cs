@@ -223,7 +223,7 @@ public class SyncHistoryService
 
             return entry.WroteNewFile
                 ? $"Deleted {Path.GetFileName(entry.OutputPath)}."
-                : $"Put {Path.GetFileName(restored)} back the way it was before that run.";
+                : $"Put {Path.GetFileName(restored)} back the way it was.";
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
