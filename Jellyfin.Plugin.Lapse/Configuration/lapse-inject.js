@@ -336,7 +336,8 @@
             document.head.appendChild(style);
         }
 
-        var family = familyNameFor(fileName);
+        // a file name, so anything that could close the CSS string goes
+        var family = familyNameFor(fileName).replace(/["\\\r\n]/g, '');
 
         // url() can't send an Authorization header, so the token goes in the query string (the web
         // client's own ASS renderer does the same)
