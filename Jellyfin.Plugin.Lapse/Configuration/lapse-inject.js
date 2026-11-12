@@ -1689,10 +1689,16 @@
 
     var panelWatchdog = null;
 
+    var panelOpener = null;
+
     function closePlayerPanel() {
         var panel = document.getElementById(PANEL_ID);
         if (panel) {
             panel.remove();
+
+            if (panelOpener && document.body.contains(panelOpener)) {
+                panelOpener.focus();
+            }
         }
 
         document.removeEventListener('keydown', panelKeyHandler, true);
@@ -1718,8 +1724,24 @@
             return;
         }
 
-        if (panel.contains(e.target)) {
-            e.stopPropagation();
+        if (!panel.contains(e.target)) {
+            return;
+        }
+
+        e.stopPropagation();
+
+        // A TV remote has only arrows, so up and down walk the panel like the client's own lists.
+        // Left and right stay with the control, which is how a slider is moved.
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            var stops = Array.prototype.filter.call(panel.querySelectorAll('button, input'), function (el) {
+                return !el.disabled && el.offsetParent !== null;
+            });
+            var next = stops.indexOf(e.target) + (e.key === 'ArrowDown' ? 1 : -1);
+
+            if (next >= 0 && next < stops.length) {
+                stops[next].focus();
+                e.preventDefault();
+            }
         }
     }
 
@@ -1742,12 +1764,16 @@
             return;
         }
 
+        panelOpener = document.querySelector('.btnSubtitles');
+
         var panel = document.createElement('div');
         panel.id = PANEL_ID;
         panel.className = 'lapseTools';
+        panel.setAttribute('role', 'dialog');
+        panel.setAttribute('aria-labelledby', 'lapseToolsTitle');
         panel.innerHTML =
             '<div class="lapseToolsHead">' +
-            '  <span class="lapseToolsTitleText">Subtitles</span>' +
+            '  <span class="lapseToolsTitleText" id="lapseToolsTitle">Subtitle tools</span>' +
             '  <button type="button" class="lapseToolsClose" id="lapseToolsClose" aria-label="Close">&times;</button>' +
             '</div>' +
             '<div class="lapseToolsBody" id="lapseToolsBody">' +
@@ -1759,6 +1785,7 @@
         watchForPlaybackEnding();
 
         panel.querySelector('#lapseToolsClose').addEventListener('click', closePlayerPanel);
+        panel.querySelector('#lapseToolsClose').focus();
 
         loadPanel();
     }
@@ -1824,15 +1851,15 @@
         return '<div class="lapseToolsSection">' +
             '  <div class="lapseToolsLabel">Delay</div>' +
             '  <div class="lapseToolsNudge">' +
-            '    <button type="button" data-nudge="-1">-1s</button>' +
-            '    <button type="button" data-nudge="-0.1">-100</button>' +
-            '    <button type="button" data-nudge="-0.025">-25</button>' +
-            '    <span class="lapseToolsValue" id="lapseDelayValue">' + formatDelay(panelDelay) + '</span>' +
-            '    <button type="button" data-nudge="0.025">+25</button>' +
-            '    <button type="button" data-nudge="0.1">+100</button>' +
-            '    <button type="button" data-nudge="1">+1s</button>' +
+            '    <button type="button" data-nudge="-1" aria-label="1 second earlier">-1s</button>' +
+            '    <button type="button" data-nudge="-0.1" aria-label="100 ms earlier">-100</button>' +
+            '    <button type="button" data-nudge="-0.025" aria-label="25 ms earlier">-25</button>' +
+            '    <span class="lapseToolsValue" id="lapseDelayValue" aria-live="polite">' + formatDelay(panelDelay) + '</span>' +
+            '    <button type="button" data-nudge="0.025" aria-label="25 ms later">+25</button>' +
+            '    <button type="button" data-nudge="0.1" aria-label="100 ms later">+100</button>' +
+            '    <button type="button" data-nudge="1" aria-label="1 second later">+1s</button>' +
             '  </div>' +
-            '  <input type="range" class="lapseToolsSlider" id="lapseDelaySlider" min="-30" max="30" step="0.025" value="' + panelDelay + '" />' +
+            '  <input type="range" class="lapseToolsSlider" id="lapseDelaySlider" min="-30" max="30" step="0.025" value="' + panelDelay + '" aria-label="Delay in seconds" />' +
             '  <div class="lapseToolsHint">' + note + ' Positive means the subtitles show up later.</div>' +
             '  <div class="lapseToolsButtons">' +
             '    <button type="button" class="lapseToolsButton" id="lapseDelayReset">Reset</button>' +
@@ -1849,7 +1876,7 @@
                 : 'The subtitle on screen is not a file LAPSE can edit, so it can only be moved for this session. ' +
                   'A track still inside the video or a burnt-in one cannot be saved.') +
             '  </div>' +
-            '  <div class="lapseToolsResult" id="lapseDelayResult"></div>' +
+            '  <div class="lapseToolsResult" id="lapseDelayResult" role="status"></div>' +
             '</div>';
     }
 
@@ -1950,7 +1977,7 @@
             '    <button type="button" class="lapseToolsButton" id="lapseToolsAdvanced">Advanced</button>' +
             '  </div>' +
             (playing ? '' : '<div class="lapseToolsHint">The subtitle on screen is not a file, so there is nothing to sync.</div>') +
-            '  <div class="lapseToolsResult" id="lapseSyncResult"></div>' +
+            '  <div class="lapseToolsResult" id="lapseSyncResult" role="status"></div>' +
             '</div>';
     }
 
@@ -2021,7 +2048,7 @@
                 ? '<div class="lapseToolsButtons"><button type="button" class="lapseToolsButton" id="lapseTrackFetch">' +
                   'Find one online</button></div>'
                 : '') +
-            '  <div class="lapseToolsResult" id="lapseTrackResult"></div>' +
+            '  <div class="lapseToolsResult" id="lapseTrackResult" role="status"></div>' +
             '</div>';
     }
 
@@ -2206,15 +2233,15 @@
             '    <span>Let LAPSE style the subtitles</span>' +
             '  </label>' +
             '  <div class="lapseToolsRow"><span>Size</span>' +
-            '    <input type="range" id="lapseLookSize" min="16" max="120" step="1" value="' + (a.FontSizePx || 48) + '" />' +
+            '    <input type="range" id="lapseLookSize" aria-label="Size" min="16" max="120" step="1" value="' + (a.FontSizePx || 48) + '" />' +
             '    <span class="lapseToolsValue" id="lapseLookSizeValue">' + (a.FontSizePx || 48) + '</span></div>' +
             '  <div class="lapseToolsRow"><span>Height</span>' +
-            '    <input type="range" id="lapseLookPosition" min="0" max="85" step="1" value="' + (a.VerticalPositionPercent || 0) + '" />' +
+            '    <input type="range" id="lapseLookPosition" aria-label="Height" min="0" max="85" step="1" value="' + (a.VerticalPositionPercent || 0) + '" />' +
             '    <span class="lapseToolsValue" id="lapseLookPositionValue">' + (a.VerticalPositionPercent || 0) + '%</span></div>' +
             '  <div class="lapseToolsHint">Height lifts the subtitles off the bottom of the picture. ' +
             'It does not move an ASS track, which carries its own positioning.</div>' +
             '  <div class="lapseToolsRow"><span>Text</span>' +
-            '    <input type="color" id="lapseLookColor" value="' + escapeHtml(a.TextColor || '#FFFFFF') + '" /></div>' +
+            '    <input type="color" id="lapseLookColor" aria-label="Text colour" value="' + escapeHtml(a.TextColor || '#FFFFFF') + '" /></div>' +
             '  <label class="lapseToolsCheck">' +
             '    <input type="checkbox" id="lapseLookBackground"' + (a.BackgroundEnabled ? ' checked' : '') + ' />' +
             '    <span>Box behind the text</span>' +
@@ -2228,7 +2255,7 @@
             '  <div class="lapseToolsButtons">' +
             '    <button type="button" class="lapseToolsButton" id="lapseLookMore">Font and spacing</button>' +
             '  </div>' +
-            '  <div class="lapseToolsResult" id="lapseLookResult"></div>' +
+            '  <div class="lapseToolsResult" id="lapseLookResult" role="status"></div>' +
             '</div>';
     }
 

@@ -340,6 +340,7 @@
 
 .lapseToolsNudge button {
     flex: 1 1 auto;
+    min-height: 2.6em;
     background: rgba(255, 255, 255, .1);
     border: 0;
     border-radius: .3em;
@@ -376,6 +377,7 @@
 
 .lapseToolsButton {
     flex: 1 1 auto;
+    min-height: 2.6em;
     background: rgba(255, 255, 255, .12);
     border: 0;
     border-radius: .3em;
