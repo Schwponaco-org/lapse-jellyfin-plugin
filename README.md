@@ -10,6 +10,8 @@ This repo is the Jellyfin plugin. The syncing itself is done by the LAPSE engine
 
 If you only have a file or two to fix and no Jellyfin, try **[LAPSE in the browser](https://schwponaco.org/lapse/)**. It's the same engine running in the tab, so the video stays on your own computer.
 
+On a server over ssh, or if you'd rather stay in a terminal, **[lapse-tui](https://github.com/Schwponaco-org/lapse-tui)** does the same from a terminal on Linux and macOS.
+
 ## Install
 
 1. In Jellyfin, open **Dashboard > Plugins > Repositories** and add this repository:
