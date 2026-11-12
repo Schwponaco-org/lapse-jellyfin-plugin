@@ -3659,7 +3659,10 @@
 
         // The waiting count is the number worth seeing without opening the page, since
         // every one of them is a decision somebody still has to make.
-        var pending = status.Pending || [];
+        // a set with only LAPSE in it is an unsure answer up for review, that has its own panel
+        var pending = (status.Pending || []).filter(function (set) {
+            return (set.Candidates || []).some(function (c) { return c.EngineId !== 'lapse'; });
+        });
         view.querySelector('#lapseMultiEngineHint').textContent = pending.length
             ? pending.length + ' waiting'
             : (availability.Enabled && usable ? 'on' : 'off');
@@ -3678,6 +3681,7 @@
         }
 
         host.innerHTML = sets.map(function (set) {
+            var count = (set.Candidates || []).length;
             var rows = (set.Candidates || []).map(function (c) {
                 return '<li>' + escapeHtml(c.EngineName) + ': ' +
                     escapeHtml(c.Detail || 'no details') +
@@ -3687,7 +3691,7 @@
             return '<div class="lapseNoteStrip">' +
                 '<strong>' + escapeHtml(set.ItemName || 'Unknown item') + '</strong><br />' +
                 escapeHtml(fileNameOf(set.OriginalPath)) + ' is still where it was. ' +
-                (set.Candidates || []).length + ' answers are waiting:' +
+                count + (count === 1 ? ' answer is' : ' answers are') + ' waiting:' +
                 '<ul style="margin:.5em 0 .6em 1.2em">' + rows + '</ul>' +
                 '<button is="emby-button" type="button" class="raised lapseSmallButton lapseDiscardCandidates" ' +
                 'data-item="' + escapeHtml(set.ItemId) + '" data-original="' + escapeHtml(set.OriginalPath) + '">' +
