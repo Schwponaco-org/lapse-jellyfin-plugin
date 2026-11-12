@@ -43,6 +43,11 @@
                         <span class="lapseNavLabel">Sync status</span>
                         <span class="lapseNavHint" id="lapseItemsHint"></span>
                     </button>
+                    <button type="button" class="lapseNavItem" data-panel="lapsePanelReview">
+                        <span class="lapseNavIcon material-icons rate_review" aria-hidden="true"></span>
+                        <span class="lapseNavLabel">Review</span>
+                        <span class="lapseNavHint" id="lapseReviewHint"></span>
+                    </button>
                     <button type="button" class="lapseNavItem" data-panel="lapsePanelBulk">
                         <span class="lapseNavIcon material-icons playlist_play" aria-hidden="true"></span>
                         <span class="lapseNavLabel">Bulk sync</span>
@@ -202,6 +207,17 @@
                             tracks by hand and want them to count. Saved straight away.
                         </div>
                         <div id="lapseItemList" class="paperList lapseItemList"></div>
+                    </section>
+
+                    <section class="lapsePanel" id="lapsePanelReview">
+                        <h2 class="lapsePanelTitle">Review</h2>
+                        <div class="fieldDescription lapseTightNote">
+                            When the engine is unsure, its answer is written beside the original instead
+                            of over it. Each time below plays the item from just before that line with the
+                            answer on screen. Looks right keeps it the way File output says, Wrong deletes
+                            it and leaves the original as it was.
+                        </div>
+                        <div id="lapseReviewList"></div>
                     </section>
 
                     <section class="lapsePanel" id="lapsePanelBulk">

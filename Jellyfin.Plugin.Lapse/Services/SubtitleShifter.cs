@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
@@ -108,6 +109,43 @@ public partial class SubtitleShifter
         var lines = await SubtitleEncoding.ReadAllLinesAsync(subtitlePath, cancellationToken).ConfigureAwait(false);
 
         return IsAss(subtitlePath) ? ReadFirstAssCue(lines) : ReadFirstTextCue(lines);
+    }
+
+    /// <summary>
+    /// Gets a few times worth watching a synced file at: the first line, where the first
+    /// two split parts start, and a line near the end.
+    /// </summary>
+    public static async Task<List<TimeSpan>> ReadSpotChecksAsync(string subtitlePath, IEnumerable<int> partStarts, CancellationToken cancellationToken = default)
+    {
+        var starts = new List<TimeSpan>();
+        if (!IsShiftable(subtitlePath) || !File.Exists(subtitlePath))
+        {
+            return starts;
+        }
+
+        var lines = await SubtitleEncoding.ReadAllLinesAsync(subtitlePath, cancellationToken).ConfigureAwait(false);
+        var isAss = IsAss(subtitlePath);
+
+        // in file order, which is how the engine counts its splits
+        foreach (var line in lines)
+        {
+            var isCue = isAss
+                ? line.TrimStart().StartsWith("Dialogue:", StringComparison.OrdinalIgnoreCase)
+                : line.Contains("-->", StringComparison.Ordinal);
+
+            if (isCue && TimestampRegex().Match(line) is { Success: true } match)
+            {
+                starts.Add(Parse(match));
+            }
+        }
+
+        // 90% in rather than the last line, end credits are often timed apart from the rest
+        return partStarts.Take(2).Append(0).Append(starts.Count * 9 / 10)
+            .Where(i => i >= 0 && i < starts.Count)
+            .Distinct()
+            .Order()
+            .Select(i => starts[i])
+            .ToList();
     }
 
     private static SubtitlePreview? ReadFirstTextCue(string[] lines)

@@ -3645,6 +3645,130 @@
         });
     }
 
+    function refreshReview(view) {
+        return lapseGet('Lapse/Review').then(function (sets) {
+            renderReview(view, sets);
+        });
+    }
+
+    function renderReview(view, sets) {
+        var host = view.querySelector('#lapseReviewList');
+        view.querySelector('#lapseReviewHint').textContent = sets.length ? sets.length + ' waiting' : '';
+
+        if (!sets.length) {
+            host.innerHTML = '<div class="fieldDescription lapseTightNote">Nothing to review.</div>';
+            return;
+        }
+
+        host.innerHTML = sets.map(function (set) {
+            var notes = [];
+
+            if (!set.InLibrary) {
+                notes.push('The item is no longer in the library.');
+            }
+
+            if (set.OriginalChanged) {
+                notes.push(fileNameOf(set.OriginalPath) + ' has changed since this was synced, so keeping the answer would undo that.');
+            }
+
+            var rows = (set.Candidates || []).map(function (c) {
+                var playable = c.Exists && set.InLibrary && c.StreamIndex != null;
+                var note = !c.Exists ? 'The file has gone from disk.'
+                    : set.InLibrary && c.StreamIndex == null ? 'Jellyfin has not picked this file up yet. Reload in a minute.'
+                    : '';
+
+                var checks = playable ? c.SpotChecks.map(function (seconds) {
+                    return '<button is="emby-button" type="button" class="raised lapseSmallButton lapseReviewPlay" ' +
+                        'data-item="' + escapeHtml(set.ItemId) + '" data-stream="' + c.StreamIndex + '" data-seconds="' + seconds + '">' +
+                        '<span>' + clockOf(seconds) + '</span></button>';
+                }).join('') : '';
+
+                var keep = c.Exists && set.InLibrary
+                    ? '<button is="emby-button" type="button" class="raised button-submit lapseSmallButton lapseReviewKeep" ' +
+                        'data-item="' + escapeHtml(set.ItemId) + '" data-path="' + escapeHtml(c.Path) + '"><span>Looks right</span></button>'
+                    : '';
+
+                return '<div style="margin-top:.6em">' + escapeHtml(c.EngineName) + ': ' + escapeHtml(c.Detail || 'no details') +
+                    ' <span style="opacity:.6">(' + escapeHtml(fileNameOf(c.Path)) + ')</span>' +
+                    (note ? '<div class="fieldDescription">' + escapeHtml(note) + '</div>' : '') +
+                    '<div class="lapseButtonRow" style="margin-top:.4em">' + checks + keep + '</div></div>';
+            }).join('');
+
+            return '<div class="lapseNoteStrip">' +
+                '<strong>' + escapeHtml(set.ItemName || 'Unknown item') + '</strong><br />' +
+                escapeHtml(fileNameOf(set.OriginalPath)) + ' is still where it was.' +
+                (notes.length ? '<div class="fieldDescription">' + escapeHtml(notes.join(' ')) + '</div>' : '') +
+                rows +
+                '<button is="emby-button" type="button" class="raised lapseSmallButton lapseReviewWrong" ' +
+                'data-item="' + escapeHtml(set.ItemId) + '" data-original="' + escapeHtml(set.OriginalPath) + '">' +
+                '<span>Wrong</span></button>' +
+                '</div>';
+        }).join('');
+
+        host.querySelectorAll('.lapseReviewPlay').forEach(function (button) {
+            button.addEventListener('click', function () {
+                playAt(button.getAttribute('data-item'), Number(button.getAttribute('data-stream')), Number(button.getAttribute('data-seconds')))
+                    .catch(function (err) {
+                        Dashboard.alert('Could not start the player: ' + ((err && err.message) || 'the server said no'));
+                    });
+            });
+        });
+
+        host.querySelectorAll('.lapseReviewKeep').forEach(function (button) {
+            button.addEventListener('click', function () {
+                decideReview(view, 'Lapse/Candidates/Keep', {
+                    ItemId: button.getAttribute('data-item'),
+                    Path: button.getAttribute('data-path')
+                });
+            });
+        });
+
+        host.querySelectorAll('.lapseReviewWrong').forEach(function (button) {
+            button.addEventListener('click', function () {
+                decideReview(view, 'Lapse/Candidates/Discard', {
+                    ItemId: button.getAttribute('data-item'),
+                    OriginalPath: button.getAttribute('data-original')
+                });
+            });
+        });
+    }
+
+    // Reloads either way: when another browser got there first the server says so, and the list should catch up.
+    function decideReview(view, path, body) {
+        lapsePost(path, body).then(function (decision) {
+            Dashboard.alert(decision.Message || 'Done.');
+        }).catch(function (err) {
+            Dashboard.alert(err.message);
+        }).then(function () {
+            return refreshReview(view);
+        });
+    }
+
+    // Jellyfin's own "play on this device" call, which the web client already listens for.
+    // Starts a few seconds early so the line can be seen coming in.
+    function playAt(itemId, streamIndex, seconds) {
+        return ApiClient.getSessions({ deviceId: ApiClient.deviceId() }).then(function (sessions) {
+            if (!sessions.length) {
+                throw new Error('this browser has no session on the server');
+            }
+
+            return ApiClient.sendPlayCommand(sessions[0].Id, {
+                PlayCommand: 'PlayNow',
+                ItemIds: itemId,
+                StartPositionTicks: Math.round(Math.max(0, seconds - 3) * 10000000),
+                SubtitleStreamIndex: streamIndex
+            });
+        });
+    }
+
+    function clockOf(seconds) {
+        var whole = Math.floor(seconds);
+        var minutes = Math.floor(whole / 60) % 60;
+        var hours = Math.floor(whole / 3600);
+
+        return (hours ? hours + ':' + (minutes < 10 ? '0' : '') : '') + minutes + ':' + (whole % 60 < 10 ? '0' : '') + (whole % 60);
+    }
+
     function refreshFontStatus(view) {
         return lapseGet('Lapse/Fonts').then(function (status) {
             renderFontStatus(view, status);
@@ -3884,6 +4008,7 @@
                 refreshOverview(view),
                 refreshProviders(view),
                 refreshItemList(view),
+                refreshReview(view),
                 refreshIgnoreRules(view),
                 refreshUsers(view),
                 refreshFolders(view),

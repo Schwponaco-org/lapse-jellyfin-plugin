@@ -498,9 +498,14 @@ public partial class LapseEngine : IEngine
             }
 
             // 2.3.0 says where each part went, the single offset_ms only covers one of them
-            if (parts is > 1 && ReadOffsets(root) is { Count: > 1 } offsets)
+            if (parts is > 1 && ReadNumbers(root, "offsets") is { Count: > 1 } offsets)
             {
                 result.PartOffsetsMs = offsets;
+            }
+
+            if (parts is > 1 && ReadNumbers(root, "splits") is { Count: > 0 } splits)
+            {
+                result.PartStarts = splits;
             }
 
             var ignored = ReadDouble(root, "ignored_cues");
@@ -563,23 +568,23 @@ public partial class LapseEngine : IEngine
         return string.Join(", ", parts);
     }
 
-    private static List<int>? ReadOffsets(JsonElement root)
+    private static List<int>? ReadNumbers(JsonElement root, string name)
     {
-        if (!root.TryGetProperty("offsets", out var element) || element.ValueKind != JsonValueKind.Array)
+        if (!root.TryGetProperty(name, out var element) || element.ValueKind != JsonValueKind.Array)
         {
             return null;
         }
 
-        var offsets = new List<int>();
+        var numbers = new List<int>();
         foreach (var value in element.EnumerateArray())
         {
             if (value.ValueKind == JsonValueKind.Number)
             {
-                offsets.Add((int)Math.Round(value.GetDouble()));
+                numbers.Add((int)Math.Round(value.GetDouble()));
             }
         }
 
-        return offsets;
+        return numbers;
     }
 
     private static string? ReadString(JsonElement root, string name)

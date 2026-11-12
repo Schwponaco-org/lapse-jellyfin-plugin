@@ -122,6 +122,7 @@ public class Lapse23Tests
 
         Assert.Equal(SyncMode.Split, result.Mode);
         Assert.Equal(new[] { -892, -4892 }, result.PartOffsetsMs);
+        Assert.Equal(new[] { 44 }, result.PartStarts);
         Assert.Equal(3, result.IgnoredCues);
         Assert.Equal("vad+whisper", result.Reference);
         Assert.Contains("whisper heard words", result.EngineOutput, StringComparison.Ordinal);
