@@ -262,6 +262,7 @@ public sealed class EngineBatchSession : IDisposable
             return null;
         }
 
+        ProcessRunner.LowerPriority(process);
         process.BeginErrorReadLine();
 
         _process = process;

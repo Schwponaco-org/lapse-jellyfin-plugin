@@ -20,14 +20,15 @@ namespace Jellyfin.Plugin.Lapse.Engines;
 public static class EngineFormats
 {
     /// <summary>
-    /// What LAPSE 2.2.4 reads (subtitle_formats in its main.cpp), written back in the same
-    /// format. .sub can be MicroDVD, MPL2 or SubViewer 2, the engine sniffs which. .idx is
-    /// VobSub. It also sniffs .txt but that's left off on purpose, .txt in a media folder
-    /// is rarely a subtitle (see <see cref="Services.SubtitleFormats.ConvertibleExtensions"/>).
+    /// What LAPSE 2.5.0 reads (what its --formats prints), written back in the same format.
+    /// .sub can be MicroDVD, MPL2 or SubViewer 2, the engine sniffs which. .idx is VobSub,
+    /// .itt is iTunes TTML and .stl is EBU or the text STL from DVD Studio Pro. It also
+    /// sniffs .txt and .xml but leaves them off, in a media folder those are rarely subtitles
+    /// (see <see cref="Services.SubtitleFormats.ConvertibleExtensions"/>).
     /// </summary>
     public static readonly string[] Lapse =
     {
-        ".srt", ".ass", ".ssa", ".vtt", ".sub", ".mpl2", ".sup", ".sbv", ".idx", ".smi", ".sami", ".ttml", ".dfxp"
+        ".srt", ".ass", ".ssa", ".vtt", ".sub", ".mpl2", ".sup", ".sbv", ".idx", ".smi", ".sami", ".ttml", ".dfxp", ".itt", ".stl", ".scc"
     };
 
     /// <summary>

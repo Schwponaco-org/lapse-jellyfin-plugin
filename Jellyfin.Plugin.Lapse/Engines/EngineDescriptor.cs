@@ -4,6 +4,8 @@
 
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 using Jellyfin.Plugin.Lapse.Data;
 
@@ -204,6 +206,16 @@ public class EngineDescriptor
     public EngineDownload? LinuxArm64 { get; set; }
 
     /// <summary>
+    /// Gets or sets the Linux build for 64 bit Intel/AMD on musl (Alpine), or null if there isn't one.
+    /// </summary>
+    public EngineDownload? LinuxMuslAmd64 { get; set; }
+
+    /// <summary>
+    /// Gets or sets the Linux build for 64 bit ARM on musl (Alpine), or null if there isn't one.
+    /// </summary>
+    public EngineDownload? LinuxMuslArm64 { get; set; }
+
+    /// <summary>
     /// Gets or sets the Windows build for 64 bit Intel/AMD, or null if there isn't one.
     /// </summary>
     public EngineDownload? WindowsAmd64 { get; set; }
@@ -247,8 +259,25 @@ public class EngineDescriptor
         }
 
         // 32 bit ARM (Raspberry Pi OS) has nothing, an amd64 build there just won't start
-        return arm ? LinuxArm64
-            : RuntimeInformation.OSArchitecture == Architecture.X64 ? LinuxAmd64
-            : null;
+        if (!arm && RuntimeInformation.OSArchitecture != Architecture.X64)
+        {
+            return null;
+        }
+
+        return GetLinuxDownload(arm, Directory.Exists("/lib") && Directory.EnumerateFiles("/lib", "ld-musl-*").Any());
+    }
+
+    /// <summary>
+    /// Gets the Linux build for a CPU and C library. A musl system (Alpine) can't load the glibc
+    /// builds, engines without a musl build get the glibc one like before.
+    /// </summary>
+    public EngineDownload? GetLinuxDownload(bool arm, bool musl)
+    {
+        if (musl)
+        {
+            return arm ? LinuxMuslArm64 ?? LinuxArm64 : LinuxMuslAmd64 ?? LinuxAmd64;
+        }
+
+        return arm ? LinuxArm64 : LinuxAmd64;
     }
 }

@@ -56,6 +56,12 @@ public class EngineRunner
     public string EnginesFolder => Path.Combine(_applicationPaths.DataPath, "lapse", "engines");
 
     /// <summary>
+    /// Gets where LAPSE caches the speech it found in each film. Jellyfin's cache folder is a
+    /// volume in Docker, LAPSE's own default would be inside the container.
+    /// </summary>
+    public string CacheFolder => Path.Combine(_applicationPaths.CachePath, "lapse");
+
+    /// <summary>
     /// Gets where an engine's binary lives once we've installed it.
     /// </summary>
     public string GetInstalledPath(IEngine engine)
@@ -107,6 +113,26 @@ public class EngineRunner
     public Task<string?> CheckRunnableAsync(IEngine engine, CancellationToken cancellationToken = default)
     {
         return _probe.CheckRunnableAsync(ResolvePath(engine), cancellationToken);
+    }
+
+    /// <summary>
+    /// Gets how many bytes LAPSE's cache takes up.
+    /// </summary>
+    public long GetCacheSize()
+    {
+        var folder = new DirectoryInfo(CacheFolder);
+        return folder.Exists ? folder.EnumerateFiles("*", SearchOption.AllDirectories).Sum(f => f.Length) : 0;
+    }
+
+    /// <summary>
+    /// Empties LAPSE's cache. Nothing is lost, the next sync of each film listens to it again.
+    /// </summary>
+    public void ClearCache()
+    {
+        if (Directory.Exists(CacheFolder))
+        {
+            Directory.Delete(CacheFolder, recursive: true);
+        }
     }
 
     /// <summary>
@@ -442,7 +468,7 @@ public class EngineRunner
                     // No time limit, a long film just takes a while and the Stop button is the
                     // way out. Cancelling kills the engine and the ffmpeg it started.
                     var process = await ProcessRunner
-                        .RunAsync(enginePath, arguments, null, cancellationToken, si => PrepareEnvironment(si, ffmpegDirectory, environment))
+                        .RunAsync(enginePath, arguments, null, cancellationToken, si => PrepareEnvironment(si, ffmpegDirectory, environment), lowPriority: true)
                         .ConfigureAwait(false);
 
                     output = (process.Stdout, process.Stderr, process.ExitCode);
@@ -676,9 +702,11 @@ public class EngineRunner
         return Path.ChangeExtension(path, "." + outputFormat);
     }
 
-    // VobSub is two files: .idx has the timings, .sub the pictures, and players find the
-    // .sub by the .idx's name. A sidecar .idx needs its own copy of the pictures.
-    private void CopyVobSubCompanion(string subtitlePath, string destination)
+    /// <summary>
+    /// VobSub is two files: .idx has the timings, .sub the pictures, and players find the
+    /// .sub by the .idx's name. A sidecar .idx needs its own copy of the pictures.
+    /// </summary>
+    public void CopyVobSubCompanion(string subtitlePath, string destination)
     {
         if (!string.Equals(Path.GetExtension(subtitlePath), ".idx", StringComparison.OrdinalIgnoreCase)
             || string.Equals(subtitlePath, destination, StringComparison.OrdinalIgnoreCase))
@@ -701,7 +729,7 @@ public class EngineRunner
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             // the .idx is written anyway, it just won't show anything. worth a log line, not a failed run
-            _logger.LogWarning(ex, "Synced {Idx} but could not copy its .sub pictures to {Target}", subtitlePath, target);
+            _logger.LogWarning(ex, "Wrote {Idx} but could not copy its .sub pictures to {Target}", subtitlePath, target);
         }
     }
 
@@ -848,11 +876,12 @@ public class EngineRunner
         File.Move(staged, shimPath, overwrite: true);
     }
 
-    private static void PrepareEnvironment(ProcessStartInfo startInfo, string? ffmpegDirectory, IReadOnlyDictionary<string, string> environment)
+    private void PrepareEnvironment(ProcessStartInfo startInfo, string? ffmpegDirectory, IReadOnlyDictionary<string, string> environment)
     {
         // ffsubsync is Python and writes to pipes in the locale encoding, we read UTF-8
         startInfo.Environment["PYTHONUTF8"] = "1";
         startInfo.Environment["PYTHONIOENCODING"] = "utf-8";
+        startInfo.Environment["LAPSE_CACHE"] = CacheFolder;
 
         foreach (var (name, value) in environment)
         {

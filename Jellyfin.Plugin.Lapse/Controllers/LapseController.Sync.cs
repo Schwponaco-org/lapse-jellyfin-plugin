@@ -561,7 +561,7 @@ public partial class LapseController
 
         // no library item to check against here, but at least make sure a typo can't
         // turn this into "overwrite that random file"
-        if (!SubtitleFormats.IsSubtitle(request.ReferencePath) || !SubtitleFormats.IsSubtitle(request.InputPath))
+        if (!SubtitleFormats.IsPickedSubtitle(request.ReferencePath) || !SubtitleFormats.IsPickedSubtitle(request.InputPath))
         {
             return BadRequest("Both paths need to be subtitle files");
         }
@@ -583,7 +583,7 @@ public partial class LapseController
 
         if (outputPath is not null)
         {
-            if (!SubtitleFormats.IsSubtitle(outputPath))
+            if (!SubtitleFormats.IsPickedSubtitle(outputPath))
             {
                 return BadRequest("The output file needs a subtitle extension");
             }

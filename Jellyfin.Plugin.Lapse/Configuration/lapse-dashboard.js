@@ -989,11 +989,11 @@
             'in use cannot read is converted to .srt first and synced as that, so nothing is ' +
             'turned away for its format alone.</p>' +
             '<p>.sup (PGS) and .idx (VobSub, point it at the .idx file) are pictures of text ' +
-            'rather than text. LAPSE can still move their timing, because timing is timing, but ' +
-            'converting, translating and shifting by hand all need words and cannot touch them. ' +
+            'rather than text. LAPSE can still move their timing, because timing is timing, and from ' +
+            '2.5.0 shift them by hand too, but converting and translating need words and cannot touch them. ' +
             'Those need OCR first, with something like Subtitle Edit.</p>' +
             (broadcastFormats(withFormats)
-                ? '<p>.stl (EBU STL) and .scc (Scenarist) are broadcast formats. The engine syncs them fine, but ' +
+                ? '<p>.stl (EBU STL, or the text STL from DVD Studio Pro) and .scc (Scenarist) are broadcast formats. The engine syncs them fine, but ' +
                   'Jellyfin cannot show either of them, so the plugin leaves them out of its subtitle lists. For these ' +
                   'files use <a href="https://schwponaco.org/lapse/" target="_blank" rel="noopener">LAPSE in the browser</a> ' +
                   'or the engine\'s <a href="https://github.com/Schwponaco-org/lapse#docker" target="_blank" rel="noopener">Docker image</a>, ' +
@@ -1287,6 +1287,26 @@
                 'This server is running ' + platform.Description + '.';
         }).catch(function () {
             // purely informational, not worth an error message
+        });
+    }
+
+    function refreshEngineCache(view) {
+        return lapseGet('Lapse/Engines/Cache').then(function (bytes) {
+            view.querySelector('#lapseEngineCacheNote').textContent =
+                'LAPSE remembers the speech it found in each film, so the next subtitle for the same film ' +
+                'takes about a second. That cache is in Jellyfin\'s cache folder and holds ' +
+                (bytes / 1048576).toFixed(1) + ' MB. Clearing it loses nothing, the next sync of each film ' +
+                'just listens to it again.';
+        }).catch(function () {
+            // purely informational, not worth an error message
+        });
+    }
+
+    function clearEngineCache(view) {
+        lapseDelete('Lapse/Engines/Cache').then(function () {
+            return refreshEngineCache(view);
+        }).catch(function (err) {
+            Dashboard.alert('Could not clear the cache: ' + err.message);
         });
     }
 
@@ -2324,7 +2344,7 @@
             '      <input is="emby-input" id="lapseAdvNudge" type="number" step="0.1" value="0" />' +
             '      <button is="emby-button" type="button" class="raised lapseSmallButton" id="lapseAdvNudgeApply" ' + (subtitles.length === 0 ? 'disabled' : '') + '><span>Shift</span></button>' +
             '    </div>' +
-            '    <div class="fieldDescription">Still slightly off? Minus makes subtitles show up earlier, plus later. Works on .srt, .vtt, .ass and .ssa, and does not use an engine.</div>' +
+            '    <div class="fieldDescription">Still slightly off? Minus makes subtitles show up earlier, plus later. Works on .srt, .vtt, .ass and .ssa without an engine, and on the other formats LAPSE reads with LAPSE 2.5.0 or newer.</div>' +
             '  </div>');
 
         var engineSelect = overlay.querySelector('#lapseAdvEngine');
@@ -3889,6 +3909,7 @@
                 refreshFolders(view),
                 refreshQueue(view),
                 refreshPlatform(view),
+                refreshEngineCache(view),
                 refreshDiagnostics(view),
                 refreshExtractStatus(view)
             ]);
@@ -3967,6 +3988,9 @@
         });
         view.querySelector('#btnCheckEngineUpdates').addEventListener('click', function () {
             checkEngineUpdates(view);
+        });
+        view.querySelector('#btnClearEngineCache').addEventListener('click', function () {
+            clearEngineCache(view);
         });
         view.querySelector('#btnSaveEngines').addEventListener('click', function () {
             saveSettings(view, 'Engine settings saved.');

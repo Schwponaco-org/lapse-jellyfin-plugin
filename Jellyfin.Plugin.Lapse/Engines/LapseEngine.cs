@@ -240,6 +240,8 @@ public partial class LapseEngine : IEngine
                 + "you keep media that isn't in a Jellyfin library. Setup and settings are in the repo.",
             LinuxAmd64 = Archive("lapse-linux-amd64.tar.gz", EnginePackaging.TarGz),
             LinuxArm64 = Archive("lapse-linux-arm64.tar.gz", EnginePackaging.TarGz),
+            LinuxMuslAmd64 = Archive("lapse-linux-musl-amd64.tar.gz", EnginePackaging.TarGz),
+            LinuxMuslArm64 = Archive("lapse-linux-musl-arm64.tar.gz", EnginePackaging.TarGz),
             MacAmd64 = Archive("lapse-macos-x86_64.tar.gz", EnginePackaging.TarGz),
             MacArm64 = Archive("lapse-macos-arm64.tar.gz", EnginePackaging.TarGz),
             WindowsAmd64 = Archive("lapse-windows-x64.zip", EnginePackaging.Zip),
@@ -264,12 +266,12 @@ public partial class LapseEngine : IEngine
         descriptor.Modes.Add(new EngineModeOption(
             SyncMode.Standard,
             "Single offset",
-            "Moves the whole file by one amount. For subtitles that are simply early or late."));
+            "Moves the whole file by one amount, up to 15 minutes either way. For subtitles that are simply early or late."));
         descriptor.Modes.Add(new EngineModeOption(
             SyncMode.Split,
             "Split",
             "Gives different parts of the file different timing. For discs cut around ad breaks, or a film joined from two rips. "
-            + "When the video has chapters, LAPSE takes them as likely places for a cut."));
+            + "When the video has chapters, LAPSE takes them as likely places for a cut. A part can sit further out than the 15 minutes a single offset reaches."));
         descriptor.Modes.Add(new EngineModeOption(
             SyncMode.Ols,
             "Framerate fix",

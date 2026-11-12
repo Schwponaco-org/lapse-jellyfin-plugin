@@ -21,7 +21,7 @@ If you only have a file or two to fix and no Jellyfin, try **[LAPSE in the brows
 2. Find LAPSE in the **Catalog**, install it and restart Jellyfin.
 3. Open **LAPSE** in the dashboard sidebar and press **Install** on the LAPSE engine. Nothing can sync until an engine is installed.
 
-It needs Jellyfin 10.11.11 or newer and runs on Jellyfin 12 too. The engine has builds for Linux and macOS on Intel and ARM and for Windows, and works in the official Jellyfin Docker image. On Linux outside Docker it needs glibc 2.35 or newer (Ubuntu 22.04, Debian 12 or later).
+It needs Jellyfin 10.11.11 or newer and runs on Jellyfin 12 too. The engine has builds for Linux and macOS on Intel and ARM and for Windows, and works in the official Jellyfin Docker image. On Linux outside Docker it needs glibc 2.35 or newer (Ubuntu 22.04, Debian 12 or later). On Alpine and other musl systems the plugin installs the musl build, which LAPSE publishes from 2.5.0.
 
 ## Using it
 
@@ -30,7 +30,7 @@ Every film, episode and video gets some new entries in its three dot menu. Admin
 - **Sync Subtitles** is the one you'll use most. Pick a subtitle if there's more than one and press Sync. **Advanced** lets you choose the engine and mode, write the result in another format, translate it in the same go, or nudge it by hand.
 - **Sync Subtitles to Reference** lines the other subtitles on an item up against one you know is right. It skips the audio, so it's quick, and very accurate when the reference is good. On a series or a season it does every episode.
 - **Move Subtitles from Another Copy** takes a subtitle that fits another copy of the film and moves it onto this one, see [Another copy of the film](#another-copy-of-the-film). It only shows up on items that have another copy.
-- **Shift Subtitles** moves a subtitle by hand, in milliseconds, with a preview of the first line. It works without an engine.
+- **Shift Subtitles** moves a subtitle by hand, in milliseconds, with a preview of the first line. `.srt`, `.vtt`, `.ass` and `.ssa` need no engine. The other formats LAPSE reads, `.sup` and `.idx` included, are shifted by LAPSE 2.5.0 or newer.
 - **Convert Subtitles** writes a subtitle out as `.srt`, `.vtt`, `.ass` or `.ssa`.
 - **Extract Embedded Subtitles** writes the subtitle tracks inside a video out as files next to it. It can also rebuild the video without them, which helps with direct play. Nothing is re-encoded, and picture tracks (PGS, VobSub) always stay in the video.
 - **Readable Subtitles** makes a copy with a dyslexia-friendly font, bigger text and wider spacing set inside the file, so it looks the same on every device. You choose which subtitles get it, and **Back to normal** undoes it.
@@ -68,7 +68,7 @@ Very short subtitles, like a forced track with five lines, give LAPSE too little
 
 When you sync a track that came out of the video, LAPSE listens to the audio for it. The copy still inside the video would only ever agree with itself.
 
-A split file gets one offset per part, and the result says where each part went, like `moved -895ms then -4900ms`. When the video has chapters, LAPSE takes them as likely places for a cut.
+A split file gets one offset per part, and the result says where each part went, like `moved -895ms then -4900ms`. When the video has chapters, LAPSE takes them as likely places for a cut. A single offset is looked for up to 15 minutes either way, but a part of a split file can sit further out than that, say after a twenty minute scene the subtitle doesn't have.
 
 ### Busy soundtracks
 
@@ -150,7 +150,7 @@ The item menu entries are for admins by default. Under **Settings > Access** you
 
 ## Subtitle formats
 
-LAPSE reads and writes `.srt`, `.ass`, `.ssa`, `.vtt`, `.sub` (MicroDVD, MPL2 and SubViewer 2), `.mpl2`, `.sup` (PGS), `.sbv`, `.idx` (VobSub), `.smi` and `.sami`, `.ttml` and `.dfxp`, in upper or lower case. Every file is written back in the format it came in.
+LAPSE reads and writes `.srt`, `.ass`, `.ssa`, `.vtt`, `.sub` (MicroDVD, MPL2 and SubViewer 2), `.mpl2`, `.sup` (PGS), `.sbv`, `.idx` (VobSub), `.smi` and `.sami`, `.ttml` and `.dfxp`, and from 2.5.0 `.itt` (iTunes Timed Text), in upper or lower case. Every file is written back in the format it came in. LAPSE 2.5.0 also reads TTML saved as `.xml`. The plugin leaves `.xml` out of its lists, since most of those next to a video are metadata, but you can pick one in **Subtitle to subtitle**.
 
 Three formats share `.sub`, so the engine looks inside the file to tell them apart:
 
@@ -162,7 +162,7 @@ Three formats share `.sub`, so the engine looks inside the file to tell them apa
 
 PGS and VobSub are pictures of text. LAPSE can still move their timing, though converting, translating or restyling them needs OCR first. alass and ffsubsync read `.srt`, `.ass`, `.ssa` and `.vtt`, and the plugin converts anything else to `.srt` for them.
 
-LAPSE also reads the broadcast formats `.stl` (EBU STL) and `.scc` (Scenarist), but Jellyfin can't show either of them, so the plugin leaves them out of its lists. For those, use [LAPSE in the browser](https://schwponaco.org/lapse/) or the engine's [Docker image](https://github.com/Schwponaco-org/lapse#docker), which take them as they are.
+LAPSE also reads the broadcast formats `.stl` (EBU STL, and from 2.5.0 the text STL from DVD Studio Pro and Spruce) and `.scc` (Scenarist), but Jellyfin can't show either of them, so the plugin leaves them out of its lists. For those, use [LAPSE in the browser](https://schwponaco.org/lapse/) or the engine's [Docker image](https://github.com/Schwponaco-org/lapse#docker), which take them as they are.
 
 ### Text encoding
 
@@ -170,7 +170,7 @@ A synced subtitle goes back out in the encoding it came in, so a Windows-1252 fi
 
 ## Engines
 
-- **LAPSE** is the engine this plugin is built around and the one to use. It works out on its own whether a subtitle is early, drifting or cut differently, tells you how sure it is, and reads the most formats. Every download is checked against the checksums published with the release. Moving a subtitle between copies and whisper need LAPSE 2.3.0, and the engine card says when a setting needs a newer build than the one installed.
+- **LAPSE** is the engine this plugin is built around and the one to use. It works out on its own whether a subtitle is early, drifting or cut differently, tells you how sure it is, and reads the most formats. Every download is checked against the checksums published with the release. Bulk runs in one process need LAPSE 2.2.3, moving a subtitle between copies and whisper need 2.3.0, and shifting formats other than `.srt`, `.vtt`, `.ass` and `.ssa`, `.itt`, TTML saved as `.xml` and the Alpine build need 2.5.0. The engine card says when a setting needs a newer build than the one installed.
 - **alass** splits a file into sections and times each one separately, which suits recordings cut around ad breaks. Linux and Windows on x86-64.
 - **ffsubsync** shifts the whole subtitle and can fix framerate mismatches. Linux, Windows and macOS.
 

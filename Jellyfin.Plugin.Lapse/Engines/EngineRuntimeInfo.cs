@@ -85,7 +85,9 @@ public class EngineRuntimeInfo
     /// </summary>
     public bool CanRead(string engineId, string? path)
     {
-        return EngineFormats.Contains(GetSubtitleExtensions(engineId), path);
+        // .xml isn't on LAPSE's --formats, it reads TTML in one from 2.5.0, the release --shift came in
+        return EngineFormats.Contains(GetSubtitleExtensions(engineId), path)
+            || (Services.SubtitleFormats.IsXml(path) && string.Equals(engineId, "lapse", StringComparison.OrdinalIgnoreCase) && HasFlag("--shift"));
     }
 
     /// <summary>
