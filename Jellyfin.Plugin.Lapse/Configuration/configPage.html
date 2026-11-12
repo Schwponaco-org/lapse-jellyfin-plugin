@@ -939,7 +939,7 @@
                         <div class="fieldDescription lapseTightNote" id="lapseOpenSubtitlesTestResult"></div>
 
                         <h3 class="lapseSubHeading">
-                            Radarr and Sonarr
+                            Radarr, Sonarr and Bazarr
                             <span class="lapseChip lapseChip-experimental">Experimental</span>
                         </h3>
                         <div class="fieldDescription lapseTightNote">
@@ -950,7 +950,7 @@
                         </div>
                         <label class="emby-checkbox-label lapseStackedCheck">
                             <input id="lapseArrWebhookEnabled" type="checkbox" is="emby-checkbox" />
-                            <span>Accept import notifications from Radarr and Sonarr</span>
+                            <span>Accept calls from Radarr, Sonarr and Bazarr</span>
                         </label>
                         <div class="inputContainer">
                             <label class="inputLabel inputLabelUnfocused" for="lapseArrWebhookUrl">Webhook URL</label>
@@ -960,6 +960,16 @@
                                 as the URL, and tick "On Import" (and "On Upgrade" if you want re-imports
                                 synced too). The secret in the URL is the only thing protecting it, so treat
                                 it like a password.
+                            </div>
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="lapseBazarrCommand">Bazarr post-processing command</label>
+                            <input is="emby-input" id="lapseBazarrCommand" type="text" readonly />
+                            <div class="fieldDescription">
+                                In Bazarr: Settings, Subtitles, turn on Custom Post-Processing and paste this as
+                                the command. Every subtitle Bazarr saves then gets synced by LAPSE, so you can
+                                turn off Bazarr's own Automatic Subtitles Synchronization. Bazarr needs to reach
+                                Jellyfin at this address and have curl.
                             </div>
                         </div>
                         <div class="lapseWebhookStatus" id="lapseArrWebhookStatus"></div>

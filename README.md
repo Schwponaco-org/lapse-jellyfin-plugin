@@ -107,6 +107,13 @@ All of this is off until you turn it on, and pressing a button yourself always w
 - **New items**: a library can sync whatever gets added to it. A subtitle that turns up later for something already in the library gets synced too, however it got there: Jellyfin's own subtitle search from any app (the OpenSubtitles plugin, say), Bazarr, or a file you copied in. That waits for Jellyfin to rescan the item and only counts files written since LAPSE last synced it, so its own output doesn't set it off again. It can be turned off under Automation.
 - **Schedules**: a library can be synced daily or weekly at a time you pick.
 - **Radarr and Sonarr**: add a Webhook connection pointing at LAPSE and imports get synced as soon as Jellyfin has them. Paths are matched on folder and file name as well, so it works when Radarr and Jellyfin see the media under different mount points.
+- **Bazarr**: turn on the webhook, then in Bazarr under Settings > Subtitles turn on Custom Post-Processing and use this as the command, with your server's address and the token from the webhook URL (the settings page shows the whole line ready to copy):
+
+  ```
+  curl -fsS -H "Content-Type: text/plain" --data-binary {{episode}} "http://jellyfin:8096/Lapse/Webhook/Path?token=YOUR_TOKEN"
+  ```
+
+  Every subtitle Bazarr saves then gets synced by LAPSE, so you can turn off Bazarr's own Automatic Subtitles Synchronization. `{{episode}}` is the video's path, films included, and it's matched the same way as Radarr's. The Bazarr container needs curl.
 - **What a run does**: sync, convert, or both, and optionally translate the result or add a readable copy.
 
 A run nobody is watching skips any subtitle that's already synced and hasn't changed since, so a nightly schedule only works on what's new. It also leaves the subtitle tracks inside videos alone, since those came with the release and are usually right.
@@ -182,7 +189,7 @@ The [engine repo](https://github.com/Schwponaco-org/lapse) has the details, plus
 - **A sync fails straight away.** Open Engines and make sure LAPSE is installed. The engine card also warns you if LAPSE has fallen back to its weaker voice detector because the Silero model or onnxruntime is missing.
 - **LAPSE says unsure or nothing about a subtitle you know is right.** Music or crowd noise under the speech can throw it. If you're sure the subtitle belongs to this release, tick **Sync even when the engine is unsure** on the engine card, or line it up against a subtitle you trust with **Sync Subtitles to Reference**.
 - **OpenSubtitles doesn't work.** Press **Test the connection** under Settings > Experimental. It tells you whether the key or the account is the problem.
-- **The Radarr or Sonarr webhook does nothing.** The webhook settings show the last call that arrived and when.
+- **The Radarr, Sonarr or Bazarr webhook does nothing.** The webhook settings show the last call that arrived and when. Bazarr's own log shows curl's answer to its post-processing command.
 
 ## Building
 

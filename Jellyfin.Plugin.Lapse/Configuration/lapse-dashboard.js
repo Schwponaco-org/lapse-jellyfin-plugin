@@ -3344,6 +3344,9 @@
         input.value = token
             ? (ApiClient.getUrl('Lapse/Webhook/Arr') + '?token=' + token)
             : 'Press "Generate a new URL" to create one.';
+        view.querySelector('#lapseBazarrCommand').value = token
+            ? 'curl -fsS -H "Content-Type: text/plain" --data-binary {{episode}} "' + ApiClient.getUrl('Lapse/Webhook/Path') + '?token=' + token + '"'
+            : '';
 
         // A webhook that quietly does nothing looks exactly like one that was never set
         // up, so say whether anything has ever called it.

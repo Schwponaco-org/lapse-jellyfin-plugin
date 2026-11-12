@@ -11,7 +11,7 @@ namespace Jellyfin.Plugin.Lapse.Tests;
 
 /// <summary>
 /// What reaches the plugin over the web: the script tag added to the web client's page,
-/// and the notifications Radarr and Sonarr send.
+/// and the notifications Radarr, Sonarr and Bazarr send.
 /// </summary>
 public class WebTests
 {
@@ -91,5 +91,15 @@ public class WebTests
         Assert.Equal("test", ArrWebhookService.ReadEventType(test.RootElement));
         Assert.Empty(ArrWebhookService.ReadPaths(test.RootElement));
         Assert.Null(ArrWebhookService.ReadEventType(junk.RootElement));
+    }
+
+    [Theory]
+    [InlineData("/tv/Show/Season 1/Show S01E01.mkv", true)]
+    [InlineData("D:\\Films\\Ocean's Eleven (2001)\\Ocean's Eleven.MP4", true)]
+    [InlineData("/tv/Show/Season 1/Show S01E01.en.srt", false)]
+    [InlineData("", false)]
+    public void BazarrMustSendTheVideoNotTheSubtitle(string path, bool expected)
+    {
+        Assert.Equal(expected, ArrWebhookService.LooksLikeVideo(path));
     }
 }
