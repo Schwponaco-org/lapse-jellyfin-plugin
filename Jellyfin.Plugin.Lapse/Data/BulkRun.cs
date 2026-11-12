@@ -3,6 +3,7 @@
 // Licensed under GPL v3 - see LICENSE for details
 
 using System;
+using System.Collections.Generic;
 
 namespace Jellyfin.Plugin.Lapse.Data;
 
@@ -11,6 +12,11 @@ namespace Jellyfin.Plugin.Lapse.Data;
 /// </summary>
 public class BulkRun
 {
+    /// <summary>
+    /// Gets or sets the id, so an undo can name the run.
+    /// </summary>
+    public Guid Id { get; set; } = Guid.NewGuid();
+
     /// <summary>
     /// Gets or sets what the run was, e.g. "Scheduled sync" or a series name.
     /// </summary>
@@ -50,4 +56,9 @@ public class BulkRun
     /// Gets or sets a value indicating whether someone pressed Stop.
     /// </summary>
     public bool Stopped { get; set; }
+
+    /// <summary>
+    /// Gets the history entry of every file the run wrote.
+    /// </summary>
+    public List<SyncHistoryEntry> Files { get; init; } = new();
 }

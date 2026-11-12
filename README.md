@@ -50,6 +50,7 @@ Everyone can use the delay slider and change how subtitles look for their own ac
 
 - **Sync status** lists every item in the libraries you've turned on and where it stands. **Bulk sync** runs a whole library or folder. **Subtitle to subtitle** lines up any two subtitle files without going through an item.
 - **Recent activity** has an **Undo** on every sync, which restores the backup or deletes the file the sync added.
+- **Undo run** under Bulk sync does that for every file a bulk, series or scheduled run wrote, for the last five runs. A file written again since the run, by a later sync, Bazarr or by hand, is left alone and listed with the reason, and so is one whose backup has gone. It waits until no job is running.
 - **Stop** in the progress strip ends a running job, and the engine stops with it. Files already written stay as they are.
 
 ## How LAPSE decides

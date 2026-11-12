@@ -11,7 +11,8 @@ using Xunit;
 namespace Jellyfin.Plugin.Lapse.Tests;
 
 /// <summary>
-/// What happens when a bulk run is over: the ntfy and Discord notification.
+/// What happens when a bulk run is over: the ntfy and Discord notification, and undoing
+/// the whole run at once.
 /// </summary>
 public class BulkRunTests
 {
@@ -98,6 +99,96 @@ public class BulkRunTests
             config.NtfyUrl = null;
             config.DiscordWebhookUrl = null;
         }
+    }
+
+    [Fact]
+    public void KeepsOnlyTheLastFewRuns()
+    {
+        var service = new SyncHistoryService(TestHost.ApplicationPaths, NullLogger<SyncHistoryService>.Instance);
+        var saved = new List<Guid>();
+
+        for (var i = 0; i < SyncHistoryService.MaxRuns + 2; i++)
+        {
+            var run = new BulkRun { Name = "Run " + i };
+            run.Files.Add(new SyncHistoryEntry { OutputPath = "/m/" + i + ".srt", WroteNewFile = true });
+            service.SaveRun(run);
+            saved.Add(run.Id);
+        }
+
+        var kept = service.GetRuns();
+        Assert.Equal(saved.TakeLast(SyncHistoryService.MaxRuns), kept.Select(r => r.Id));
+        Assert.Equal("/m/" + (SyncHistoryService.MaxRuns + 1) + ".srt", kept[^1].Files[0].OutputPath);
+    }
+
+    [Fact]
+    public void UndoingARunPutsBackWhatItCanAndLeavesNewerWorkAlone()
+    {
+        var folder = TestHost.NewFolder();
+        var config = TestHost.Plugin.Configuration;
+        var service = new SyncHistoryService(TestHost.ApplicationPaths, NullLogger<SyncHistoryService>.Instance);
+
+        // overwritten with a backup
+        var replaced = Written(folder, "Film.en.srt", "synced");
+        File.WriteAllText(replaced.OutputPath + ".bak", "original");
+        replaced.BackupPath = replaced.OutputPath + ".bak";
+
+        // a sidecar the run added
+        var added = Written(folder, "Film.en.shifted.srt", "synced");
+        added.WroteNewFile = true;
+
+        // Bazarr put a new one there after the run
+        var newer = Written(folder, "Film.da.srt", "synced");
+        File.WriteAllText(newer.OutputPath + ".bak", "original");
+        newer.BackupPath = newer.OutputPath + ".bak";
+        File.WriteAllText(newer.OutputPath!, "from bazarr");
+        File.SetLastWriteTimeUtc(newer.OutputPath!, newer.OutputWriteUtc!.Value.AddMinutes(5));
+
+        // its backup was cleaned up by hand
+        var noBackup = Written(folder, "Film.de.srt", "synced");
+        noBackup.BackupPath = noBackup.OutputPath + ".bak";
+
+        var run = new BulkRun { Name = "Bulk sync" };
+        run.Files.AddRange(new[] { replaced, added, newer, noBackup });
+
+        lock (Plugin.ConfigurationLock)
+        {
+            run.Files.ForEach(f => SyncHistoryService.Append(config, f));
+        }
+
+        try
+        {
+            service.SaveRun(run);
+            var outcomes = service.UndoRun(run.Id)!;
+
+            Assert.Equal(new[] { true, true, false, false }, outcomes.Select(o => o.File.Reverted));
+            Assert.Equal("original", File.ReadAllText(replaced.OutputPath!));
+            Assert.False(File.Exists(replaced.BackupPath));
+            Assert.False(File.Exists(added.OutputPath));
+            Assert.Equal("from bazarr", File.ReadAllText(newer.OutputPath!));
+            Assert.True(File.Exists(newer.BackupPath));
+            Assert.Contains("left alone", outcomes[2].Outcome, StringComparison.Ordinal);
+            Assert.Contains("nothing left", outcomes[3].Outcome, StringComparison.Ordinal);
+
+            // the history rows say undone too, and the kept run remembers it
+            Assert.True(config.History.Find(h => h.Id == replaced.Id)!.Reverted);
+            Assert.Equal(2, service.GetRuns().Find(r => r.Id == run.Id)!.Files.Count(f => f.Reverted));
+
+            Assert.Null(service.UndoRun(Guid.NewGuid()));
+        }
+        finally
+        {
+            lock (Plugin.ConfigurationLock)
+            {
+                config.History.RemoveAll(h => run.Files.Exists(f => f.Id == h.Id));
+            }
+        }
+    }
+
+    private static SyncHistoryEntry Written(string folder, string name, string text)
+    {
+        var path = Path.Combine(folder, name);
+        File.WriteAllText(path, text);
+        return new SyncHistoryEntry { OutputPath = path, InputPath = path, OutputWriteUtc = File.GetLastWriteTimeUtc(path) };
     }
 
     private sealed class FakeApi : HttpMessageHandler, IHttpClientFactory

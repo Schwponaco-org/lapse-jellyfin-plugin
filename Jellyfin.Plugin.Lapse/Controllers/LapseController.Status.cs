@@ -142,6 +142,46 @@ public partial class LapseController
         return outcome is null ? NotFound("No history entry with that id") : Ok(new { Outcome = outcome });
     }
 
+    /// <summary>
+    /// Gets the last few bulk runs that wrote something, newest first.
+    /// </summary>
+    [HttpGet("Lapse/Runs")]
+    [Authorize(Policy = Policies.RequiresElevation)]
+    public ActionResult<object> GetRuns()
+    {
+        return _historyService.GetRuns().AsEnumerable().Reverse().Select(run => new
+        {
+            run.Id,
+            run.Name,
+            run.FinishedUtc,
+            run.Synced,
+            run.Unsure,
+            run.Failed,
+            run.Skipped,
+            Files = run.Files.Count,
+            Undone = run.Files.Count(f => f.Reverted)
+        }).ToList();
+    }
+
+    /// <summary>
+    /// Undoes every file a bulk run wrote and says how each went.
+    /// </summary>
+    [HttpPost("Lapse/Runs/{id}/Undo")]
+    [Authorize(Policy = Policies.RequiresElevation)]
+    public ActionResult UndoRun([FromRoute] Guid id)
+    {
+        // a running job could be writing the same files
+        if (_queueManager.GetSnapshot().Running)
+        {
+            return Conflict("A sync job is running. Let it finish or stop it, then undo the run.");
+        }
+
+        var outcomes = _historyService.UndoRun(id);
+        return outcomes is null
+            ? NotFound("No run with that id")
+            : Ok(outcomes.Select(o => new { o.File.OutputPath, o.File.Reverted, o.Outcome }));
+    }
+
     // Worked out from which files are actually synced, not from a flag on the record. A flag
     // can't tell 1 of 4 tracks from all of them, or a stale record from an old install.
     private static MovieSyncStatus ResolveDisplayStatus(MovieSyncRecord? record, int subtitleCount, int syncedCount)
