@@ -42,6 +42,7 @@
 
 .lapseDialogButtons > .emby-button {
     flex: 1;
+    justify-content: center;
     margin: 0;
 }
 

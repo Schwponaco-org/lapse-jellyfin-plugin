@@ -1020,7 +1020,7 @@
 
     function openSyncPopup(context) {
         var overlay = openDialog('Sync subtitles',
-            
+            '<div class="fieldDescription">Sync with the engine and mode set in the LAPSE settings, or choose them under Advanced.</div>' +
             '<div class="lapseDialogButtons">' +
             '<button is="emby-button" type="button" class="raised button-submit" id="lapsePopupSync"><span>Sync</span></button>' +
             '<button is="emby-button" type="button" class="raised" id="lapsePopupAdvanced"><span>Advanced</span></button>' +
@@ -1086,7 +1086,6 @@
             .join(', ');
 
         var overlay = openDialog('Convert first',
-            
             '<div class="fieldDescription">This item only has ' + escapeHtml(formats) +
             ', which no sync engine reads. The plugin can convert it first, and then sync the result.</div>' +
             (subtitles.length > 1
@@ -1127,7 +1126,6 @@
 
     function openSubtitlePickerPopup(itemId, subtitles) {
         var overlay = openDialog('Pick a subtitle',
-            
             '<div class="selectContainer">' +
             '<select is="emby-select" id="lapsePickerSelect" class="emby-select-withcolor emby-select">' +
             subtitleOptionsHtml(subtitles) +
@@ -1302,7 +1300,6 @@
 
     function showConvertDialog(context, subtitles) {
         var overlay = openDialog('Convert subtitles',
-            
             '<div class="fieldDescription">Writes a new file in the format you pick. The original is left ' +
             'alone unless you choose to delete it. Use this to turn formats no engine can sync, like ' +
             'MicroDVD .sub, into plain srt first.</div>' +
@@ -2124,7 +2121,6 @@
         var language = (accessInfo && accessInfo.OpenSubtitlesLanguage) || '';
 
         var overlay = openDialog('Find subtitles online',
-            
             '<div class="fieldDescription">Searches OpenSubtitles for ' + escapeHtml(name || 'this item') +
             ', by the file itself first and then by its title. Downloads come out of the account\'s daily allowance.</div>' +
             '<div class="inputContainer">' +
@@ -2497,7 +2493,6 @@
         }).join('');
 
         var overlay = openDialog('Choose the right subtitle',
-            
             '<div class="fieldDescription">Play the item and switch between these tracks to compare them. ' +
             'Keeping one writes it out using your File output setting and deletes the rest.</div>' +
             body +
@@ -2598,7 +2593,6 @@
               'client\'s own. An admin can add OpenDyslexic from the LAPSE dashboard under Subtitle appearance.</div>';
 
         var overlay = openDialog('Subtitle settings',
-            
             '<div class="fieldDescription">Yours alone. These follow your account onto every device you sign in on, ' +
             'and change nothing for anybody else using this server.</div>' +
             '<label class="emby-checkbox-label lapseStackedCheck">' +
@@ -2754,7 +2748,6 @@
               'normal font until an admin installs OpenDyslexic from the LAPSE dashboard under Subtitle appearance.</div>';
 
         var overlay = openDialog('Readable subtitles',
-            
             '<div class="fieldDescription">Writes a copy of the subtitles you tick, with a dyslexia-friendly font, larger ' +
             'text and wider letter spacing set inside the file. Because the styling is in the file rather than in a client ' +
             'setting, every client that plays it honours it - phone, TV and browser alike, with nothing to set up on each one.</div>' +
@@ -2911,7 +2904,6 @@
         }).join('');
 
         var overlay = openDialog('Extract embedded subtitles',
-            
             '<div class="fieldDescription">Writes every text subtitle track inside this video out as a file ' +
             'beside it. A subtitle as a file plays back on every client without the video having to be ' +
             'transcoded, which a track inside the video often does need.</div>' +
@@ -3038,7 +3030,6 @@
 
     function showShiftDialog(context, subtitles) {
         var overlay = openDialog('Shift subtitles',
-            
             '<div class="selectContainer">' +
             '  <label class="selectLabel" for="lapseShiftSubtitle">Subtitle</label>' +
             '  <select is="emby-select" id="lapseShiftSubtitle" class="emby-select-withcolor emby-select">' +
@@ -3048,18 +3039,17 @@
             '<div class="lapsePreviewBox" id="lapseShiftPreview">Loading an example line...</div>' +
             // slider to find it roughly, box to type it exactly, they move together
             '<div class="lapseShiftControls">' +
-            '  <input type="range" id="lapseShiftSlider" class="lapseShiftSlider" min="-10000" max="10000" step="50" value="0" />' +
+            '  <input type="range" id="lapseShiftSlider" class="lapseShiftSlider" min="-10000" max="10000" step="50" value="0" aria-label="Shift" />' +
             '  <div class="lapseShiftScale">' +
             '    <span>-10s</span><span>0</span><span>+10s</span>' +
             '  </div>' +
             '  <div class="lapseStepperRow">' +
-            '    <button is="emby-button" type="button" class="raised lapseStepButton" id="lapseShiftMinus"><span>&minus;</span></button>' +
-            '    <input is="emby-input" id="lapseShiftOffset" class="lapseShiftNumber" type="number" step="100" value="0" />' +
+            '    <button is="emby-button" type="button" class="raised lapseStepButton" id="lapseShiftMinus" aria-label="100 ms earlier"><span>&minus;</span></button>' +
+            '    <input is="emby-input" id="lapseShiftOffset" class="lapseShiftNumber" type="number" step="100" value="0" aria-label="Milliseconds" />' +
             '    <span class="lapseShiftUnit">ms</span>' +
-            '    <button is="emby-button" type="button" class="raised lapseStepButton" id="lapseShiftPlus"><span>+</span></button>' +
+            '    <button is="emby-button" type="button" class="raised lapseStepButton" id="lapseShiftPlus" aria-label="100 ms later"><span>+</span></button>' +
             '  </div>' +
-            '  <div class="fieldDescription">Minus makes subtitles appear earlier, plus later. The buttons move in 100ms steps. ' +
-            'The slider covers 10 seconds either way; type a bigger number if you need one.</div>' +
+            '  <div class="fieldDescription">Minus shows the subtitles earlier, plus later. Type a number for more than 10 seconds.</div>' +
             '</div>' +
             '<div class="lapseDialogButtons">' +
             '  <button is="emby-button" type="button" class="raised button-submit" id="lapseShiftApply"><span>Apply</span></button>' +
@@ -3199,7 +3189,6 @@
             }
 
             var overlay = openDialog('Sync to reference',
-                
                 '<p class="fieldDescription">Pick the subtitle that is already correct, then say what to line up against it.</p>' +
                 '<div class="selectContainer">' +
                 '<label class="selectLabel" for="lapseRefSelect">Reference (the correct one)</label>' +
@@ -3275,7 +3264,6 @@
             }).join('');
 
             var overlay = openDialog('Sync all to reference',
-                
                 '<p class="fieldDescription">Pick the subtitle track that is already correct. On every episode, the other subtitles get lined up against that episode\'s copy of it.</p>' +
                 '<div class="selectContainer">' +
                 '<select is="emby-select" id="lapseSeriesRefSelect" class="emby-select-withcolor emby-select">' +
@@ -3394,7 +3382,6 @@
         });
 
         var overlay = openDialog('Move subtitles from another copy',
-            
             '<div class="fieldDescription">For a subtitle that fits another copy (a TV recording, another cut, ' +
             'a PAL release) but not this one. LAPSE listens to both copies and moves every line the way the ' +
             'speech around it moved, so a scene that was cut or a copy that runs faster is no problem. The ' +
@@ -3598,7 +3585,6 @@
             : '';
 
         var overlay = openDialog(context.name || 'Advanced',
-            
             '<h3 class="lapseDialogSection">What to sync</h3>' +
             subtitleSection +
             referenceSection +
