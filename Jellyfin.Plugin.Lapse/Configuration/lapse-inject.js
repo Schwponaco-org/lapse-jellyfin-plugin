@@ -2014,7 +2014,7 @@
             '  <div class="lapseToolsHint">Height lifts the subtitles off the bottom of the picture. ' +
             'It does not move an ASS track, which carries its own positioning.</div>' +
             '  <div class="lapseToolsRow"><span>Text</span>' +
-            '    <input type="color" id="lapseLookColor" value="' + (a.TextColor || '#FFFFFF') + '" /></div>' +
+            '    <input type="color" id="lapseLookColor" value="' + escapeHtml(a.TextColor || '#FFFFFF') + '" /></div>' +
             '  <label class="lapseToolsCheck">' +
             '    <input type="checkbox" id="lapseLookBackground"' + (a.BackgroundEnabled ? ' checked' : '') + ' />' +
             '    <span>Box behind the text</span>' +
