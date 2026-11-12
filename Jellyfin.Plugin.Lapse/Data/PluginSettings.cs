@@ -148,6 +148,12 @@ public class PluginSettings
     public bool SkipSyncedInUnattendedRuns { get; set; } = true;
 
     /// <summary>
+    /// Gets or sets a value indicating whether auto-sync also picks up new subtitle files on
+    /// items already in the library.
+    /// </summary>
+    public bool AutoSyncNewSubtitles { get; set; } = true;
+
+    /// <summary>
     /// Gets or sets who besides admins may sync, shift, convert and translate.
     /// </summary>
     public SubtitleAccessMode SubtitleAccess { get; set; }

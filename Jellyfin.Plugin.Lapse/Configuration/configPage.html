@@ -539,6 +539,16 @@
                             everything done again. Sync All to Reference on a series always does every episode.
                         </div>
 
+                        <label class="emby-checkbox-label lapseStackedCheck">
+                            <input id="lapseAutoSyncNewSubtitles" type="checkbox" is="emby-checkbox" />
+                            <span>Sync new subtitles on items already in the library</span>
+                        </label>
+                        <div class="fieldDescription lapseTightNote">
+                            In libraries with New items ticked, a subtitle file that turns up later gets synced
+                            too, whoever put it there: Jellyfin's own subtitle download from any app, Bazarr, or
+                            a file you copied in. It's picked up once Jellyfin has rescanned the item.
+                        </div>
+
                         <h3 class="lapseSubHeading">Automatic translation</h3>
                         <div class="lapseNoteStrip">
                             <strong>Experimental.</strong> This puts every subtitle an automatic run

@@ -77,6 +77,7 @@ public partial class LapseController
             AutoTranslateLanguage = config.AutoTranslateLanguage,
             AutoTranslateSkipExisting = config.AutoTranslateSkipExisting,
             SkipSyncedInUnattendedRuns = config.SkipSyncedInUnattendedRuns,
+            AutoSyncNewSubtitles = config.AutoSyncNewSubtitles,
             SubtitleAccess = config.SubtitleAccess,
             SubtitleAccessUserIds = new List<string>(config.SubtitleAccessUserIds),
             OpenSubtitlesEnabled = config.OpenSubtitlesEnabled,
@@ -362,6 +363,7 @@ public partial class LapseController
             config.AutoTranslateEnabled = settings.AutoTranslateEnabled && config.AutoTranslateLanguage is not null;
             config.AutoTranslateSkipExisting = settings.AutoTranslateSkipExisting;
             config.SkipSyncedInUnattendedRuns = settings.SkipSyncedInUnattendedRuns;
+            config.AutoSyncNewSubtitles = settings.AutoSyncNewSubtitles;
 
             config.SubtitleAccess = settings.SubtitleAccess;
 

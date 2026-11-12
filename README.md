@@ -104,7 +104,7 @@ A subtitle counts as synced for as long as the file stays the same. If Bazarr or
 
 All of this is off until you turn it on, and pressing a button yourself always works.
 
-- **New items**: a library can sync whatever gets added to it.
+- **New items**: a library can sync whatever gets added to it. A subtitle that turns up later for something already in the library gets synced too, however it got there: Jellyfin's own subtitle search from any app (the OpenSubtitles plugin, say), Bazarr, or a file you copied in. That waits for Jellyfin to rescan the item and only counts files written since LAPSE last synced it, so its own output doesn't set it off again. It can be turned off under Automation.
 - **Schedules**: a library can be synced daily or weekly at a time you pick.
 - **Radarr and Sonarr**: add a Webhook connection pointing at LAPSE and imports get synced as soon as Jellyfin has them. Paths are matched on folder and file name as well, so it works when Radarr and Jellyfin see the media under different mount points.
 - **What a run does**: sync, convert, or both, and optionally translate the result or add a readable copy.

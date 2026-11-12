@@ -173,6 +173,18 @@ public class SyncQueueManager : IDisposable
     }
 
     /// <summary>
+    /// Says whether an item is waiting in the queue or syncing right now.
+    /// </summary>
+    public bool IsQueuedOrRunning(Guid itemId)
+    {
+        lock (_lock)
+        {
+            return _queuedIds.Contains(itemId)
+                || (_itemsById.TryGetValue(itemId, out var row) && row.Status == QueueItemStatus.Running);
+        }
+    }
+
+    /// <summary>
     /// Adds a batch of items to whatever's queued, under one lock. The caller has already
     /// dropped skipped/ignored items (e.g. <see cref="LibraryService.GetItems"/> does).
     /// </summary>
@@ -1094,7 +1106,7 @@ public class SyncQueueManager : IDisposable
         }
     }
 
-    private static MovieSyncRecord? FindRecord(Guid itemId)
+    internal static MovieSyncRecord? FindRecord(Guid itemId)
     {
         var plugin = Plugin.Instance;
         if (plugin is null)
