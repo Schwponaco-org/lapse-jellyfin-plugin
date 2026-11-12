@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.Lapse.Data;
@@ -22,7 +23,7 @@ namespace Jellyfin.Plugin.Lapse.Services;
 /// the default engine and mode against every external subtitle the item has. What it does
 /// to each subtitle (sync, convert, both) comes from <see cref="AutomationAction"/>.
 /// </summary>
-public class SyncQueueManager : IDisposable
+public partial class SyncQueueManager : IDisposable
 {
     private readonly ILibraryManager _libraryManager;
     private readonly LibraryService _libraryService;
@@ -1346,6 +1347,26 @@ public class SyncQueueManager : IDisposable
             ? moved + ". Written beside the original for you to check."
             : moved + ".";
     }
+
+    // History written before the plain words, "moved -8707ms, nothing, written beside the original to check"
+    internal static string? ReadableDetail(string? detail)
+    {
+        var old = detail is null ? null : OldDetailRegex().Match(detail);
+        if (old is null || !old.Success)
+        {
+            return detail;
+        }
+
+        return DescribeForHistory(new SyncResult
+        {
+            OffsetMs = int.Parse(old.Groups["ms"].Value, CultureInfo.InvariantCulture),
+            Verdict = old.Groups["verdict"].Success ? old.Groups["verdict"].Value : null,
+            Unconfirmed = old.Groups["check"].Success
+        });
+    }
+
+    [GeneratedRegex(@"^moved (?<ms>-?\d+)ms(, (?<verdict>solid|unsure|nothing))?(?<check>, written beside the original to check)?$")]
+    private static partial Regex OldDetailRegex();
 
     // positive means the subtitles come later
     private static string Seconds(int ms)

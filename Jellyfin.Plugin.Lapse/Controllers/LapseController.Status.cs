@@ -120,7 +120,7 @@ public partial class LapseController
                 Name = item is null ? "(removed from the library)" : SyncQueueManager.DescribeItem(item),
                 Status = entry.Status,
                 WhenUtc = entry.WhenUtc,
-                Detail = entry.Detail,
+                Detail = SyncQueueManager.ReadableDetail(entry.Detail),
                 OutputPath = entry.OutputPath,
 
                 // older entries only said so in the detail line
