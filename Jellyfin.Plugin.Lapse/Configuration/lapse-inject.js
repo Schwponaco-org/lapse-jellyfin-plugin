@@ -2789,7 +2789,7 @@
 
         lapseGet('Lapse/Items/' + context.id + '/Subtitles').then(function (subtitles) {
             var shiftable = subtitles.filter(function (s) {
-                return /\.(srt|vtt|ass|ssa|sub|mpl2|sup|sbv|idx|smi|sami|ttml|dfxp)$/i.test(s.Path);
+                return /\.(srt|vtt|ass|ssa|sub|mpl2|sup|sbv|idx|smi|sami|ttml|dfxp|itt)$/i.test(s.Path);
             });
 
             if (shiftable.length === 0) {

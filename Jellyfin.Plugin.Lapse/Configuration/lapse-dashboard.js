@@ -993,7 +993,7 @@
             '2.5.0 shift them by hand too, but converting and translating need words and cannot touch them. ' +
             'Those need OCR first, with something like Subtitle Edit.</p>' +
             (broadcastFormats(withFormats)
-                ? '<p>.stl (EBU STL) and .scc (Scenarist) are broadcast formats. The engine syncs them fine, but ' +
+                ? '<p>.stl (EBU STL, or the text STL from DVD Studio Pro) and .scc (Scenarist) are broadcast formats. The engine syncs them fine, but ' +
                   'Jellyfin cannot show either of them, so the plugin leaves them out of its subtitle lists. For these ' +
                   'files use <a href="https://schwponaco.org/lapse/" target="_blank" rel="noopener">LAPSE in the browser</a> ' +
                   'or the engine\'s <a href="https://github.com/Schwponaco-org/lapse#docker" target="_blank" rel="noopener">Docker image</a>, ' +

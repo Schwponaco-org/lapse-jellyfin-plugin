@@ -150,7 +150,7 @@ The item menu entries are for admins by default. Under **Settings > Access** you
 
 ## Subtitle formats
 
-LAPSE reads and writes `.srt`, `.ass`, `.ssa`, `.vtt`, `.sub` (MicroDVD, MPL2 and SubViewer 2), `.mpl2`, `.sup` (PGS), `.sbv`, `.idx` (VobSub), `.smi` and `.sami`, `.ttml` and `.dfxp`, in upper or lower case. Every file is written back in the format it came in.
+LAPSE reads and writes `.srt`, `.ass`, `.ssa`, `.vtt`, `.sub` (MicroDVD, MPL2 and SubViewer 2), `.mpl2`, `.sup` (PGS), `.sbv`, `.idx` (VobSub), `.smi` and `.sami`, `.ttml` and `.dfxp`, and from 2.5.0 `.itt` (iTunes Timed Text), in upper or lower case. Every file is written back in the format it came in. LAPSE 2.5.0 also reads TTML saved as `.xml`. The plugin leaves `.xml` out of its lists, since most of those next to a video are metadata, but you can pick one in **Subtitle to subtitle**.
 
 Three formats share `.sub`, so the engine looks inside the file to tell them apart:
 
@@ -162,7 +162,7 @@ Three formats share `.sub`, so the engine looks inside the file to tell them apa
 
 PGS and VobSub are pictures of text. LAPSE can still move their timing, though converting, translating or restyling them needs OCR first. alass and ffsubsync read `.srt`, `.ass`, `.ssa` and `.vtt`, and the plugin converts anything else to `.srt` for them.
 
-LAPSE also reads the broadcast formats `.stl` (EBU STL) and `.scc` (Scenarist), but Jellyfin can't show either of them, so the plugin leaves them out of its lists. For those, use [LAPSE in the browser](https://schwponaco.org/lapse/) or the engine's [Docker image](https://github.com/Schwponaco-org/lapse#docker), which take them as they are.
+LAPSE also reads the broadcast formats `.stl` (EBU STL, and from 2.5.0 the text STL from DVD Studio Pro and Spruce) and `.scc` (Scenarist), but Jellyfin can't show either of them, so the plugin leaves them out of its lists. For those, use [LAPSE in the browser](https://schwponaco.org/lapse/) or the engine's [Docker image](https://github.com/Schwponaco-org/lapse#docker), which take them as they are.
 
 ### Text encoding
 

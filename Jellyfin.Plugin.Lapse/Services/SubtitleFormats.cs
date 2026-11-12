@@ -53,7 +53,7 @@ public static class SubtitleFormats
     /// </summary>
     public static readonly string[] ConvertibleExtensions =
     {
-        ".sub", ".smi", ".sami", ".sbv", ".ttml", ".dfxp", ".mpl2", ".jss", ".rt"
+        ".sub", ".smi", ".sami", ".sbv", ".ttml", ".dfxp", ".itt", ".mpl2", ".jss", ".rt"
     };
 
     /// <summary>
@@ -116,6 +116,23 @@ public static class SubtitleFormats
     public static bool IsSubtitle(string? path)
     {
         return GetKind(path) != SubtitleFormatKind.Unknown;
+    }
+
+    /// <summary>
+    /// Gets whether a file someone picked by hand can be a subtitle. That's <see cref="IsSubtitle"/>
+    /// plus TTML saved as .xml, which LAPSE 2.5.0 reads but scans leave alone.
+    /// </summary>
+    public static bool IsPickedSubtitle(string? path)
+    {
+        return IsSubtitle(path) || IsXml(path);
+    }
+
+    /// <summary>
+    /// Gets whether a path ends in .xml.
+    /// </summary>
+    public static bool IsXml(string? path)
+    {
+        return string.Equals(Path.GetExtension(path), ".xml", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
