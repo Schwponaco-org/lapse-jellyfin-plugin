@@ -1151,6 +1151,14 @@
         return text + (ms < 0 ? ' earlier' : ' later');
     }
 
+    // What an unsure answer would have done, for "LAPSE would have ... but was not sure"
+    function wouldHave(result) {
+        var split = result.PartOffsetsMs && result.PartOffsetsMs.length > 1;
+        return split ? 'moved it in ' + result.PartOffsetsMs.length + ' parts'
+            : result.OffsetMs ? 'moved it ' + distance(result.OffsetMs)
+            : 'left the timing as it was';
+    }
+
     function describeResult(result) {
         var parts = [];
         var split = result.PartOffsetsMs && result.PartOffsetsMs.length > 1 ? result.PartOffsetsMs : null;
@@ -1211,12 +1219,12 @@
         }
 
         if (result.Skipped) {
-            return 'LAPSE ' + describeResult(result) + ' but was not sure, so the original was left alone. ' +
+            return 'LAPSE would have ' + wouldHave(result) + ' but was not sure, so the original was left alone. ' +
                 'If the subtitle does belong to this video, turn on "Sync even when the engine is unsure" under Engines in the LAPSE settings.';
         }
 
         if (result.Unconfirmed) {
-            return 'LAPSE ' + describeResult(result) + ' but was not sure, so the original was left alone and the result ' +
+            return 'LAPSE ' + wouldHave(result) + ' but was not sure, so the original was left alone and the result ' +
                 'written beside it as ' + baseName(result.OutputPath || '') + '. An admin can keep or discard it under Review in the LAPSE settings.';
         }
 

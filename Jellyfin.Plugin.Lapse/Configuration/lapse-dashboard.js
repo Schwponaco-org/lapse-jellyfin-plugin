@@ -1948,6 +1948,14 @@
         return text + (ms < 0 ? ' earlier' : ' later');
     }
 
+    // What an unsure answer would have done, for "LAPSE would have ... but was not sure"
+    function wouldHave(result) {
+        var split = result.PartOffsetsMs && result.PartOffsetsMs.length > 1;
+        return split ? 'moved it in ' + result.PartOffsetsMs.length + ' parts'
+            : result.OffsetMs ? 'moved it ' + distance(result.OffsetMs)
+            : 'left the timing as it was';
+    }
+
     function describeResult(result) {
         var parts = [];
         var split = result.PartOffsetsMs && result.PartOffsetsMs.length > 1 ? result.PartOffsetsMs : null;
@@ -2019,13 +2027,13 @@
 
         if (result.Skipped) {
             confirmForceRetry(
-                name + ': LAPSE ' + describeResult(result) + ' but was not sure, and File output is set to keep the original then.',
+                name + ': LAPSE would have ' + wouldHave(result) + ' but was not sure, and File output is set to keep the original then.',
                 result.EngineId, view, retry);
             return;
         }
 
         if (result.Unconfirmed || result.LowConfidence) {
-            tell(name, capitalize(describeResult(result)) + ', but LAPSE was not sure, so the original was left alone ' +
+            tell(name, 'LAPSE ' + wouldHave(result) + ' but was not sure, so the original was left alone ' +
                 'and the result written beside it. It is waiting in Review.');
             return;
         }
@@ -2851,7 +2859,7 @@
                         attemptSubToSubSync(view, body);
                     });
             } else if (result.Unconfirmed) {
-                tell('Subtitle to subtitle', capitalize(describeResult(result)) + ', but LAPSE was not sure. ' +
+                tell('Subtitle to subtitle', 'LAPSE ' + wouldHave(result) + ' but was not sure. ' +
                     'Written to ' + result.OutputPath + ' for you to check, without touching any file already there.');
             } else {
                 tell('Subtitle to subtitle', 'Synced: ' + describeResult(result) + '. Written to ' + result.OutputPath + '.');
