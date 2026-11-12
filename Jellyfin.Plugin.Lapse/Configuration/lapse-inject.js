@@ -519,6 +519,114 @@
             handleActionSheetOpened(sheet);
         }
 
+        // Jellyfin's Edit subtitles dialog fills its list in with innerHTML, every time it reloads
+        var editorList = node.closest ? node.closest('.subtitleEditorDialog .subtitleList') : null;
+        if (!editorList && node.querySelector) {
+            editorList = node.querySelector('.subtitleEditorDialog .subtitleList');
+        }
+
+        if (editorList) {
+            decorateSubtitleEditor(editorList);
+        }
+    }
+
+    // --- Jellyfin's own Edit subtitles dialog ---
+    //
+    // A Sync button and a word on whether each external track is synced, in the dialog's own
+    // markup. The track is found by the path the dialog prints, so a dialog that no longer
+    // prints one just gets nothing added.
+    var editorPending = null;
+
+    function decorateSubtitleEditor(list) {
+        // the list arrives in more than one mutation, so wait for the last of them
+        clearTimeout(editorPending);
+        editorPending = setTimeout(function () {
+            Promise.all([resolveItemContext(), loadAccess()]).then(function (answers) {
+                var context = answers[0];
+                if (!context || !answers[1].CanEditSubtitles || !document.body.contains(list)) {
+                    return null;
+                }
+
+                return Promise.all([
+                    lapseGet('Lapse/Items/' + context.id + '/Subtitles'),
+                    lapseGet('Lapse/Items/' + context.id + '/Candidates')
+                ]).then(function (results) {
+                    actionTitle = context.name || 'LAPSE';
+                    addEditorControls(list, context, results[0] || [], (results[1] && results[1].Sets) || []);
+                });
+            }).catch(function (err) {
+                log('could not add LAPSE to the Edit subtitles dialog: ' + err);
+            });
+        }, 150);
+    }
+
+    function verdictFor(subtitle, sets) {
+        var unsure = sets.some(function (set) {
+            return set.OriginalPath === subtitle.Path || (set.Candidates || []).some(function (c) { return c.Path === subtitle.Path; });
+        });
+
+        return unsure ? 'Unsure, waiting for review' : subtitle.Synced ? 'Synced' : 'Not synced';
+    }
+
+    function addEditorControls(list, context, subtitles, sets) {
+        list.querySelectorAll('.listItem').forEach(function (row) {
+            var pathLine = row.querySelector('.listItemBody .secondary');
+            var deleteButton = row.querySelector('.btnDelete');
+            if (!pathLine || row.querySelector('.lapseVerdict')) {
+                return;
+            }
+
+            var subtitle = subtitles.filter(function (s) {
+                return !s.IsEmbedded && s.Path === pathLine.textContent.trim();
+            })[0];
+
+            if (!subtitle) {
+                return;
+            }
+
+            var verdict = document.createElement('div');
+            verdict.className = 'secondary listItemBodyText lapseVerdict';
+            verdict.setAttribute('aria-live', 'polite');
+            verdict.textContent = verdictFor(subtitle, sets);
+            pathLine.parentNode.appendChild(verdict);
+
+            // an answer waiting in Review is kept or discarded there, not synced again
+            var isAnswer = sets.some(function (set) {
+                return (set.Candidates || []).some(function (c) { return c.Path === subtitle.Path; });
+            });
+
+            if (subtitle.Supported === false || isAnswer) {
+                return;
+            }
+
+            var sync = document.createElement('button');
+            sync.setAttribute('is', 'paper-icon-button-light');
+            sync.type = 'button';
+            sync.className = 'listItemButton paper-icon-button-light lapseEditorSync';
+            sync.title = 'Sync';
+            sync.setAttribute('aria-label', 'Sync ' + baseName(subtitle.Path));
+            sync.innerHTML = '<span class="material-icons sync" aria-hidden="true"></span>';
+            row.insertBefore(sync, deleteButton);
+
+            sync.addEventListener('click', function (e) {
+                e.stopPropagation();
+                sync.disabled = true;
+                verdict.textContent = 'Syncing...';
+
+                lapsePost('Lapse/Sync', { ItemId: context.id, SubtitlePath: subtitle.Path }).then(function (result) {
+                    verdict.textContent = !result.Success ? 'Sync failed'
+                        : result.Skipped ? 'Not synced'
+                        : result.Unconfirmed || result.CandidateCount > 0 ? 'Unsure, waiting for review'
+                        : 'Synced';
+                    tell(describeSyncOutcome(result));
+                }).catch(function (err) {
+                    verdict.textContent = 'Sync failed';
+                    tell('Sync failed: ' + err.message);
+                }).then(function () {
+                    sync.disabled = false;
+                });
+            });
+        });
     }
 
     function startWatchingTheClient() {

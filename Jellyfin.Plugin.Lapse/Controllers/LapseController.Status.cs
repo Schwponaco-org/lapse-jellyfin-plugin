@@ -216,7 +216,14 @@ public partial class LapseController
             return NotFound("Item not found");
         }
 
-        return _subtitleLocator.GetExternalSubtitles(item);
+        var subtitles = _subtitleLocator.GetExternalSubtitles(item);
+        var record = SyncQueueManager.FindRecord(item.Id);
+        foreach (var subtitle in subtitles)
+        {
+            subtitle.Synced = record is not null && SyncQueueManager.IsStillSynced(record, subtitle.Path);
+        }
+
+        return subtitles;
     }
 
     /// <summary>
