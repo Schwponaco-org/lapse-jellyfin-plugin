@@ -139,4 +139,71 @@ public class SubtitleTimingTests
         Assert.Contains("مرحبا", text, StringComparison.Ordinal);
         Assert.Equal(1256, encoding.CodePage);
     }
+
+    private static string Cues(string lines)
+    {
+        return string.Join("\n", lines.Split('\n').Select((line, i) => $"{i + 1}\n00:00:{i + 1:00},000 --> 00:00:{i + 1:00},500\n{line}\n"));
+    }
+
+    [Theory]
+    [InlineData(936, 54936, "你好，我是来自北京的医生。\n这件事情我们明天再谈吧。\n你怎么会在这里？我以为你已经走了。\n请相信我，我不会伤害任何人。\n别担心，一切都会好起来的。\n我们必须在天亮之前离开这个地方。")]
+    [InlineData(950, 950, "你好，我是來自台北的醫生。\n這件事情我們明天再談吧。\n你怎麼會在這裡？我以為你已經走了。\n請相信我，我不會傷害任何人。\n別擔心，一切都會好起來的。\n我們必須在天亮之前離開這個地方。")]
+    [InlineData(932, 932, "こんにちは、私は東京から来た医者です。\nこのことは明日また話しましょう。\nどうしてここにいるの？もう帰ったと思っていた。\n信じてください。誰も傷つけたりしません。\n心配しないで、すべてうまくいくから。\n夜が明ける前にここを出なければならない。")]
+    [InlineData(949, 949, "안녕하세요, 저는 서울에서 온 의사입니다.\n이 일은 내일 다시 이야기합시다.\n어떻게 여기 있어요? 벌써 떠난 줄 알았어요.\n저를 믿어 주세요. 아무도 해치지 않을 겁니다.\n걱정하지 마세요, 다 잘될 거예요.\n날이 밝기 전에 여기를 떠나야 해요.")]
+    public void CjkCodePageIsDetectedAndKept(int source, int expected, string lines)
+    {
+        System.Text.Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+        var srt = Cues(lines);
+
+        var (text, encoding) = SubtitleEncoding.DecodeWithEncoding(System.Text.Encoding.GetEncoding(source).GetBytes(srt));
+
+        Assert.Equal(srt, text);
+        Assert.Equal(expected, encoding.CodePage);
+    }
+
+    [Theory]
+    [InlineData(1251, "Привет, как дела?\nЯ давно тебя не видел.\nЭто очень важно, ты должен меня выслушать.\nГде ты был всю ночь?")]
+    [InlineData(1251, "Привет")]
+    [InlineData(1256, "مرحبا، كيف حالك؟\nهذا مهم جدا، يجب أن تسمعني.")]
+    [InlineData(874, "สวัสดีครับ สบายดีไหม ไม่เจอกันนานเลย\nผมไม่รู้ว่าจะทำอย่างไรต่อไป\nขอบคุณมากครับ")]
+    public void OtherCodePagesAreStillDetected(int source, string lines)
+    {
+        System.Text.Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+
+        var (text, encoding) = SubtitleEncoding.DecodeWithEncoding(System.Text.Encoding.GetEncoding(source).GetBytes(Cues(lines)));
+
+        Assert.Equal(source, encoding.CodePage);
+        Assert.Equal(Cues(lines), text);
+    }
+
+    [Theory]
+    [InlineData("é")]
+    [InlineData("naïve")]
+    [InlineData("Il était naïve.\nSeñor, ¿dónde está la niña?\nIch möchte Ihnen danken, Frau Müller.\nÇa va très bien, merci.")]
+    [InlineData("Dobrý den, jak se máte?\nGdzie jest moja żona?")]
+    [InlineData("Merhaba, nasılsın?\nBütün gece neredeydin?")]
+    public void LatinTextIsNotReadAsCjk(string lines)
+    {
+        System.Text.Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+        var cjk = new[] { 932, 949, 950, 54936 };
+
+        foreach (var source in new[] { 1250, 1252, 1254 })
+        {
+            var (_, encoding) = SubtitleEncoding.DecodeWithEncoding(System.Text.Encoding.GetEncoding(source).GetBytes(Cues(lines)));
+
+            Assert.DoesNotContain(encoding.CodePage, cjk);
+        }
+    }
+
+    [Fact]
+    public void CjkNamesInAsciiCuesAreStillRead()
+    {
+        System.Text.Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+        var srt = Cues("Hello, Mr. Tanaka.\nHow are you today?\nI'm fine, thank you.\nこんにちは、田中さん。\nSee you tomorrow.\nGood night.");
+
+        var (text, encoding) = SubtitleEncoding.DecodeWithEncoding(System.Text.Encoding.GetEncoding(932).GetBytes(srt));
+
+        Assert.Equal(srt, text);
+        Assert.Equal(932, encoding.CodePage);
+    }
 }
