@@ -94,6 +94,8 @@ public partial class LapseController
             MultiEngineInBulk = config.MultiEngineInBulk,
             ArrWebhookEnabled = config.ArrWebhookEnabled,
             ArrWebhookToken = config.ArrWebhookToken,
+            NtfyUrl = config.NtfyUrl,
+            DiscordWebhookUrl = config.DiscordWebhookUrl,
             ExtractEmbeddedEnabled = config.ExtractEmbeddedEnabled,
             ExtractLibraryIds = config.ExtractLibraryIds.ConvertAll(id => id.ToString("N", CultureInfo.InvariantCulture)),
             ExtractLanguages = config.ExtractLanguages,
@@ -355,6 +357,18 @@ public partial class LapseController
             return BadRequest("A settings body is required");
         }
 
+        var ntfyUrl = Blank(settings.NtfyUrl);
+        if (ntfyUrl is not null && !RunNotifier.IsAllowedUrl(ntfyUrl, discord: false))
+        {
+            return BadRequest("The ntfy address has to be a full http or https URL, like https://ntfy.sh/your-topic");
+        }
+
+        var discordUrl = Blank(settings.DiscordWebhookUrl);
+        if (discordUrl is not null && !RunNotifier.IsAllowedUrl(discordUrl, discord: true))
+        {
+            return BadRequest("That isn't a Discord webhook. Copy it from the channel's Integrations, Webhooks, it starts with https://discord.com/api/webhooks/");
+        }
+
         // outside the lock, GetVirtualFolders hits the disk
         var libraryIds = _libraryService.GetLibraryIdSet();
 
@@ -410,6 +424,8 @@ public partial class LapseController
             config.MultiEngineCandidateFormat = settings.MultiEngineCandidateFormat;
             config.MultiEngineInBulk = settings.MultiEngineInBulk;
             config.ArrWebhookEnabled = settings.ArrWebhookEnabled;
+            config.NtfyUrl = ntfyUrl;
+            config.DiscordWebhookUrl = discordUrl;
 
             // only ids that are still libraries
             config.ExtractEmbeddedEnabled = settings.ExtractEmbeddedEnabled;

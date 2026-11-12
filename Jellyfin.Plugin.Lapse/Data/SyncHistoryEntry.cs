@@ -65,6 +65,12 @@ public class SyncHistoryEntry
     public bool WroteNewFile { get; set; }
 
     /// <summary>
+    /// Gets or sets the written file's time once the run was done with it, so undoing a whole
+    /// run can tell a file somebody has written since. Null on old entries.
+    /// </summary>
+    public DateTime? OutputWriteUtc { get; set; }
+
+    /// <summary>
     /// Gets or sets a short line about what the engine did.
     /// </summary>
     public string? Detail { get; set; }

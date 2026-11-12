@@ -50,6 +50,7 @@ Everyone can use the delay slider and change how subtitles look for their own ac
 
 - **Sync status** lists every item in the libraries you've turned on and where it stands. **Bulk sync** runs a whole library or folder. **Subtitle to subtitle** lines up any two subtitle files without going through an item.
 - **Recent activity** has an **Undo** on every sync, which restores the backup or deletes the file the sync added.
+- **Undo run** under Bulk sync does that for every file a bulk, series or scheduled run wrote, for the last five runs. A file written again since the run, by a later sync, Bazarr or by hand, is left alone and listed with the reason, and so is one whose backup has gone. It waits until no job is running.
 - **Stop** in the progress strip ends a running job, and the engine stops with it. Files already written stay as they are.
 
 ## How LAPSE decides
@@ -117,6 +118,7 @@ All of this is off until you turn it on, and pressing a button yourself always w
 
   Every subtitle Bazarr saves then gets synced by LAPSE, so you can turn off Bazarr's own Automatic Subtitles Synchronization. `{{episode}}` is the video's path, films included, and it's matched the same way as Radarr's. The Bazarr container needs curl.
 - **What a run does**: sync, convert, or both, and optionally translate the result or add a readable copy.
+- **When a run is done**: a bulk, series or scheduled run can post to an ntfy topic or a Discord webhook how many items synced, were unsure, failed or were skipped, and how long it took. A notification that doesn't get through is logged and changes nothing else.
 
 A run nobody is watching skips any subtitle that's already synced and hasn't changed since, so a nightly schedule only works on what's new. It also leaves the subtitle tracks inside videos alone, since those came with the release and are usually right.
 

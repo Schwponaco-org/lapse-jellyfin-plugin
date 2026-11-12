@@ -33,6 +33,8 @@ public class SyncQueueManager : IDisposable
     private readonly Translation.TranslationService _translationService;
     private readonly ReadableSubtitleService _readable;
     private readonly MultiEngineSyncService _multiEngine;
+    private readonly SyncHistoryService _historyService;
+    private readonly RunNotifier _notifier;
     private readonly ILogger<SyncQueueManager> _logger;
     private readonly object _lock = new();
 
@@ -68,6 +70,15 @@ public class SyncQueueManager : IDisposable
     private CancellationTokenSource _jobCancellation = new();
     private bool _cancelRequested;
 
+    // What the job adds up to, for the notification when it's done. The counters go up
+    // from the item being synced, so outside _lock.
+    private bool _runOpen;
+    private DateTime _startedUtc;
+    private int _synced;
+    private int _unsure;
+    private int _failed;
+    private List<SyncHistoryEntry> _runFiles = new();
+
     /// <summary>
     /// Initializes a new instance of the <see cref="SyncQueueManager"/> class.
     /// </summary>
@@ -81,6 +92,8 @@ public class SyncQueueManager : IDisposable
         Translation.TranslationService translationService,
         ReadableSubtitleService readable,
         MultiEngineSyncService multiEngine,
+        SyncHistoryService historyService,
+        RunNotifier notifier,
         ILogger<SyncQueueManager> logger)
     {
         _libraryManager = libraryManager;
@@ -92,6 +105,8 @@ public class SyncQueueManager : IDisposable
         _translationService = translationService;
         _readable = readable;
         _multiEngine = multiEngine;
+        _historyService = historyService;
+        _notifier = notifier;
         _logger = logger;
     }
 
@@ -268,6 +283,7 @@ public class SyncQueueManager : IDisposable
         CancellationToken cancellationToken)
     {
         var succeeded = 0;
+        BulkRun? finished = null;
 
         lock (_lock)
         {
@@ -308,10 +324,12 @@ public class SyncQueueManager : IDisposable
             lock (_lock)
             {
                 _scheduledRuns--;
+                finished = TakeFinishedRunLocked();
             }
 
             await CloseBatchSessionAsync().ConfigureAwait(false);
             Plugin.Instance?.FlushDeferredSave();
+            Report(finished);
         }
 
         return succeeded;
@@ -399,18 +417,22 @@ public class SyncQueueManager : IDisposable
     /// <param name="result">Engine result, if any.</param>
     /// <param name="syncedPaths">Files that actually got written. Only these count as synced.</param>
     /// <param name="deferSave">Let the disk write wait a few seconds so a bulk run doesn't rewrite the config per item.</param>
-    public static void SaveRecord(
+    /// <param name="results">Every engine result when there was more than one subtitle, each file written gets a history entry. Defaults to <paramref name="result"/>.</param>
+    /// <returns>The history entries added.</returns>
+    public static List<SyncHistoryEntry> SaveRecord(
         Guid itemId,
         MovieSyncStatus status,
         string? error,
         SyncResult? result = null,
         IEnumerable<string>? syncedPaths = null,
-        bool deferSave = false)
+        bool deferSave = false,
+        IEnumerable<SyncResult?>? results = null)
     {
+        var added = new List<SyncHistoryEntry>();
         var plugin = Plugin.Instance;
         if (plugin is null)
         {
-            return;
+            return added;
         }
 
         lock (Plugin.ConfigurationLock)
@@ -443,7 +465,13 @@ public class SyncQueueManager : IDisposable
             record.Slope = result?.Slope;
             record.Intercept = result?.Intercept;
 
-            AddHistory(plugin, itemId, status, result);
+            foreach (var written in results ?? new[] { result })
+            {
+                if (AddHistory(plugin, itemId, status, written) is { } entry)
+                {
+                    added.Add(entry);
+                }
+            }
 
             if (deferSave)
             {
@@ -454,6 +482,8 @@ public class SyncQueueManager : IDisposable
                 plugin.SaveConfiguration();
             }
         }
+
+        return added;
     }
 
     /// <summary>
@@ -583,6 +613,8 @@ public class SyncQueueManager : IDisposable
     {
         try
         {
+            BulkRun? finished = null;
+
             while (true)
             {
                 Guid itemId;
@@ -591,6 +623,7 @@ public class SyncQueueManager : IDisposable
                     if (_pending.Count == 0)
                     {
                         _workerRunning = false;
+                        finished = TakeFinishedRunLocked();
                         break;
                     }
 
@@ -607,6 +640,7 @@ public class SyncQueueManager : IDisposable
 
             await CloseBatchSessionAsync().ConfigureAwait(false);
             Plugin.Instance?.FlushDeferredSave();
+            Report(finished);
         }
         catch (Exception ex)
         {
@@ -669,6 +703,7 @@ public class SyncQueueManager : IDisposable
             // letting this out would kill the worker with the item still marked running
             _logger.LogError(ex, "Syncing item {ItemId} failed unexpectedly", itemId);
             SetItemStatus(itemId, QueueItemStatus.Failed);
+            Interlocked.Increment(ref _failed);
 
             try
             {
@@ -713,6 +748,59 @@ public class SyncQueueManager : IDisposable
         }
 
         _cancelRequested = false;
+
+        _runOpen = true;
+        _startedUtc = DateTime.UtcNow;
+        _synced = 0;
+        _unsure = 0;
+        _failed = 0;
+        _runFiles = new List<SyncHistoryEntry>();
+    }
+
+    // The job's summary once the queue has gone idle, null while there's more to come. One
+    // item on its own (a new episode, a webhook call) isn't a bulk run.
+    private BulkRun? TakeFinishedRunLocked()
+    {
+        if (!_runOpen || !IsIdleLocked())
+        {
+            return null;
+        }
+
+        _runOpen = false;
+
+        if (_items.Count < 2)
+        {
+            return null;
+        }
+
+        return new BulkRun
+        {
+            Name = _jobName ?? "Bulk sync",
+            StartedUtc = _startedUtc,
+            FinishedUtc = DateTime.UtcNow,
+            Synced = _synced,
+            Unsure = _unsure,
+            Failed = _failed,
+            Skipped = _items.Count - _synced - _unsure - _failed,
+            Stopped = _cancelRequested,
+            Files = _runFiles
+        };
+    }
+
+    private void Report(BulkRun? run)
+    {
+        if (run is null)
+        {
+            return;
+        }
+
+        // nothing written, nothing to undo
+        if (run.Files.Count > 0)
+        {
+            _historyService.SaveRun(run);
+        }
+
+        _ = Task.Run(() => _notifier.NotifyAsync(run));
     }
 
     private void AddRowLocked(BaseItem item)
@@ -766,11 +854,24 @@ public class SyncQueueManager : IDisposable
     }
 
     // Saves the record, marks the row and says whether it counts as a success.
-    private bool Finish(Guid itemId, MovieSyncStatus status, string? message, SyncResult? result = null, List<string>? syncedPaths = null)
+    private bool Finish(Guid itemId, MovieSyncStatus status, string? message, List<SyncResult>? results = null, List<string>? syncedPaths = null)
     {
-        SaveRecord(itemId, status, message, result, syncedPaths, deferSave: true);
+        var written = SaveRecord(itemId, status, message, results?.LastOrDefault(), syncedPaths, deferSave: true, results);
+        lock (_lock)
+        {
+            _runFiles.AddRange(written);
+        }
 
         var failed = status == MovieSyncStatus.Failed;
+        if (failed)
+        {
+            Interlocked.Increment(ref _failed);
+        }
+        else if (status == MovieSyncStatus.Synced)
+        {
+            Interlocked.Increment(ref _synced);
+        }
+
         SetItemStatus(itemId, failed ? QueueItemStatus.Failed : QueueItemStatus.Done);
         return !failed;
     }
@@ -849,7 +950,7 @@ public class SyncQueueManager : IDisposable
         string? lastError = null;
         string? lastSkip = null;
         var doubted = false; // skipped because the engine was unsure, not because it was already right
-        SyncResult? lastResult = null;
+        var results = new List<SyncResult>();
         var syncedPaths = new List<string>();
         var converted = 0;
 
@@ -895,7 +996,7 @@ public class SyncQueueManager : IDisposable
             var result = await _runner
                 .RunAsync(engine, referencePath, workPath, mode, penalty, batch: _batch, cancellationToken: cancellationToken)
                 .ConfigureAwait(false);
-            lastResult = result;
+            results.Add(result);
 
             // only when an admin allowed it for unattended runs, each unsure subtitle leaves 2-3 extra files
             if (result.Success && _multiEngine.ShouldBuild(result, unattended: true))
@@ -939,7 +1040,7 @@ public class SyncQueueManager : IDisposable
 
         if (lastError is not null)
         {
-            return Finish(itemId, MovieSyncStatus.Failed, lastError, lastResult, syncedPaths);
+            return Finish(itemId, MovieSyncStatus.Failed, lastError, results, syncedPaths);
         }
 
         if (action == AutomationAction.Convert)
@@ -955,10 +1056,15 @@ public class SyncQueueManager : IDisposable
         // Stays pending with the reason, unless every subtitle was simply already right.
         if (lastSkip is not null)
         {
-            return Finish(itemId, doubted ? MovieSyncStatus.Pending : MovieSyncStatus.Synced, lastSkip, lastResult, syncedPaths);
+            if (doubted)
+            {
+                Interlocked.Increment(ref _unsure);
+            }
+
+            return Finish(itemId, doubted ? MovieSyncStatus.Pending : MovieSyncStatus.Synced, lastSkip, results, syncedPaths);
         }
 
-        return Finish(itemId, MovieSyncStatus.Synced, null, lastResult, syncedPaths);
+        return Finish(itemId, MovieSyncStatus.Synced, null, results, syncedPaths);
     }
 
     // Writes the subtitle in the configured conversion format. Returns the path to carry
@@ -1124,14 +1230,14 @@ public class SyncQueueManager : IDisposable
 
     // One entry per file we actually wrote, so it can be undone. Skips and failures wrote
     // nothing and get no entry.
-    private static void AddHistory(Plugin plugin, Guid itemId, MovieSyncStatus status, SyncResult? result)
+    private static SyncHistoryEntry? AddHistory(Plugin plugin, Guid itemId, MovieSyncStatus status, SyncResult? result)
     {
         if (result is null || !result.Success || result.Skipped || string.IsNullOrEmpty(result.OutputPath))
         {
-            return;
+            return null;
         }
 
-        SyncHistoryService.Append(plugin.Configuration, new SyncHistoryEntry
+        var entry = new SyncHistoryEntry
         {
             ItemId = itemId,
             Status = status,
@@ -1146,9 +1252,14 @@ public class SyncQueueManager : IDisposable
                 && (result.ReplacedExtractedCopy
                     || !string.Equals(result.OutputPath, result.InputPath, StringComparison.Ordinal)),
 
+            OutputWriteUtc = WriteTimeOf(result.OutputPath),
+
             // keep it short, a paragraph here pushed the name off the row
             Detail = DescribeForHistory(result)
-        });
+        };
+
+        SyncHistoryService.Append(plugin.Configuration, entry);
+        return entry;
     }
 
     private static string DescribeForHistory(SyncResult result)

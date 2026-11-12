@@ -1662,6 +1662,7 @@
                 // only when a job just finished. Doing it every idle tick ran Lapse/Status (whole library) every 2s.
                 refreshItemList(view);
                 refreshOverview(view);
+                refreshRuns(view);
             }
 
             queueWasRunning = running;
@@ -2566,6 +2567,61 @@
         });
     }
 
+    function refreshRuns(view) {
+        return lapseGet('Lapse/Runs').then(function (runs) {
+            var container = view.querySelector('#lapseRuns');
+
+            container.innerHTML = runs.length === 0
+                ? '<div class="lapseActivityEmpty">No bulk run has written anything yet.</div>'
+                : '<div class="lapseActivityList">' + runs.map(function (run) {
+                    var action = run.Undone >= run.Files
+                        ? '<span class="lapseActivityUndone">undone</span>'
+                        : '<button is="emby-button" type="button" class="raised lapseSmallButton lapseBtnUndoRun"' +
+                          ' data-id="' + escapeHtml(run.Id) + '">Undo run</button>';
+
+                    return '<div class="lapseActivityRow">' +
+                        '<span class="lapseActivityName">' + escapeHtml(run.Name) + '</span>' +
+                        '<span class="lapseActivityDetail">' + run.Synced + ' synced, ' + run.Unsure + ' unsure, ' +
+                        run.Failed + ' failed, ' + run.Skipped + ' skipped. ' + run.Files + ' files written.</span>' +
+                        '<span class="lapseActivityWhen">' + escapeHtml(timeAgo(run.FinishedUtc)) + '</span>' +
+                        '<span class="lapseActivityAction">' + action + '</span>' +
+                        '</div>';
+                }).join('') + '</div>';
+
+            container.querySelectorAll('.lapseBtnUndoRun').forEach(function (button) {
+                button.addEventListener('click', function () {
+                    undoRun(view, button);
+                });
+            });
+        });
+    }
+
+    function undoRun(view, button) {
+        if (!window.confirm('Put back every file this run wrote? Files written again since the run are left alone.')) {
+            return;
+        }
+
+        button.disabled = true;
+        lapsePost('Lapse/Runs/' + button.getAttribute('data-id') + '/Undo').then(function (files) {
+            var left = files.filter(function (file) { return !file.Reverted; });
+            var lines = ['Put back ' + (files.length - left.length) + ' of ' + files.length + ' files.'];
+
+            // one line per file that's still as the run left it, a whole library of them won't fit
+            left.slice(0, 20).forEach(function (file) {
+                lines.push(file.OutputPath + ': ' + file.Outcome);
+            });
+            if (left.length > 20) {
+                lines.push('...and ' + (left.length - 20) + ' more.');
+            }
+
+            Dashboard.alert(lines.join('\n'));
+            return Promise.all([refreshRuns(view), refreshItemList(view), refreshOverview(view)]);
+        }).catch(function (err) {
+            button.disabled = false;
+            Dashboard.alert('Could not undo that run: ' + err.message);
+        });
+    }
+
     function toggleSkipFolder(view) {
         var select = view.querySelector('#lapseFolderSelect');
         var option = select.options[select.selectedIndex];
@@ -3189,6 +3245,8 @@
         view.querySelector('#lapseOpenSubtitlesPassword').value = currentSettings.OpenSubtitlesPassword || '';
         view.querySelector('#lapseArrWebhookEnabled').checked = !!currentSettings.ArrWebhookEnabled;
         renderWebhookUrl(view);
+        view.querySelector('#lapseNtfyUrl').value = currentSettings.NtfyUrl || '';
+        view.querySelector('#lapseDiscordWebhookUrl').value = currentSettings.DiscordWebhookUrl || '';
 
         view.querySelector('#lapseExtractEnabled').checked = !!currentSettings.ExtractEmbeddedEnabled;
         view.querySelector('#lapseExtractLanguages').value = currentSettings.ExtractLanguages || '';
@@ -3895,6 +3953,8 @@
             OpenSubtitlesPassword: view.querySelector('#lapseOpenSubtitlesPassword').value || null,
             OpenSubtitlesLanguage: view.querySelector('#lapseOpenSubtitlesLanguage').value || 'en',
             ArrWebhookEnabled: view.querySelector('#lapseArrWebhookEnabled').checked,
+            NtfyUrl: view.querySelector('#lapseNtfyUrl').value.trim() || null,
+            DiscordWebhookUrl: view.querySelector('#lapseDiscordWebhookUrl').value.trim() || null,
             ExtractEmbeddedEnabled: view.querySelector('#lapseExtractEnabled').checked,
             ExtractLibraryIds: selectedExtractLibraryIds(view),
             ExtractLanguages: view.querySelector('#lapseExtractLanguages').value.trim() || null,
@@ -4037,6 +4097,7 @@
                 refreshIgnoreRules(view),
                 refreshUsers(view),
                 refreshFolders(view),
+                refreshRuns(view),
                 refreshQueue(view),
                 refreshPlatform(view),
                 refreshEngineCache(view),

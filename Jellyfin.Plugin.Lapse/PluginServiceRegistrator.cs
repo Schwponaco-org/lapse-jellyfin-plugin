@@ -31,6 +31,12 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
             c.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("Jellyfin-Plugin-Lapse", version));
         });
 
+        // The factory logs every request URL, and a notification URL is a secret.
+        serviceCollection.AddHttpClient("LapseNotify", c =>
+        {
+            c.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("Jellyfin-Plugin-Lapse", version));
+        }).RemoveAllLoggers();
+
         serviceCollection.AddSingleton<EngineRegistry>();
         serviceCollection.AddSingleton<EngineCapabilityProbe>();
         serviceCollection.AddSingleton<EngineRunner>();
@@ -49,6 +55,7 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddSingleton<FontInstaller>();
         serviceCollection.AddSingleton<ReadableSubtitleService>();
         serviceCollection.AddSingleton<MultiEngineSyncService>();
+        serviceCollection.AddSingleton<RunNotifier>();
         serviceCollection.AddSingleton<SyncQueueManager>();
 
         serviceCollection.AddSingleton<SeriesSyncService>();
