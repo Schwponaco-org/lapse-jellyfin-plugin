@@ -74,13 +74,11 @@ public partial class SyncQueueManager : IDisposable
     private CancellationTokenSource _jobCancellation = new();
     private bool _cancelRequested;
 
-    // What the job adds up to, for the notification when it's done. The counters go up
-    // from the item being synced, so outside _lock.
+    // What the job adds up to, for the notification when it's done. An item synced twice
+    // in one job counts once, the way it went the last time.
+    private readonly Dictionary<Guid, MovieSyncStatus> _counted = new();
     private bool _runOpen;
     private DateTime _startedUtc;
-    private int _synced;
-    private int _unsure;
-    private int _failed;
     private List<SyncHistoryEntry> _runFiles = new();
 
     /// <summary>
@@ -758,7 +756,7 @@ public partial class SyncQueueManager : IDisposable
             // letting this out would kill the worker with the item still marked running
             _logger.LogError(ex, "Syncing item {ItemId} failed unexpectedly", itemId);
             SetItemStatus(itemId, QueueItemStatus.Failed);
-            Interlocked.Increment(ref _failed);
+            Count(itemId, MovieSyncStatus.Failed);
 
             try
             {
@@ -807,9 +805,7 @@ public partial class SyncQueueManager : IDisposable
 
         _runOpen = true;
         _startedUtc = DateTime.UtcNow;
-        _synced = 0;
-        _unsure = 0;
-        _failed = 0;
+        _counted.Clear();
         _runFiles = new List<SyncHistoryEntry>();
     }
 
@@ -834,10 +830,10 @@ public partial class SyncQueueManager : IDisposable
             Name = _jobName ?? "Bulk sync",
             StartedUtc = _startedUtc,
             FinishedUtc = DateTime.UtcNow,
-            Synced = _synced,
-            Unsure = _unsure,
-            Failed = _failed,
-            Skipped = _items.Count - _synced - _unsure - _failed,
+            Synced = _counted.Values.Count(s => s == MovieSyncStatus.Synced),
+            Unsure = _counted.Values.Count(s => s == MovieSyncStatus.Pending),
+            Failed = _counted.Values.Count(s => s == MovieSyncStatus.Failed),
+            Skipped = _items.Count - _counted.Count,
             Stopped = _cancelRequested,
             Files = _runFiles
         };
@@ -901,6 +897,22 @@ public partial class SyncQueueManager : IDisposable
         return status is QueueItemStatus.Done or QueueItemStatus.Failed or QueueItemStatus.Cancelled;
     }
 
+    // Pending is what an unsure item counts as, null takes the item back out of the count.
+    private void Count(Guid itemId, MovieSyncStatus? outcome)
+    {
+        lock (_lock)
+        {
+            if (outcome is { } counted)
+            {
+                _counted[itemId] = counted;
+            }
+            else
+            {
+                _counted.Remove(itemId);
+            }
+        }
+    }
+
     private void SetItemStatus(Guid itemId, QueueItemStatus status)
     {
         lock (_lock)
@@ -910,7 +922,7 @@ public partial class SyncQueueManager : IDisposable
     }
 
     // Saves the record, marks the row and says whether it counts as a success.
-    private bool Finish(Guid itemId, MovieSyncStatus status, string? message, List<SyncResult>? results = null, List<string>? syncedPaths = null)
+    private bool Finish(Guid itemId, MovieSyncStatus status, string? message, List<SyncResult>? results = null, List<string>? syncedPaths = null, bool unsure = false)
     {
         var written = SaveRecord(itemId, status, message, results?.LastOrDefault(), syncedPaths, deferSave: true, results);
         lock (_lock)
@@ -919,14 +931,7 @@ public partial class SyncQueueManager : IDisposable
         }
 
         var failed = status == MovieSyncStatus.Failed;
-        if (failed)
-        {
-            Interlocked.Increment(ref _failed);
-        }
-        else if (status == MovieSyncStatus.Synced)
-        {
-            Interlocked.Increment(ref _synced);
-        }
+        Count(itemId, failed || status == MovieSyncStatus.Synced ? status : unsure ? MovieSyncStatus.Pending : (MovieSyncStatus?)null);
 
         SetItemStatus(itemId, failed ? QueueItemStatus.Failed : QueueItemStatus.Done);
         return !failed;
@@ -1112,12 +1117,7 @@ public partial class SyncQueueManager : IDisposable
         // Stays pending with the reason, unless every subtitle was simply already right.
         if (lastSkip is not null)
         {
-            if (doubted)
-            {
-                Interlocked.Increment(ref _unsure);
-            }
-
-            return Finish(itemId, doubted ? MovieSyncStatus.Pending : MovieSyncStatus.Synced, lastSkip, results, syncedPaths);
+            return Finish(itemId, doubted ? MovieSyncStatus.Pending : MovieSyncStatus.Synced, lastSkip, results, syncedPaths, doubted);
         }
 
         return Finish(itemId, MovieSyncStatus.Synced, null, results, syncedPaths);
