@@ -1734,22 +1734,23 @@
         }
     }
 
-    // Capture, so this runs before the client's own shortcut handling. Without it, typing
-    // in the panel plays and pauses the film and the arrow keys seek it.
+    // Escape closes the panel wherever the focus is.
     function panelKeyHandler(e) {
-        var panel = document.getElementById(PANEL_ID);
-        if (!panel) {
-            return;
-        }
-
-        if (e.key === 'Escape') {
+        if (e.key === 'Escape' && document.getElementById(PANEL_ID)) {
             closePlayerPanel();
             e.stopPropagation();
             e.preventDefault();
-            return;
         }
+    }
 
-        if (!panel.contains(e.target)) {
+    // Keys pressed in the panel stop at the panel. Without it, typing in the panel plays and
+    // pauses the film and the arrow keys seek it. Enter on a button goes on to the player like
+    // it does for the player's own buttons: the player only lets the click that follows through
+    // to the element its key handling saw last, and in Firefox that click comes after the key.
+    function panelKeys(e) {
+        var panel = e.currentTarget;
+
+        if (e.key === 'Enter' && e.target.tagName === 'BUTTON') {
             return;
         }
 
@@ -1807,6 +1808,7 @@
 
         document.body.appendChild(panel);
         document.addEventListener('keydown', panelKeyHandler, true);
+        panel.addEventListener('keydown', panelKeys);
         watchForPlaybackEnding();
 
         panel.querySelector('#lapseToolsClose').addEventListener('click', closePlayerPanel);
