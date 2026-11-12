@@ -266,12 +266,12 @@ public partial class LapseEngine : IEngine
         descriptor.Modes.Add(new EngineModeOption(
             SyncMode.Standard,
             "Single offset",
-            "Moves the whole file by one amount. For subtitles that are simply early or late."));
+            "Moves the whole file by one amount, up to 15 minutes either way. For subtitles that are simply early or late."));
         descriptor.Modes.Add(new EngineModeOption(
             SyncMode.Split,
             "Split",
             "Gives different parts of the file different timing. For discs cut around ad breaks, or a film joined from two rips. "
-            + "When the video has chapters, LAPSE takes them as likely places for a cut."));
+            + "When the video has chapters, LAPSE takes them as likely places for a cut. A part can sit further out than the 15 minutes a single offset reaches."));
         descriptor.Modes.Add(new EngineModeOption(
             SyncMode.Ols,
             "Framerate fix",

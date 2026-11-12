@@ -68,7 +68,7 @@ Very short subtitles, like a forced track with five lines, give LAPSE too little
 
 When you sync a track that came out of the video, LAPSE listens to the audio for it. The copy still inside the video would only ever agree with itself.
 
-A split file gets one offset per part, and the result says where each part went, like `moved -895ms then -4900ms`. When the video has chapters, LAPSE takes them as likely places for a cut.
+A split file gets one offset per part, and the result says where each part went, like `moved -895ms then -4900ms`. When the video has chapters, LAPSE takes them as likely places for a cut. A single offset is looked for up to 15 minutes either way, but a part of a split file can sit further out than that, say after a twenty minute scene the subtitle doesn't have.
 
 ### Busy soundtracks
 
@@ -170,7 +170,7 @@ A synced subtitle goes back out in the encoding it came in, so a Windows-1252 fi
 
 ## Engines
 
-- **LAPSE** is the engine this plugin is built around and the one to use. It works out on its own whether a subtitle is early, drifting or cut differently, tells you how sure it is, and reads the most formats. Every download is checked against the checksums published with the release. Moving a subtitle between copies and whisper need LAPSE 2.3.0, and the engine card says when a setting needs a newer build than the one installed.
+- **LAPSE** is the engine this plugin is built around and the one to use. It works out on its own whether a subtitle is early, drifting or cut differently, tells you how sure it is, and reads the most formats. Every download is checked against the checksums published with the release. Bulk runs in one process need LAPSE 2.2.3, moving a subtitle between copies and whisper need 2.3.0, and shifting formats other than `.srt`, `.vtt`, `.ass` and `.ssa`, `.itt`, TTML saved as `.xml` and the Alpine build need 2.5.0. The engine card says when a setting needs a newer build than the one installed.
 - **alass** splits a file into sections and times each one separately, which suits recordings cut around ad breaks. Linux and Windows on x86-64.
 - **ffsubsync** shifts the whole subtitle and can fix framerate mismatches. Linux, Windows and macOS.
 
