@@ -54,10 +54,15 @@
             return;
         }
 
-        if (!window.confirm(message + '\n\nTurn on "Sync even when the engine is unsure" and try again?')) {
-            return;
-        }
+        confirmAction('Not sure enough to write it', message + ' Turn on "Sync even when the engine is unsure" and try again?',
+            'Turn it on and retry', false).then(function (yes) {
+            if (yes) {
+                forceAndRetry(engineId, view, retry);
+            }
+        });
+    }
 
+    function forceAndRetry(engineId, view, retry) {
         lapsePost('Lapse/Engines/' + engineId + '/Parameter', { Key: 'force', Value: 'true' }).then(function () {
             if (view) {
                 refreshEngines(view);
@@ -1190,21 +1195,23 @@
             var uninstall = card.querySelector('.lapseBtnUninstall');
             if (uninstall) {
                 uninstall.addEventListener('click', function () {
-                    if (!window.confirm('Remove the installed copy of ' + engineName(id) +
-                        '? Your settings for it are kept, and you can install it again at any time.')) {
-                        return;
-                    }
+                    confirmAction('Uninstall ' + engineName(id),
+                        'Your settings for it are kept, and it can be installed again at any time.', 'Uninstall').then(function (yes) {
+                        if (!yes) {
+                            return;
+                        }
 
-                    uninstall.disabled = true;
-                    Dashboard.showLoadingMsg();
+                        uninstall.disabled = true;
+                        Dashboard.showLoadingMsg();
 
-                    lapsePost('Lapse/Engines/' + id + '/Uninstall').then(function () {
-                        Dashboard.hideLoadingMsg();
-                        return refreshEngines(view).then(function () { return refreshOverview(view); });
-                    }).catch(function (err) {
-                        Dashboard.hideLoadingMsg();
-                        Dashboard.alert('Could not remove that engine: ' + err.message);
-                        return refreshEngines(view);
+                        lapsePost('Lapse/Engines/' + id + '/Uninstall').then(function () {
+                            Dashboard.hideLoadingMsg();
+                            return refreshEngines(view).then(function () { return refreshOverview(view); });
+                        }).catch(function (err) {
+                            Dashboard.hideLoadingMsg();
+                            Dashboard.alert('Could not remove that engine: ' + err.message);
+                            return refreshEngines(view);
+                        });
                     });
                 });
             }
@@ -1303,6 +1310,15 @@
     }
 
     function clearEngineCache(view) {
+        confirmAction('Clear the cache', 'Nothing is lost, but the next sync of each film takes longer while LAPSE listens to it again.',
+            'Clear').then(function (yes) {
+            if (yes) {
+                clearEngineCacheConfirmed(view);
+            }
+        });
+    }
+
+    function clearEngineCacheConfirmed(view) {
         lapseDelete('Lapse/Engines/Cache').then(function () {
             return refreshEngineCache(view);
         }).catch(function (err) {
@@ -1557,10 +1573,9 @@
                 return;
             }
 
-            var overlay = openOverlay(
-                '<h3>Sync a season</h3>' +
+            var overlay = openDialog('Sync a season',
                 '<div class="selectContainer">' +
-                '  <label class="selectLabel">Series</label>' +
+                '  <label class="selectLabel" for="lapseSeasonSeries">Series</label>' +
                 '  <select is="emby-select" id="lapseSeasonSeries" class="emby-select-withcolor emby-select">' +
                 series.map(function (s) {
                     return '<option value="' + s.ItemId + '">' + escapeHtml(s.Name) + '</option>';
@@ -1568,17 +1583,14 @@
                 '  </select>' +
                 '</div>' +
                 '<div class="selectContainer">' +
-                '  <label class="selectLabel">Season</label>' +
+                '  <label class="selectLabel" for="lapseSeasonSeason">Season</label>' +
                 '  <select is="emby-select" id="lapseSeasonSeason" class="emby-select-withcolor emby-select"></select>' +
-                '</div>' +
-                '<div class="lapseDialogButtons">' +
-                '  <button is="emby-button" type="button" class="raised" id="lapseSeasonCancel"><span>Cancel</span></button>' +
-                '  <button is="emby-button" type="button" class="raised button-submit" id="lapseSeasonSync"><span>Sync</span></button>' +
-                '</div>');
+                '</div>',
+                'Sync');
 
             var seriesSelect = overlay.querySelector('#lapseSeasonSeries');
             var seasonSelect = overlay.querySelector('#lapseSeasonSeason');
-            var syncButton = overlay.querySelector('#lapseSeasonSync');
+            var syncButton = overlay.querySelector('.btnSubmit');
 
             function loadSeasons() {
                 seasonSelect.innerHTML = '<option value="">Loading...</option>';
@@ -1603,17 +1615,13 @@
             seriesSelect.addEventListener('change', loadSeasons);
             loadSeasons();
 
-            overlay.querySelector('#lapseSeasonCancel').addEventListener('click', function () {
-                overlay.remove();
-            });
-
             syncButton.addEventListener('click', function () {
                 var seasonId = seasonSelect.value;
                 if (!seasonId) {
                     return;
                 }
 
-                overlay.remove();
+                closeDialog(overlay);
                 Dashboard.showLoadingMsg();
 
                 lapsePost('Lapse/Series/Sync', { ItemId: seasonId }).then(function (result) {
@@ -1931,41 +1939,66 @@
         }).join('');
     }
 
-    function openOverlay(innerHtml) {
-        var overlay = document.createElement('div');
-        overlay.className = 'lapseOverlay';
-        overlay.innerHTML = '<div class="lapseDialogCard">' + innerHtml + '</div>';
+    // Jellyfin's own dialog, so it sizes, scrolls, keeps focus and closes on Back like every other one
+    function openDialog(title, bodyHtml, submitLabel) {
+        var dlg = Dashboard.dialogHelper.createDialog({ size: 'small', removeOnClose: true, scrollY: false });
 
-        overlay.addEventListener('click', function (e) {
-            if (e.target === overlay) {
-                overlay.remove();
-            }
+        dlg.classList.add('formDialog');
+        dlg.setAttribute('aria-label', title);
+        dlg.innerHTML =
+            '<div class="formDialogHeader">' +
+            '  <button is="paper-icon-button-light" type="button" class="btnCancel autoSize" title="Close" aria-label="Close">' +
+            '    <span class="material-icons arrow_back" aria-hidden="true"></span></button>' +
+            '  <h3 class="formDialogHeaderTitle"></h3>' +
+            '</div>' +
+            '<div class="formDialogContent smoothScrollY">' +
+            '  <div class="dialogContentInner dialog-content-centered">' + bodyHtml + '</div>' +
+            '</div>' +
+            (submitLabel
+                ? '<div class="formDialogFooter">' +
+                  '  <button is="emby-button" type="button" class="raised button-submit block formDialogFooterItem btnSubmit">' +
+                  '<span>' + escapeHtml(submitLabel) + '</span></button>' +
+                  '</div>'
+                : '');
+
+        dlg.querySelector('.formDialogHeaderTitle').textContent = title;
+        dlg.querySelector('.btnCancel').addEventListener('click', function () {
+            closeDialog(dlg);
         });
 
-        document.body.appendChild(overlay);
-        return overlay;
+        Dashboard.dialogHelper.open(dlg);
+        return dlg;
+    }
+
+    function closeDialog(dlg) {
+        Dashboard.dialogHelper.close(dlg);
+    }
+
+    // Jellyfin's confirm, with the action named on the button instead of OK. Resolves true or false.
+    function confirmAction(title, text, confirmText, destructive) {
+        return new Promise(function (resolve) {
+            Dashboard.confirm({
+                title: title,
+                text: text,
+                confirmText: confirmText,
+                primary: destructive === false ? null : 'delete'
+            }, title, resolve);
+        });
     }
 
     function openSubtitlePickerDialog(view, itemId, name, subtitles) {
-        var overlay = openOverlay(
-            '<h3>Pick a subtitle</h3>' +
+        var overlay = openDialog(name,
             '<div class="selectContainer">' +
+            '  <label class="selectLabel" for="lapseQuickPickerSelect">Subtitle</label>' +
             '  <select is="emby-select" id="lapseQuickPickerSelect" class="emby-select-withcolor emby-select">' +
             subtitleOptionsHtml(subtitles) +
             '  </select>' +
-            '</div>' +
-            '<div class="lapseDialogButtons">' +
-            '  <button is="emby-button" type="button" class="raised" id="lapseQuickPickerCancel"><span>Cancel</span></button>' +
-            '  <button is="emby-button" type="button" class="raised button-submit" id="lapseQuickPickerSync"><span>Sync</span></button>' +
-            '</div>');
+            '</div>',
+            'Sync');
 
-        overlay.querySelector('#lapseQuickPickerCancel').addEventListener('click', function () {
-            overlay.remove();
-        });
-
-        overlay.querySelector('#lapseQuickPickerSync').addEventListener('click', function () {
+        overlay.querySelector('.btnSubmit').addEventListener('click', function () {
             var path = overlay.querySelector('#lapseQuickPickerSelect').value;
-            overlay.remove();
+            closeDialog(overlay);
             runSync(view, itemId, name, path);
         });
     }
@@ -2114,11 +2147,10 @@
             });
 
             box.innerHTML =
-                '<hr class="lapseDialogRule" />' +
-                '<h4 class="lapseSubHeading">From another copy</h4>' +
+                '<h3 class="lapseDialogSection">From another copy</h3>' +
                 (list.CanMove
                     ? '<div class="selectContainer">' +
-                      '  <label class="selectLabel">The copy the subtitle fits</label>' +
+                      '  <label class="selectLabel" for="lapseAdvCopySource">The copy the subtitle fits</label>' +
                       '  <select is="emby-select" id="lapseAdvCopySource" class="emby-select-withcolor emby-select">' +
                       copies.map(function (c) {
                           return '<option value="' + escapeHtml(c.ItemId) + '">' + escapeHtml(c.Name) + '</option>';
@@ -2127,13 +2159,12 @@
                       '  <div class="fieldDescription" id="lapseAdvCopyDetail"></div>' +
                       '</div>' +
                       '<div class="selectContainer">' +
-                      '  <label class="selectLabel">Subtitle</label>' +
+                      '  <label class="selectLabel" for="lapseAdvCopySubtitle">Subtitle</label>' +
                       '  <select is="emby-select" id="lapseAdvCopySubtitle" class="emby-select-withcolor emby-select"></select>' +
                       '</div>' +
-                      '<div class="fieldDescription lapseTightNote">For a subtitle that fits the other copy but not this one. ' +
-                      'LAPSE lines the two soundtracks up, so a cut scene or a copy that runs faster is no problem, and writes ' +
-                      'the result as a new file named after this video.</div>' +
-                      '<button is="emby-button" type="button" class="raised lapseSmallButton" id="lapseAdvMoveCopy" disabled><span>Move it across</span></button>'
+                      '<div class="fieldDescription">For a subtitle that fits the other copy but not this one. ' +
+                      'The result is a new file named after this video.</div>' +
+                      '<button is="emby-button" type="button" class="raised" id="lapseAdvMoveCopy" disabled><span>Move it across</span></button>'
                     : '<div class="fieldDescription">' + escapeHtml(list.Problem || '') + '</div>');
 
             box.classList.remove('hide');
@@ -2181,7 +2212,7 @@
                     SubtitlePath: subtitleSelect.value
                 };
 
-                overlay.remove();
+                closeDialog(overlay);
                 Dashboard.showLoadingMsg();
 
                 lapsePost('Lapse/SyncFromCopy', request).then(function (result) {
@@ -2217,7 +2248,7 @@
         } else if (subtitles.length > 1) {
             subtitlePickerHtml = '' +
                 '<div class="selectContainer">' +
-                '  <label class="selectLabel">Subtitle</label>' +
+                '  <label class="selectLabel" for="lapseAdvSubtitle">Subtitle</label>' +
                 '  <select is="emby-select" id="lapseAdvSubtitle" class="emby-select-withcolor emby-select">' +
                 subtitleOptionsHtml(subtitles) +
                 '  </select>' +
@@ -2234,23 +2265,22 @@
         }).join('');
 
         var multiTrackHtml = subtitles.length > 1
-            ? '<hr class="lapseDialogRule" />' +
+            ? '<h3 class="lapseDialogSection">Sync to another subtitle</h3>' +
               '<div class="selectContainer">' +
-              '  <label class="selectLabel">Reference (the subtitle that is already correct)</label>' +
+              '  <label class="selectLabel" for="lapseAdvReference">Reference (the subtitle that is already correct)</label>' +
               '  <select is="emby-select" id="lapseAdvReference" class="emby-select-withcolor emby-select">' +
               subtitleOptionsHtml(subtitles) +
               '  </select>' +
               '</div>' +
               '<div class="selectContainer">' +
-              '  <label class="selectLabel">Sync to it</label>' +
+              '  <label class="selectLabel" for="lapseAdvReferenceTarget">Sync to it</label>' +
               '  <select is="emby-select" id="lapseAdvReferenceTarget" class="emby-select-withcolor emby-select">' +
               '    <option value="">Every other subtitle</option>' +
               subtitleOptionsHtml(subtitles) +
               '  </select>' +
               '</div>' +
-              '<div class="fieldDescription lapseTightNote">Lines the tracks up against the reference instead of against the audio. ' +
-              'Faster and usually more accurate, as long as the reference is right. Pick a single track when only one of them is off.</div>' +
-              '<button is="emby-button" type="button" class="raised lapseSmallButton" id="lapseAdvSyncAll"><span>Sync to reference</span></button>'
+              '<div class="fieldDescription">Faster than the audio and usually more accurate, as long as the reference is right.</div>' +
+              '<button is="emby-button" type="button" class="raised" id="lapseAdvSyncAll"><span>Sync to reference</span></button>'
             : '';
 
         var providers = configuredProviders();
@@ -2263,22 +2293,21 @@
         var defaultSource = (currentSettings && currentSettings.TranslationDefaultSourceLanguage) || '';
 
         var translationHtml = (subtitles.length > 0 && providers.length > 0)
-            ? '<hr class="lapseDialogRule" />' +
-              '<h4 class="lapseSubHeading">Translate</h4>' +
+            ? '<h3 class="lapseDialogSection">Translate</h3>' +
               '<div class="lapseFieldPair">' +
               '  <div class="inputContainer">' +
-              '    <label class="inputLabel inputLabelUnfocused">From</label>' +
+              '    <label class="inputLabel inputLabelUnfocused" for="lapseAdvSourceLang">From</label>' +
               '    <input is="emby-input" id="lapseAdvSourceLang" type="text" placeholder="auto" value="' +
               escapeHtml(defaultSource) + '" />' +
               '  </div>' +
               '  <div class="inputContainer">' +
-              '    <label class="inputLabel inputLabelUnfocused">To</label>' +
+              '    <label class="inputLabel inputLabelUnfocused" for="lapseAdvTargetLang">To</label>' +
               '    <input is="emby-input" id="lapseAdvTargetLang" type="text" placeholder="es" value="' +
               escapeHtml(defaultTarget) + '" />' +
               '  </div>' +
               '</div>' +
               '<div class="selectContainer">' +
-              '  <label class="selectLabel">Provider</label>' +
+              '  <label class="selectLabel" for="lapseAdvProvider">Provider</label>' +
               '  <select is="emby-select" id="lapseAdvProvider" class="emby-select-withcolor emby-select">' +
               providers.map(function (p) {
                   return '<option value="' + escapeHtml(p.Id) + '"' + (p.IsDefault ? ' selected' : '') + '>' +
@@ -2287,7 +2316,7 @@
               '  </select>' +
               '</div>' +
               '<div class="inputContainer">' +
-              '  <label class="inputLabel inputLabelUnfocused">Confidence threshold: <span id="lapseAdvConfidenceValue">' +
+              '  <label class="inputLabel inputLabelUnfocused" for="lapseAdvConfidence">Confidence threshold: <span id="lapseAdvConfidenceValue">' +
               threshold + '</span>%</label>' +
               '  <input type="range" id="lapseAdvConfidence" min="0" max="100" value="' + threshold + '" class="lapseRange" />' +
               '</div>' +
@@ -2296,19 +2325,17 @@
               ((currentSettings && currentSettings.TranslationIncludeMetadataHeader) ? ' checked' : '') + ' />' +
               '  <span>Add a metadata comment block at the top</span>' +
               '</label>' +
-              '<div class="fieldDescription lapseTightNote">Writes a new file next to the original, never over it. ' +
-              'The comment block is skipped for .srt, which has no comment syntax to put one in.</div>' +
-              '<button is="emby-button" type="button" class="raised lapseSmallButton" id="lapseAdvTranslate"><span>Translate</span></button>'
+              '<div class="fieldDescription">Writes a new file next to the original. .srt has no room for the comment block.</div>' +
+              '<button is="emby-button" type="button" class="raised" id="lapseAdvTranslate"><span>Translate</span></button>'
             : '';
 
-        var overlay = openOverlay(
-            '  <h3>' + escapeHtml(name) + '</h3>' +
+        var overlay = openDialog(name,
             '  <div class="selectContainer">' +
-            '    <label class="selectLabel">Engine</label>' +
+            '    <label class="selectLabel" for="lapseAdvEngine">Engine</label>' +
             '    <select is="emby-select" id="lapseAdvEngine" class="emby-select-withcolor emby-select">' + engineOptions + '</select>' +
             '  </div>' +
             '  <div class="selectContainer">' +
-            '    <label class="selectLabel">Mode</label>' +
+            '    <label class="selectLabel" for="lapseAdvMode">Mode</label>' +
             '    <select is="emby-select" id="lapseAdvMode" class="emby-select-withcolor emby-select">' +
             modeOptionsFor(startEngine, startEngine.DefaultMode) +
             '    </select>' +
@@ -2331,21 +2358,18 @@
             '    </select>' +
             '    <div class="fieldDescription">Converts on the way out. The original file stays where it is.</div>' +
             '  </div>' +
-            '  <div class="lapseDialogButtons">' +
-            '    <button is="emby-button" type="button" class="raised" id="lapseAdvCancel"><span>Cancel</span></button>' +
-            '    <button is="emby-button" type="button" class="raised button-submit" id="lapseAdvSync" ' + (subtitles.length === 0 ? 'disabled' : '') + '><span>Sync</span></button>' +
-            '  </div>' +
+            '  <button is="emby-button" type="button" class="raised button-submit" id="lapseAdvSync"' + (subtitles.length === 0 ? ' disabled' : '') + '><span>Sync</span></button>' +
             multiTrackHtml +
             '  <div id="lapseAdvCopies" class="hide"></div>' +
             translationHtml +
-            '  <hr class="lapseDialogRule" />' +
+            '  <h3 class="lapseDialogSection">Shift by hand</h3>' +
             '  <div class="inputContainer">' +
-            '    <label class="inputLabel inputLabelUnfocused" for="lapseAdvNudge">Fine tune (seconds)</label>' +
+            '    <label class="inputLabel inputLabelUnfocused" for="lapseAdvNudge">Seconds</label>' +
             '    <div class="lapseNudgeRow">' +
             '      <input is="emby-input" id="lapseAdvNudge" type="number" step="0.1" value="0" />' +
-            '      <button is="emby-button" type="button" class="raised lapseSmallButton" id="lapseAdvNudgeApply" ' + (subtitles.length === 0 ? 'disabled' : '') + '><span>Shift</span></button>' +
+            '      <button is="emby-button" type="button" class="raised" id="lapseAdvNudgeApply"' + (subtitles.length === 0 ? ' disabled' : '') + '><span>Shift</span></button>' +
             '    </div>' +
-            '    <div class="fieldDescription">Still slightly off? Minus makes subtitles show up earlier, plus later. Works on .srt, .vtt, .ass and .ssa without an engine, and on the other formats LAPSE reads with LAPSE 2.5.0 or newer.</div>' +
+            '    <div class="fieldDescription">Minus shows the subtitles earlier, plus later.</div>' +
             '  </div>');
 
         var engineSelect = overlay.querySelector('#lapseAdvEngine');
@@ -2412,10 +2436,6 @@
                 : 0;
         }
 
-        overlay.querySelector('#lapseAdvCancel').addEventListener('click', function () {
-            overlay.remove();
-        });
-
         overlay.querySelector('#lapseAdvSync').addEventListener('click', function () {
             var body = {
                 ItemId: itemId,
@@ -2425,7 +2445,7 @@
                 SubtitlePath: selectedSubtitlePath(),
                 OutputFormat: overlay.querySelector('#lapseAdvFormat').value || null
             };
-            overlay.remove();
+            closeDialog(overlay);
             attemptSync(view, name, body);
         });
 
@@ -2450,7 +2470,7 @@
                     Penalty: currentPenalty()
                 }).then(function (result) {
                     Dashboard.hideLoadingMsg();
-                    overlay.remove();
+                    closeDialog(overlay);
                     showMultiSyncAlert(name, result);
                     refreshItemList(view);
                     refreshOverview(view);
@@ -2597,10 +2617,15 @@
     }
 
     function undoRun(view, button) {
-        if (!window.confirm('Put back every file this run wrote? Files written again since the run are left alone.')) {
-            return;
-        }
+        confirmAction('Undo this run', 'Every file the run wrote is put back the way it was. ' +
+            'A file written again since the run is left alone.', 'Undo run').then(function (yes) {
+            if (yes) {
+                undoRunConfirmed(view, button);
+            }
+        });
+    }
 
+    function undoRunConfirmed(view, button) {
         button.disabled = true;
         lapsePost('Lapse/Runs/' + button.getAttribute('data-id') + '/Undo').then(function (files) {
             var left = files.filter(function (file) { return !file.Reverted; });
