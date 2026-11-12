@@ -237,6 +237,7 @@
             }
 
             clearStampedSubtitles();
+            showingTracks().forEach(positionActiveCues);
             return;
         }
 
@@ -248,6 +249,7 @@
 
         style.textContent = buildAppearanceCss(appearance);
         stampAllSubtitleElements();
+        showingTracks().forEach(positionActiveCues);
         ensureChosenFontIsLoadable(appearance.FontFamily);
     }
 
@@ -344,13 +346,14 @@
             '  background-color: ' + background + ' !important;' +
             '}' +
 
-            // Native track rendering, which no amount of element styling can reach.
-            'video::cue {' +
-            '  font-size: ' + fontSize + ';' +
-            '  color: ' + color + ';' +
-            '  background-color: ' + background + ';' +
-            '  letter-spacing: ' + spacing + ';' +
-            (fontStack ? '  font-family: ' + fontStack + ';' : '') +
+            // Native tracks, which Chrome and Safari get. Jellyfin styles those with
+            // .htmlvideoplayer::cue and !important on every property, so this has to match that and
+            // be one step more specific. ::cue has no letter-spacing.
+            'video.htmlvideoplayer::cue {' +
+            '  font-size: ' + fontSize + ' !important;' +
+            '  color: ' + color + ' !important;' +
+            '  background-color: ' + background + ' !important;' +
+            (fontStack ? '  font-family: ' + fontStack + ' !important;' : '') +
             '}';
     }
 
@@ -399,6 +402,47 @@
             .replace(/[-_](Regular|Bold|Italic|BoldItalic|Medium|Light)$/i, '');
     }
 
+    // A native cue ignores element styling, so the height goes on each cue as it comes up. What
+    // Jellyfin set is kept on the cue so turning the setting off puts it back.
+    function positionActiveCues(track) {
+        var appearance = appearanceSettings;
+        var percent = appearance && appearance.Enabled ? (appearance.VerticalPositionPercent || 0) : 0;
+
+        Array.prototype.forEach.call(track.activeCues || [], function (cue) {
+            if (cue.lapseLine === undefined) {
+                cue.lapseLine = cue.line;
+                cue.lapseSnapToLines = cue.snapToLines;
+            }
+
+            if (percent > 0) {
+                cue.snapToLines = false;
+                cue.line = 100 - percent;
+            } else if (cue.line !== cue.lapseLine) {
+                cue.snapToLines = cue.lapseSnapToLines;
+                cue.line = cue.lapseLine;
+            }
+        });
+    }
+
+    function watchTextTracks(video) {
+        if (video.lapseWatched || !video.textTracks) {
+            return;
+        }
+
+        video.lapseWatched = true;
+
+        function watch(track) {
+            track.addEventListener('cuechange', function () {
+                positionActiveCues(track);
+            });
+        }
+
+        Array.prototype.forEach.call(video.textTracks, watch);
+        video.textTracks.addEventListener('addtrack', function (e) {
+            watch(e.track);
+        });
+    }
+
     function stampSubtitleElement(element) {
         var appearance = appearanceSettings;
         if (!appearance || !appearance.Enabled) {
@@ -421,6 +465,13 @@
         if (element.classList.contains('videoSubtitlesInner')) {
             element.style.setProperty('background-color', backgroundOf(appearance), 'important');
         }
+    }
+
+    function showingTracks() {
+        var video = document.querySelector('video');
+        return video && video.textTracks
+            ? Array.prototype.filter.call(video.textTracks, function (t) { return t.mode === 'showing'; })
+            : [];
     }
 
     function stampAllSubtitleElements() {
@@ -454,7 +505,9 @@
         }
 
         // playback starting, make sure the settings are current
-        if (node.nodeName === 'VIDEO' || (node.querySelector && node.querySelector('video'))) {
+        var video = node.nodeName === 'VIDEO' ? node : (node.querySelector ? node.querySelector('video') : null);
+        if (video) {
+            watchTextTracks(video);
             refreshSubtitleAppearance(true);
         }
 
