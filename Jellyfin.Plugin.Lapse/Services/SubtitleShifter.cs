@@ -6,6 +6,8 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Linq;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
@@ -53,7 +55,8 @@ public class SubtitlePreview
 
 /// <summary>
 /// Moves every timestamp in a subtitle forward or back, for hand tuning when a sync is
-/// close but not quite. No engine involved, just text editing.
+/// close but not quite. srt, vtt, ass and ssa are plain text editing, the other formats
+/// go through LAPSE's --shift (2.5.0+).
 /// </summary>
 public partial class SubtitleShifter
 {
@@ -76,6 +79,18 @@ public partial class SubtitleShifter
 
     // Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text (text can have commas)
     private const int AssEventFieldCount = 10;
+
+    private readonly EngineRegistry _registry;
+    private readonly EngineRunner _runner;
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="SubtitleShifter"/> class.
+    /// </summary>
+    public SubtitleShifter(EngineRegistry registry, EngineRunner runner)
+    {
+        _registry = registry;
+        _runner = runner;
+    }
 
     /// <summary>
     /// Checks whether a file is one this can work on at all.
@@ -108,6 +123,43 @@ public partial class SubtitleShifter
         var lines = await SubtitleEncoding.ReadAllLinesAsync(subtitlePath, cancellationToken).ConfigureAwait(false);
 
         return IsAss(subtitlePath) ? ReadFirstAssCue(lines) : ReadFirstTextCue(lines);
+    }
+
+    /// <summary>
+    /// Gets a few times worth watching a synced file at: the first line, where the first
+    /// two split parts start, and a line near the end.
+    /// </summary>
+    public static async Task<List<TimeSpan>> ReadSpotChecksAsync(string subtitlePath, IEnumerable<int> partStarts, CancellationToken cancellationToken = default)
+    {
+        var starts = new List<TimeSpan>();
+        if (!IsShiftable(subtitlePath) || !File.Exists(subtitlePath))
+        {
+            return starts;
+        }
+
+        var lines = await SubtitleEncoding.ReadAllLinesAsync(subtitlePath, cancellationToken).ConfigureAwait(false);
+        var isAss = IsAss(subtitlePath);
+
+        // in file order, which is how the engine counts its splits
+        foreach (var line in lines)
+        {
+            var isCue = isAss
+                ? line.TrimStart().StartsWith("Dialogue:", StringComparison.OrdinalIgnoreCase)
+                : line.Contains("-->", StringComparison.Ordinal);
+
+            if (isCue && TimestampRegex().Match(line) is { Success: true } match)
+            {
+                starts.Add(Parse(match));
+            }
+        }
+
+        // 90% in rather than the last line, end credits are often timed apart from the rest
+        return partStarts.Take(2).Append(0).Append(starts.Count * 9 / 10)
+            .Where(i => i >= 0 && i < starts.Count)
+            .Distinct()
+            .Order()
+            .Select(i => starts[i])
+            .ToList();
     }
 
     private static SubtitlePreview? ReadFirstTextCue(string[] lines)
@@ -187,15 +239,14 @@ public partial class SubtitleShifter
         OutputMode? outputMode = null,
         CancellationToken cancellationToken = default)
     {
-        if (!IsShiftable(subtitlePath))
-        {
-            throw new NotSupportedException(
-                $"Shifting works on .srt, .vtt, .ass and .ssa files, not {Path.GetExtension(subtitlePath)}. Convert it first.");
-        }
-
         if (!File.Exists(subtitlePath))
         {
             throw new FileNotFoundException("Subtitle file not found", subtitlePath);
+        }
+
+        if (!IsShiftable(subtitlePath))
+        {
+            return await ShiftWithEngineAsync(subtitlePath, offsetSeconds, outputMode, cancellationToken).ConfigureAwait(false);
         }
 
         // held from read to write so two shifts stack instead of racing
@@ -253,6 +304,56 @@ public partial class SubtitleShifter
         return new ShiftResult
         {
             Shifted = shiftedCount,
+            OutputPath = destination,
+            BackupPath = backup
+        };
+    }
+
+    // LAPSE rewrites only the times and writes the file back in its own format, pictures included
+    private async Task<ShiftResult> ShiftWithEngineAsync(
+        string subtitlePath,
+        double offsetSeconds,
+        OutputMode? outputMode,
+        CancellationToken cancellationToken)
+    {
+        var lapse = _registry.Find("lapse")!;
+        var enginePath = _runner.ResolvePath(lapse);
+        var runtime = File.Exists(enginePath)
+            ? await _runner.GetRuntimeInfoAsync(lapse, cancellationToken).ConfigureAwait(false)
+            : EngineRuntimeInfo.Unknown;
+
+        if (!runtime.HasFlag("--shift"))
+        {
+            throw new NotSupportedException(
+                $"Shifting {Path.GetExtension(subtitlePath)} files needs LAPSE 2.5.0 or newer, without it only .srt, .vtt, .ass and .ssa can be shifted. "
+                + "Update LAPSE from the dashboard, or convert the subtitle first.");
+        }
+
+        using var fileLock = await SubtitleFileLock.AcquireAsync(subtitlePath, cancellationToken).ConfigureAwait(false);
+
+        var mode = EngineRunner.ResolveOutputMode(outputMode);
+        var destination = EngineRunner.ResolveDestination(subtitlePath, mode);
+        var backup = EngineRunner.TakeBackup(destination, mode);
+
+        var offsetMs = Math.Round(offsetSeconds * 1000).ToString(CultureInfo.InvariantCulture);
+        var process = await ProcessRunner
+            .RunAsync(enginePath, new[] { "--shift", offsetMs, "--json", "--no-backup", "--output", destination, subtitlePath }, null, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (process.ExitCode != 0)
+        {
+            throw new IOException("LAPSE could not shift it: " + process.Stderr.Trim());
+        }
+
+        _runner.CopyVobSubCompanion(subtitlePath, destination);
+        SubtitleFileLock.NoteWritten(destination);
+
+        using var report = JsonDocument.Parse(process.Stdout);
+
+        return new ShiftResult
+        {
+            // a start and an end per cue, counted like the text formats
+            Shifted = report.RootElement.GetProperty("cues").GetInt32() * 2,
             OutputPath = destination,
             BackupPath = backup
         };

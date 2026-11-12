@@ -3,6 +3,7 @@
 // Licensed under GPL v3 - see LICENSE for details
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading;
@@ -18,6 +19,25 @@ public static class SubtitleFileLock
 {
     // one gate per file in use, removed again when nobody holds or waits on it
     private static readonly Dictionary<string, Gate> Gates = new(StringComparer.Ordinal);
+
+    // the write time of every subtitle we wrote, so auto-sync can tell our writes from new files
+    private static readonly ConcurrentDictionary<string, DateTime> Written = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Notes that LAPSE wrote a subtitle itself, a shift, a restore or a download.
+    /// </summary>
+    public static void NoteWritten(string path)
+    {
+        Written[path] = File.GetLastWriteTimeUtc(path);
+    }
+
+    /// <summary>
+    /// Says whether a subtitle is still exactly as LAPSE last wrote it.
+    /// </summary>
+    public static bool IsOwnWrite(string path)
+    {
+        return Written.TryGetValue(path, out var written) && written == File.GetLastWriteTimeUtc(path);
+    }
 
     /// <summary>
     /// Waits for exclusive use of a subtitle file.
@@ -105,6 +125,7 @@ public static class SubtitleFileLock
         {
             await File.WriteAllBytesAsync(temp, bytes, cancellationToken).ConfigureAwait(false);
             File.Move(temp, path, overwrite: true);
+            NoteWritten(path);
         }
         finally
         {

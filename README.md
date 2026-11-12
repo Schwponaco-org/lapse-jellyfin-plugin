@@ -10,6 +10,8 @@ This repo is the Jellyfin plugin. The syncing itself is done by the LAPSE engine
 
 If you only have a file or two to fix and no Jellyfin, try **[LAPSE in the browser](https://schwponaco.org/lapse/)**. It's the same engine running in the tab, so the video stays on your own computer.
 
+On a server over ssh, or if you'd rather stay in a terminal, **[lapse-tui](https://github.com/Schwponaco-org/lapse-tui)** does the same from a terminal on Linux and macOS.
+
 ## Install
 
 1. In Jellyfin, open **Dashboard > Plugins > Repositories** and add this repository:
@@ -21,20 +23,22 @@ If you only have a file or two to fix and no Jellyfin, try **[LAPSE in the brows
 2. Find LAPSE in the **Catalog**, install it and restart Jellyfin.
 3. Open **LAPSE** in the dashboard sidebar and press **Install** on the LAPSE engine. Nothing can sync until an engine is installed.
 
-It needs Jellyfin 10.11.11 or newer and runs on Jellyfin 12 too. The engine has builds for Linux and macOS on Intel and ARM and for Windows, and works in the official Jellyfin Docker image. On Linux outside Docker it needs glibc 2.35 or newer (Ubuntu 22.04, Debian 12 or later).
+It needs Jellyfin 10.11.11 or newer and runs on Jellyfin 12 too. The engine has builds for Linux and macOS on Intel and ARM and for Windows, and works in the official Jellyfin Docker image. On Linux outside Docker it needs glibc 2.35 or newer (Ubuntu 22.04, Debian 12 or later). On Alpine and other musl systems the plugin installs the musl build, which LAPSE publishes from 2.5.0.
 
 ## Using it
 
 Every film, episode and video gets some new entries in its three dot menu. Admins see them straight away, and other people see them once an admin gives them subtitle access (see [Access](#access)).
 
-- **Sync Subtitles** is the one you'll use most. Pick a subtitle if there's more than one and press Sync. **Advanced** lets you choose the engine and mode, write the result in another format, translate it in the same go, or nudge it by hand.
-- **Sync Subtitles to Reference** lines the other subtitles on an item up against one you know is right. It skips the audio, so it's quick, and very accurate when the reference is good. On a series or a season it does every episode.
-- **Move Subtitles from Another Copy** takes a subtitle that fits another copy of the film and moves it onto this one, see [Another copy of the film](#another-copy-of-the-film). It only shows up on items that have another copy.
-- **Shift Subtitles** moves a subtitle by hand, in milliseconds, with a preview of the first line. It works without an engine.
-- **Convert Subtitles** writes a subtitle out as `.srt`, `.vtt`, `.ass` or `.ssa`.
-- **Extract Embedded Subtitles** writes the subtitle tracks inside a video out as files next to it. It can also rebuild the video without them, which helps with direct play. Nothing is re-encoded, and picture tracks (PGS, VobSub) always stay in the video.
-- **Readable Subtitles** makes a copy with a dyslexia-friendly font, bigger text and wider spacing set inside the file, so it looks the same on every device. You choose which subtitles get it, and **Back to normal** undoes it.
-- **Find Subtitles Online** searches OpenSubtitles for the item, lets you pick one and syncs it if you like. It appears once [OpenSubtitles](#opensubtitles-experimental) is set up.
+- **Sync subtitles** is the one you'll use most. Pick a subtitle if there's more than one and press Sync. **Advanced** lets you choose the engine and mode, write the result in another format, translate it in the same go, or nudge it by hand.
+- **Sync to reference** lines the other subtitles on an item up against one you know is right. It skips the audio, so it's quick, and very accurate when the reference is good. On a series or a season it does every episode.
+- **Move subtitles from another copy** takes a subtitle that fits another copy of the film and moves it onto this one, see [Another copy of the film](#another-copy-of-the-film). It only shows up on items that have another copy.
+- **Shift subtitles** moves a subtitle by hand, in milliseconds, with a preview of the first line. `.srt`, `.vtt`, `.ass` and `.ssa` need no engine. The other formats LAPSE reads, `.sup` and `.idx` included, are shifted by LAPSE 2.5.0 or newer.
+- **Convert subtitles** writes a subtitle out as `.srt`, `.vtt`, `.ass` or `.ssa`.
+- **Extract embedded subtitles** writes the subtitle tracks inside a video out as files next to it. It can also rebuild the video without them, which helps with direct play. Nothing is re-encoded, and picture tracks (PGS, VobSub) always stay in the video.
+- **Readable subtitles** makes a copy with a dyslexia-friendly font, bigger text and wider spacing set inside the file, so it looks the same on every device. You choose which subtitles get it, and **Back to normal** undoes it.
+- **Find subtitles online** searches OpenSubtitles for the item, lets you pick one and syncs it if you like. It appears once [OpenSubtitles](#opensubtitles-experimental) is set up.
+
+Jellyfin's own **Edit subtitles** dialog gets a Sync button next to each subtitle file, and a line saying whether it's synced, unsure and waiting for review, or not synced.
 
 ### While you watch
 
@@ -49,7 +53,8 @@ Everyone can use the delay slider and change how subtitles look for their own ac
 ### In the dashboard
 
 - **Sync status** lists every item in the libraries you've turned on and where it stands. **Bulk sync** runs a whole library or folder. **Subtitle to subtitle** lines up any two subtitle files without going through an item.
-- **Recent activity** has an **Undo** on every sync, which restores the backup or deletes the file the sync added.
+- **Overview** says how much is synced, what's waiting in Review, and lists **Recent activity**: every sync and shift in plain words, with an **Undo** that restores the backup or deletes the file it added, and a **Review** button on the unsure ones. Results also open in a dialog that stays until you close it.
+- **Undo run** under Bulk sync does that for every file a bulk, series or scheduled run wrote, for the last five runs. A file written again since the run, by a later sync, Bazarr or by hand, is left alone and listed with the reason, and so is one whose backup has gone. It waits until no job is running.
 - **Stop** in the progress strip ends a running job, and the engine stops with it. Files already written stay as they are.
 
 ## How LAPSE decides
@@ -62,13 +67,17 @@ LAPSE is the only one of the supported engines that says how sure it is. Every a
 | unsure | Probably right, with too little margin to touch your original. | Handled by the low confidence setting under File output. By default the answer goes into a new file next to the original for you to check. |
 | nothing | The audio doesn't back up any answer. This nearly always means the subtitle was made for a different release, or a different film. | The same as unsure. The message points you at finding a subtitle made for this release. |
 
+How clearly an answer has to stand out is the **Confidence threshold** under File output, Advanced. It's passed to LAPSE as `--confidence`, and 8 is LAPSE's own default: higher sends more answers to Review, lower writes more of them, a few wrongly. alass and ffsubsync say nothing about how sure they are, so their answers are always written.
+
 A doubtful answer doesn't count as synced, so the item stays on your list until you've dealt with it. If you know a subtitle belongs to the video and LAPSE is being too careful, turn on **Sync even when the engine is unsure** on the engine's card.
 
-Very short subtitles, like a forced track with five lines, give LAPSE too little to check its answer against. The plugin still has a go and treats the result as unsure. The reliable way to time those is **Sync Subtitles to Reference** against the full subtitle in the same language, or, when you have the copy the forced track was made for, **Move Subtitles from Another Copy**.
+Every answer written next to the original that way shows up under **Review** on the dashboard, from a sync you started or a bulk run. Each one has a few times to check it at: the first line, the start of each part when LAPSE split the file, and a line near the end. Pressing one plays the item in your browser from just before that line, with the answer as the subtitle. **Keep** keeps it the way File output says, the same as keeping an answer in the player. **Discard** deletes it and leaves the original as it was. The answers from [multi engine sync](#multi-engine-sync-experimental) are listed there too.
+
+Very short subtitles, like a forced track with five lines, give LAPSE too little to check its answer against. The plugin still has a go and treats the result as unsure. The reliable way to time those is **Sync to reference** against the full subtitle in the same language, or, when you have the copy the forced track was made for, **Move subtitles from another copy**.
 
 When you sync a track that came out of the video, LAPSE listens to the audio for it. The copy still inside the video would only ever agree with itself.
 
-A split file gets one offset per part, and the result says where each part went, like `moved -895ms then -4900ms`. When the video has chapters, LAPSE takes them as likely places for a cut.
+A split file gets one offset per part, and the result says where each part went, like `moved in 2 parts, 895 ms earlier then 4.9 s earlier`. When the video has chapters, LAPSE takes them as likely places for a cut. A single offset is looked for up to 15 minutes either way, but a part of a split file can sit further out than that, say after a twenty minute scene the subtitle doesn't have.
 
 ### Busy soundtracks
 
@@ -80,7 +89,7 @@ The first sync of a film transcribes it, about two minutes for a two hour film o
 
 A subtitle that's right for one copy of a film is often wrong for another: the TV recording against the Blu-ray, PAL against NTSC, a cut with a scene missing. When you still have the copy it fits, LAPSE 2.3.0 can listen to both and move every line the way the speech around it moved. Two soundtracks say far more about how the copies differ than a subtitle against speech does, so this beats a normal sync, and it works on short forced tracks too.
 
-**Move Subtitles from Another Copy** in the item menu, or **From another copy** in the dashboard's Advanced dialog, offers:
+**Move subtitles from another copy** in the item menu, or **From another copy** in the dashboard's Advanced dialog, offers:
 
 - the other versions Jellyfin groups with the item (`Film - TV.mkv` next to `Film - Bluray.mkv`), and
 - the same film or episode in another library, matched by its IMDb, TMDb or TVDb id.
@@ -100,14 +109,24 @@ Jellyfin shows a new file as an extra subtitle track once it has rescanned the i
 
 A subtitle counts as synced for as long as the file stays the same. If Bazarr or anybody else replaces it, it shows up as not synced again.
 
+With **Leave a subtitle alone when it is already in sync** on, an answer within the tolerance (100 ms by default) counts as synced without rewriting the file or taking a backup. Stretched and split results are always written, since they change the timing across the whole file.
+
 ## Automation
 
 All of this is off until you turn it on, and pressing a button yourself always works.
 
-- **New items**: a library can sync whatever gets added to it.
+- **New items**: a library can sync whatever gets added to it. A subtitle that turns up later for something already in the library gets synced too, however it got there: Jellyfin's own subtitle search from any app (the OpenSubtitles plugin, say), Bazarr, or a file you copied in. That waits for Jellyfin to rescan the item and only counts files written since LAPSE last synced it, so its own output doesn't set it off again. It can be turned off under Automation.
 - **Schedules**: a library can be synced daily or weekly at a time you pick.
 - **Radarr and Sonarr**: add a Webhook connection pointing at LAPSE and imports get synced as soon as Jellyfin has them. Paths are matched on folder and file name as well, so it works when Radarr and Jellyfin see the media under different mount points.
+- **Bazarr**: turn on the webhook, then in Bazarr under Settings > Subtitles turn on Custom Post-Processing and use this as the command, with your server's address and the token from the webhook URL (the settings page shows the whole line ready to copy):
+
+  ```
+  curl -fsS -H "Content-Type: text/plain" --data-binary {{episode}} "http://jellyfin:8096/Lapse/Webhook/Path?token=YOUR_TOKEN"
+  ```
+
+  Every subtitle Bazarr saves then gets synced by LAPSE, so you can turn off Bazarr's own Automatic Subtitles Synchronization. `{{episode}}` is the video's path, films included, and it's matched the same way as Radarr's. The Bazarr container needs curl.
 - **What a run does**: sync, convert, or both, and optionally translate the result or add a readable copy.
+- **When a run is done**: a bulk, series or scheduled run can post to an ntfy topic or a Discord webhook how many items synced, were unsure, failed or were skipped, and how long it took. A notification that doesn't get through is logged and changes nothing else.
 
 A run nobody is watching skips any subtitle that's already synced and hasn't changed since, so a nightly schedule only works on what's new. It also leaves the subtitle tracks inside videos alone, since those came with the release and are usually right.
 
@@ -123,11 +142,11 @@ LAPSE can fetch subtitles from OpenSubtitles with your own account:
 2. Under **Settings > Experimental**, turn on fetching and enter the key, your account name and your password. Add your languages, several in order if you like: `da, en`.
 3. Press **Test the connection**. It signs in and tells you how many downloads you have left today.
 
-From then on, pressing Sync on an item with no usable subtitle fetches one first, and **Find Subtitles Online** in the item menu and the player lets you choose one yourself. Searches go by the video file's own hash first, which finds subtitles made for that exact release, then by the IMDb or TMDb id Jellyfin has for the item, then by title. Hearing impaired and forced subtitles get `.sdh` and `.forced` in their file names so Jellyfin labels them. Each download counts against your daily OpenSubtitles allowance.
+From then on, pressing Sync on an item with no usable subtitle fetches one first, and **Find subtitles online** in the item menu and the player lets you choose one yourself. Searches go by the video file's own hash first, which finds subtitles made for that exact release, then by the IMDb or TMDb id Jellyfin has for the item, then by title. Hearing impaired and forced subtitles get `.sdh` and `.forced` in their file names so Jellyfin labels them. Each download counts against your daily OpenSubtitles allowance.
 
 ## Multi engine sync (experimental)
 
-When LAPSE is unsure, it can ask the other engines as well. Each answer becomes its own subtitle track, named after the engine (`Movie.en.lapse.srt`, `Movie.en.alass.srt`, `Movie.en.ffsubsync.srt`), and the item is rescanned so they appear right away. Play the item, switch between them, and press **Keep this subtitle** in Subtitle tools when one lines up. The rest are deleted, and File output decides what happens to the original. **Throw all away** deletes them all and leaves the original as it was.
+When LAPSE is unsure, it can ask the other engines as well. Each answer becomes its own subtitle track, named after the engine (`Movie.en.lapse.srt`, `Movie.en.alass.srt`, `Movie.en.ffsubsync.srt`), and the item is rescanned so they appear right away. Play the item, switch between them, and press **Keep this subtitle** in Subtitle tools when one lines up. The rest are deleted, and File output decides what happens to the original. **Discard all** deletes them all and leaves the original as it was.
 
 It needs LAPSE as the default engine and alass or ffsubsync installed, and you turn it on under **Settings > Multi engine sync**. It stays off for bulk runs unless you say otherwise, because every unsure subtitle leaves a few files waiting for you to watch something and decide.
 
@@ -150,7 +169,7 @@ The item menu entries are for admins by default. Under **Settings > Access** you
 
 ## Subtitle formats
 
-LAPSE reads and writes `.srt`, `.ass`, `.ssa`, `.vtt`, `.sub` (MicroDVD, MPL2 and SubViewer 2), `.mpl2`, `.sup` (PGS), `.sbv`, `.idx` (VobSub), `.smi` and `.sami`, `.ttml` and `.dfxp`, in upper or lower case. Every file is written back in the format it came in.
+LAPSE reads and writes `.srt`, `.ass`, `.ssa`, `.vtt`, `.sub` (MicroDVD, MPL2 and SubViewer 2), `.mpl2`, `.sup` (PGS), `.sbv`, `.idx` (VobSub), `.smi` and `.sami`, `.ttml` and `.dfxp`, and from 2.5.0 `.itt` (iTunes Timed Text), in upper or lower case. Every file is written back in the format it came in. LAPSE 2.5.0 also reads TTML saved as `.xml`. The plugin leaves `.xml` out of its lists, since most of those next to a video are metadata, but you can pick one in **Subtitle to subtitle**.
 
 Three formats share `.sub`, so the engine looks inside the file to tell them apart:
 
@@ -162,7 +181,7 @@ Three formats share `.sub`, so the engine looks inside the file to tell them apa
 
 PGS and VobSub are pictures of text. LAPSE can still move their timing, though converting, translating or restyling them needs OCR first. alass and ffsubsync read `.srt`, `.ass`, `.ssa` and `.vtt`, and the plugin converts anything else to `.srt` for them.
 
-LAPSE also reads the broadcast formats `.stl` (EBU STL) and `.scc` (Scenarist), but Jellyfin can't show either of them, so the plugin leaves them out of its lists. For those, use [LAPSE in the browser](https://schwponaco.org/lapse/) or the engine's [Docker image](https://github.com/Schwponaco-org/lapse#docker), which take them as they are.
+LAPSE also reads the broadcast formats `.stl` (EBU STL, and from 2.5.0 the text STL from DVD Studio Pro and Spruce) and `.scc` (Scenarist), but Jellyfin can't show either of them, so the plugin leaves them out of its lists. For those, use [LAPSE in the browser](https://schwponaco.org/lapse/) or the engine's [Docker image](https://github.com/Schwponaco-org/lapse#docker), which take them as they are.
 
 ### Text encoding
 
@@ -170,7 +189,7 @@ A synced subtitle goes back out in the encoding it came in, so a Windows-1252 fi
 
 ## Engines
 
-- **LAPSE** is the engine this plugin is built around and the one to use. It works out on its own whether a subtitle is early, drifting or cut differently, tells you how sure it is, and reads the most formats. Every download is checked against the checksums published with the release. Moving a subtitle between copies and whisper need LAPSE 2.3.0, and the engine card says when a setting needs a newer build than the one installed.
+- **LAPSE** is the engine this plugin is built around and the one to use. It works out on its own whether a subtitle is early, drifting or cut differently, tells you how sure it is, and reads the most formats. Every download is checked against the checksums published with the release. Bulk runs in one process need LAPSE 2.2.3, moving a subtitle between copies and whisper need 2.3.0, and shifting formats other than `.srt`, `.vtt`, `.ass` and `.ssa`, `.itt`, TTML saved as `.xml` and the Alpine build need 2.5.0. The engine card says when a setting needs a newer build than the one installed.
 - **alass** splits a file into sections and times each one separately, which suits recordings cut around ad breaks. Linux and Windows on x86-64.
 - **ffsubsync** shifts the whole subtitle and can fix framerate mismatches. Linux, Windows and macOS.
 
@@ -180,9 +199,9 @@ The [engine repo](https://github.com/Schwponaco-org/lapse) has the details, plus
 
 - **The menu entries don't show up.** Check that you're an admin or have subtitle access, then hard refresh the browser once. The LAPSE dashboard shows a warning when the plugin can't reach the web client.
 - **A sync fails straight away.** Open Engines and make sure LAPSE is installed. The engine card also warns you if LAPSE has fallen back to its weaker voice detector because the Silero model or onnxruntime is missing.
-- **LAPSE says unsure or nothing about a subtitle you know is right.** Music or crowd noise under the speech can throw it. If you're sure the subtitle belongs to this release, tick **Sync even when the engine is unsure** on the engine card, or line it up against a subtitle you trust with **Sync Subtitles to Reference**.
+- **LAPSE says unsure or nothing about a subtitle you know is right.** Music or crowd noise under the speech can throw it. If you're sure the subtitle belongs to this release, tick **Sync even when the engine is unsure** on the engine card, or line it up against a subtitle you trust with **Sync to reference**.
 - **OpenSubtitles doesn't work.** Press **Test the connection** under Settings > Experimental. It tells you whether the key or the account is the problem.
-- **The Radarr or Sonarr webhook does nothing.** The webhook settings show the last call that arrived and when.
+- **The Radarr, Sonarr or Bazarr webhook does nothing.** The webhook settings show the last call that arrived and when. Bazarr's own log shows curl's answer to its post-processing command.
 
 ## Building
 

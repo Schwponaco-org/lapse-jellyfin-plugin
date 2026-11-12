@@ -167,6 +167,34 @@ public partial class LapseController
     }
 
     /// <summary>
+    /// Gets how big LAPSE's cache of films it has listened to is, in bytes.
+    /// </summary>
+    [HttpGet("Lapse/Engines/Cache")]
+    [Authorize(Policy = Policies.RequiresElevation)]
+    public ActionResult<long> GetEngineCacheSize()
+    {
+        return _runner.GetCacheSize();
+    }
+
+    /// <summary>
+    /// Empties LAPSE's cache.
+    /// </summary>
+    [HttpDelete("Lapse/Engines/Cache")]
+    [Authorize(Policy = Policies.RequiresElevation)]
+    public ActionResult ClearEngineCache()
+    {
+        try
+        {
+            _runner.ClearCache();
+            return Ok();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return BadRequest("Could not clear the cache, a sync may be writing to it right now. " + ex.Message);
+        }
+    }
+
+    /// <summary>
     /// Downloads and installs one engine.
     /// </summary>
     [HttpPost("Lapse/Engines/{engineId}/Install")]

@@ -2,7 +2,9 @@
 // Copyright (C) 2026 Rasmus Stisen Jensen (rs-jensen)
 // Licensed under GPL v3 - see LICENSE for details
 
+using Jellyfin.Plugin.Lapse.Engines;
 using Jellyfin.Plugin.Lapse.Services;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace Jellyfin.Plugin.Lapse.Tests;
@@ -152,5 +154,36 @@ public class SubtitleFileTests
         Assert.True(SubtitleFormats.TryNormalizeOutputFormat(".VTT", out var vtt));
         Assert.Equal("vtt", vtt);
         Assert.False(SubtitleFormats.TryNormalizeOutputFormat("sub", out _));
+    }
+
+    [Fact]
+    public void UndoingReadableLeavesFilesItDidNotWriteAlone()
+    {
+        var (video, subtitle) = RunnerTests.Film(TestHost.NewFolder());
+        var readable = new ReadableSubtitleService(null!, null!, NullLogger<ReadableSubtitleService>.Instance);
+
+        Assert.False(readable.Revert(video).Success);
+        Assert.False(readable.Revert(subtitle).Success);
+        Assert.True(File.Exists(video));
+        Assert.True(File.Exists(subtitle));
+    }
+
+    [Fact]
+    public void XmlIsOnlyASubtitleWhenPickedByHand()
+    {
+        Assert.Equal(SubtitleFormatKind.Convertible, SubtitleFormats.GetKind("/m/a.itt"));
+        Assert.False(SubtitleFormats.IsSubtitle("/m/a.xml"));
+        Assert.True(SubtitleFormats.IsPickedSubtitle("/m/a.XML"));
+        Assert.False(SubtitleFormats.IsPickedSubtitle("/m/a.nfo"));
+
+        var older = new EngineRuntimeInfo();
+        older.ReportedExtensions.Add(".ttml");
+        var newer = new EngineRuntimeInfo();
+        newer.ReportedExtensions.Add(".ttml");
+        newer.Flags.Add("--shift");
+
+        Assert.False(older.CanRead("lapse", "/m/a.xml"));
+        Assert.True(newer.CanRead("lapse", "/m/a.xml"));
+        Assert.False(newer.CanRead("alass", "/m/a.xml"));
     }
 }

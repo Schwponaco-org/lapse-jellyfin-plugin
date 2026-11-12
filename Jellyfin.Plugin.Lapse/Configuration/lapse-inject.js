@@ -119,26 +119,64 @@
         document.head.appendChild(link);
     }
 
-    function showLapseToast(message, keepOpen) {
-        var existing = document.querySelector('.lapseToast');
-        if (existing) {
-            existing.remove();
+    // The name on the dialog a result opens with: the item whose menu was used last
+    var actionTitle = 'LAPSE';
+
+    // Jellyfin's toast, for "Syncing..." and other notes nobody needs to read back. One at a time,
+    // and keepOpen ones stay until the result replaces them.
+    function notify(message, keepOpen) {
+        clearNotice();
+
+        var container = document.querySelector('.toastContainer');
+        if (!container) {
+            container = document.createElement('div');
+            container.className = 'toastContainer';
+            document.body.appendChild(container);
         }
 
         var toast = document.createElement('div');
-        toast.className = 'lapseToast';
+        toast.className = 'toast toastVisible lapseNotice';
+        toast.setAttribute('role', 'status');
         toast.textContent = message;
-        document.body.appendChild(toast);
+        container.appendChild(toast);
 
         if (!keepOpen) {
             setTimeout(function () {
-                if (toast.parentNode) {
-                    toast.remove();
-                }
-            }, 6000);
+                toast.remove();
+            }, 4000);
         }
 
         return toast;
+    }
+
+    function clearNotice() {
+        var existing = document.querySelector('.lapseNotice');
+        if (existing) {
+            existing.remove();
+        }
+    }
+
+    // Results stay up until they are closed, a toast was gone before a long one had been read.
+    // Jellyfin's alert reads the message as HTML, hence the escaping.
+    function tell(message) {
+        clearNotice();
+
+        if (window.Dashboard && Dashboard.alert) {
+            Dashboard.alert({ title: actionTitle, message: escapeHtml(message).replace(/\n/g, '<br>') });
+        } else {
+            notify(message);
+        }
+    }
+
+    // Jellyfin's confirm where there is one. Resolves true or false.
+    function confirmAction(title, text, confirmText) {
+        if (!(window.Dashboard && Dashboard.confirm)) {
+            return Promise.resolve(window.confirm(text));
+        }
+
+        return new Promise(function (resolve) {
+            Dashboard.confirm({ title: title, text: escapeHtml(text), confirmText: confirmText, primary: 'delete' }, title, resolve);
+        });
     }
 
     // --- subtitle appearance ---
@@ -199,6 +237,7 @@
             }
 
             clearStampedSubtitles();
+            showingTracks().forEach(positionActiveCues);
             return;
         }
 
@@ -210,6 +249,7 @@
 
         style.textContent = buildAppearanceCss(appearance);
         stampAllSubtitleElements();
+        showingTracks().forEach(positionActiveCues);
         ensureChosenFontIsLoadable(appearance.FontFamily);
     }
 
@@ -306,13 +346,14 @@
             '  background-color: ' + background + ' !important;' +
             '}' +
 
-            // Native track rendering, which no amount of element styling can reach.
-            'video::cue {' +
-            '  font-size: ' + fontSize + ';' +
-            '  color: ' + color + ';' +
-            '  background-color: ' + background + ';' +
-            '  letter-spacing: ' + spacing + ';' +
-            (fontStack ? '  font-family: ' + fontStack + ';' : '') +
+            // Native tracks, which Chrome and Safari get. Jellyfin styles those with
+            // .htmlvideoplayer::cue and !important on every property, so this has to match that and
+            // be one step more specific. ::cue has no letter-spacing.
+            'video.htmlvideoplayer::cue {' +
+            '  font-size: ' + fontSize + ' !important;' +
+            '  color: ' + color + ' !important;' +
+            '  background-color: ' + background + ' !important;' +
+            (fontStack ? '  font-family: ' + fontStack + ' !important;' : '') +
             '}';
     }
 
@@ -336,7 +377,8 @@
             document.head.appendChild(style);
         }
 
-        var family = familyNameFor(fileName);
+        // a file name, so anything that could close the CSS string goes
+        var family = familyNameFor(fileName).replace(/["\\\r\n]/g, '');
 
         // url() can't send an Authorization header, so the token goes in the query string (the web
         // client's own ASS renderer does the same)
@@ -358,6 +400,47 @@
         return String(fileName)
             .replace(/\.(otf|ttf|woff2?|woff)$/i, '')
             .replace(/[-_](Regular|Bold|Italic|BoldItalic|Medium|Light)$/i, '');
+    }
+
+    // A native cue ignores element styling, so the height goes on each cue as it comes up. What
+    // Jellyfin set is kept on the cue so turning the setting off puts it back.
+    function positionActiveCues(track) {
+        var appearance = appearanceSettings;
+        var percent = appearance && appearance.Enabled ? (appearance.VerticalPositionPercent || 0) : 0;
+
+        Array.prototype.forEach.call(track.activeCues || [], function (cue) {
+            if (cue.lapseLine === undefined) {
+                cue.lapseLine = cue.line;
+                cue.lapseSnapToLines = cue.snapToLines;
+            }
+
+            if (percent > 0) {
+                cue.snapToLines = false;
+                cue.line = 100 - percent;
+            } else if (cue.line !== cue.lapseLine) {
+                cue.snapToLines = cue.lapseSnapToLines;
+                cue.line = cue.lapseLine;
+            }
+        });
+    }
+
+    function watchTextTracks(video) {
+        if (video.lapseWatched || !video.textTracks) {
+            return;
+        }
+
+        video.lapseWatched = true;
+
+        function watch(track) {
+            track.addEventListener('cuechange', function () {
+                positionActiveCues(track);
+            });
+        }
+
+        Array.prototype.forEach.call(video.textTracks, watch);
+        video.textTracks.addEventListener('addtrack', function (e) {
+            watch(e.track);
+        });
     }
 
     function stampSubtitleElement(element) {
@@ -382,6 +465,13 @@
         if (element.classList.contains('videoSubtitlesInner')) {
             element.style.setProperty('background-color', backgroundOf(appearance), 'important');
         }
+    }
+
+    function showingTracks() {
+        var video = document.querySelector('video');
+        return video && video.textTracks
+            ? Array.prototype.filter.call(video.textTracks, function (t) { return t.mode === 'showing'; })
+            : [];
     }
 
     function stampAllSubtitleElements() {
@@ -415,7 +505,9 @@
         }
 
         // playback starting, make sure the settings are current
-        if (node.nodeName === 'VIDEO' || (node.querySelector && node.querySelector('video'))) {
+        var video = node.nodeName === 'VIDEO' ? node : (node.querySelector ? node.querySelector('video') : null);
+        if (video) {
+            watchTextTracks(video);
             refreshSubtitleAppearance(true);
         }
 
@@ -426,6 +518,115 @@
         if (sheet) {
             handleActionSheetOpened(sheet);
         }
+
+        // Jellyfin's Edit subtitles dialog fills its list in with innerHTML, every time it reloads
+        var editorList = node.closest ? node.closest('.subtitleEditorDialog .subtitleList') : null;
+        if (!editorList && node.querySelector) {
+            editorList = node.querySelector('.subtitleEditorDialog .subtitleList');
+        }
+
+        if (editorList) {
+            decorateSubtitleEditor(editorList);
+        }
+    }
+
+    // --- Jellyfin's own Edit subtitles dialog ---
+    //
+    // A Sync button and a word on whether each external track is synced, in the dialog's own
+    // markup. The track is found by the path the dialog prints, so a dialog that no longer
+    // prints one just gets nothing added.
+    var editorPending = null;
+
+    function decorateSubtitleEditor(list) {
+        // the list arrives in more than one mutation, so wait for the last of them
+        clearTimeout(editorPending);
+        editorPending = setTimeout(function () {
+            Promise.all([resolveItemContext(), loadAccess()]).then(function (answers) {
+                var context = answers[0];
+                if (!context || !answers[1].CanEditSubtitles || !document.body.contains(list)) {
+                    return null;
+                }
+
+                return Promise.all([
+                    lapseGet('Lapse/Items/' + context.id + '/Subtitles'),
+                    lapseGet('Lapse/Items/' + context.id + '/Candidates')
+                ]).then(function (results) {
+                    actionTitle = context.name || 'LAPSE';
+                    addEditorControls(list, context, results[0] || [], (results[1] && results[1].Sets) || []);
+                });
+            }).catch(function (err) {
+                log('could not add LAPSE to the Edit subtitles dialog: ' + err);
+            });
+        }, 150);
+    }
+
+    function verdictFor(subtitle, sets) {
+        var unsure = sets.some(function (set) {
+            return set.OriginalPath === subtitle.Path || (set.Candidates || []).some(function (c) { return c.Path === subtitle.Path; });
+        });
+
+        return unsure ? 'Unsure, waiting for review' : subtitle.Synced ? 'Synced' : 'Not synced';
+    }
+
+    function addEditorControls(list, context, subtitles, sets) {
+        list.querySelectorAll('.listItem').forEach(function (row) {
+            var pathLine = row.querySelector('.listItemBody .secondary');
+            var deleteButton = row.querySelector('.btnDelete');
+            if (!pathLine || row.querySelector('.lapseVerdict')) {
+                return;
+            }
+
+            var subtitle = subtitles.filter(function (s) {
+                return !s.IsEmbedded && s.Path === pathLine.textContent.trim();
+            })[0];
+
+            if (!subtitle) {
+                return;
+            }
+
+            var verdict = document.createElement('div');
+            verdict.className = 'secondary listItemBodyText lapseVerdict';
+            verdict.setAttribute('aria-live', 'polite');
+            verdict.textContent = verdictFor(subtitle, sets);
+            pathLine.parentNode.appendChild(verdict);
+
+            // an answer waiting in Review is kept or discarded there, not synced again
+            var isAnswer = sets.some(function (set) {
+                return (set.Candidates || []).some(function (c) { return c.Path === subtitle.Path; });
+            });
+
+            if (subtitle.Supported === false || isAnswer) {
+                return;
+            }
+
+            var sync = document.createElement('button');
+            sync.setAttribute('is', 'paper-icon-button-light');
+            sync.type = 'button';
+            sync.className = 'listItemButton paper-icon-button-light lapseEditorSync';
+            sync.title = 'Sync';
+            sync.setAttribute('aria-label', 'Sync ' + baseName(subtitle.Path));
+            sync.innerHTML = '<span class="material-icons sync" aria-hidden="true"></span>';
+            row.insertBefore(sync, deleteButton);
+
+            sync.addEventListener('click', function (e) {
+                e.stopPropagation();
+                sync.disabled = true;
+                verdict.textContent = 'Syncing...';
+
+                lapsePost('Lapse/Sync', { ItemId: context.id, SubtitlePath: subtitle.Path }).then(function (result) {
+                    verdict.textContent = !result.Success ? 'Sync failed'
+                        : result.Skipped ? 'Not synced'
+                        : result.Unconfirmed || result.CandidateCount > 0 ? 'Unsure, waiting for review'
+                        : 'Synced';
+                    tell(describeSyncOutcome(result));
+                }).catch(function (err) {
+                    verdict.textContent = 'Sync failed';
+                    tell('Sync failed: ' + err.message);
+                }).then(function () {
+                    sync.disabled = false;
+                });
+            });
+        });
     }
 
     function startWatchingTheClient() {
@@ -579,10 +780,13 @@
         button.addEventListener('click', function (e) {
             e.stopPropagation();
 
-            // Close before onClick: some of these open an overlay that closes on Escape, and the sheet's
-            // close would land on that instead.
+            // The sheet closes through the client's history, and a dialog opened before that has
+            // finished is closed with it, so onClick waits until the sheet has gone.
+            var sheet = button.closest('.actionSheet');
             closeActionSheet(button);
-            onClick(e);
+            whenGone(sheet, function () {
+                onClick(e);
+            });
         });
         return button;
     }
@@ -597,6 +801,19 @@
         }
     }
 
+    function whenGone(element, then) {
+        var started = Date.now();
+
+        (function check() {
+            if (!element || !document.body.contains(element) || Date.now() - started > 1000) {
+                // and one more frame for the history step that follows the removal
+                setTimeout(then, 50);
+            } else {
+                requestAnimationFrame(check);
+            }
+        })();
+    }
+
     function addMenuButtons(sheet, context) {
         // the scroller holds the entries, but the wrapper markup moves around between versions
         var scroller = sheet.querySelector('.actionSheetScroller') || sheet;
@@ -606,42 +823,43 @@
         }
 
         var isContainer = CONTAINER_TYPES.indexOf(context.type) !== -1;
+        actionTitle = context.name || 'LAPSE';
 
         if (isContainer) {
-            scroller.appendChild(makeMenuButton('lapse-sync-all', 'Sync All Subtitles', 'subtitles', function () {
+            scroller.appendChild(makeMenuButton('lapse-sync-all', 'Sync all subtitles', 'subtitles', function () {
                 startSeriesSync(context, null);
             }));
 
-            scroller.appendChild(makeMenuButton('lapse-sync-all-reference', 'Sync All to Reference', 'compare_arrows', function () {
+            scroller.appendChild(makeMenuButton('lapse-sync-all-reference', 'Sync all to reference', 'compare_arrows', function () {
                 openSeriesReferencePopup(context);
             }));
         } else {
-            scroller.appendChild(makeMenuButton('lapse-sync-subtitles', 'Sync Subtitles', 'subtitles', function () {
+            scroller.appendChild(makeMenuButton('lapse-sync-subtitles', 'Sync subtitles', 'subtitles', function () {
                 openSyncPopup(context);
             }));
 
-            scroller.appendChild(makeMenuButton('lapse-shift-subtitles', 'Shift Subtitles', 'schedule', function () {
+            scroller.appendChild(makeMenuButton('lapse-shift-subtitles', 'Shift subtitles', 'schedule', function () {
                 openShiftPopup(context);
             }));
 
-            scroller.appendChild(makeMenuButton('lapse-convert-subtitles', 'Convert Subtitles', 'swap_horiz', function () {
+            scroller.appendChild(makeMenuButton('lapse-convert-subtitles', 'Convert subtitles', 'swap_horiz', function () {
                 openConvertPopup(context);
             }));
 
-            scroller.appendChild(makeMenuButton('lapse-sync-all-subtitles', 'Sync Subtitles to Reference', 'compare_arrows', function () {
+            scroller.appendChild(makeMenuButton('lapse-sync-all-subtitles', 'Sync to reference', 'compare_arrows', function () {
                 openReferencePopup(context);
             }));
 
-            scroller.appendChild(makeMenuButton('lapse-extract-embedded', 'Extract Embedded Subtitles', 'file_download', function () {
+            scroller.appendChild(makeMenuButton('lapse-extract-embedded', 'Extract embedded subtitles', 'file_download', function () {
                 openExtractPopup(context);
             }));
 
-            scroller.appendChild(makeMenuButton('lapse-readable-subtitles', 'Readable Subtitles', 'accessibility_new', function () {
+            scroller.appendChild(makeMenuButton('lapse-readable-subtitles', 'Readable subtitles', 'accessibility_new', function () {
                 openRestylePopup(context);
             }));
 
             if (accessInfo && accessInfo.OpenSubtitlesEnabled) {
-                scroller.appendChild(makeMenuButton('lapse-find-subtitles', 'Find Subtitles Online', 'travel_explore', function () {
+                scroller.appendChild(makeMenuButton('lapse-find-subtitles', 'Find subtitles online', 'travel_explore', function () {
                     openOnlineSubtitlePicker(context.id, context.name);
                 }));
             }
@@ -694,7 +912,7 @@
                 return;
             }
 
-            var button = makeMenuButton('lapse-move-from-copy', 'Move Subtitles from Another Copy', 'content_copy', function () {
+            var button = makeMenuButton('lapse-move-from-copy', 'Move subtitles from another copy', 'content_copy', function () {
                 openMoveFromCopyPopup(context, list);
             });
 
@@ -760,19 +978,54 @@
 
     // --- dialogs ---
 
-    function openOverlay(innerHtml, wide) {
-        var overlay = document.createElement('div');
-        overlay.className = 'lapseOverlay';
-        overlay.innerHTML = '<div class="lapseDialogCard' + (wide ? ' lapseDialogCard-wide' : '') + '">' + innerHtml + '</div>';
+    // Jellyfin's own dialog helper is on window.Dashboard in 10.11 and 12, so these size, scroll, keep
+    // focus and close on Back like the client's own. A client without it gets the same markup over a backdrop.
+    function openDialog(title, bodyHtml, wide) {
+        // "Checking subtitles..." is answered by the dialog itself
+        clearNotice();
 
-        overlay.addEventListener('click', function (e) {
-            if (e.target === overlay) {
-                overlay.remove();
-            }
+        var helper = window.Dashboard && Dashboard.dialogHelper;
+        var dlg = helper
+            ? helper.createDialog({ size: wide ? 'medium' : 'small', removeOnClose: true, scrollY: false })
+            : document.createElement('div');
+
+        dlg.classList.add('formDialog', 'lapseDialog');
+        dlg.setAttribute('aria-label', title);
+        dlg.innerHTML =
+            '<div class="formDialogHeader">' +
+            '  <button is="paper-icon-button-light" type="button" class="btnCancel autoSize" title="Close" aria-label="Close">' +
+            '    <span class="material-icons arrow_back" aria-hidden="true"></span></button>' +
+            '  <h3 class="formDialogHeaderTitle"></h3>' +
+            '</div>' +
+            '<div class="formDialogContent smoothScrollY">' +
+            '  <div class="dialogContentInner dialog-content-centered">' + bodyHtml + '</div>' +
+            '</div>';
+
+        dlg.querySelector('.formDialogHeaderTitle').textContent = title;
+        dlg.querySelector('.btnCancel').addEventListener('click', function () {
+            closeDialog(dlg);
         });
 
-        document.body.appendChild(overlay);
-        return overlay;
+        if (helper) {
+            helper.open(dlg);
+        } else {
+            dlg.classList.add('dialog', 'dialog-fixedSize', 'dialog-small', 'opened');
+            var container = document.createElement('div');
+            container.className = 'dialogContainer lapseDialogFallback';
+            container.appendChild(dlg);
+            document.body.appendChild(container);
+        }
+
+        return dlg;
+    }
+
+    function closeDialog(dlg) {
+        var fallback = dlg.closest('.lapseDialogFallback');
+        if (fallback) {
+            fallback.remove();
+        } else if (window.Dashboard && Dashboard.dialogHelper) {
+            Dashboard.dialogHelper.close(dlg);
+        }
     }
 
     function subtitleOptionsHtml(subtitles) {
@@ -782,30 +1035,30 @@
     }
 
     function openSyncPopup(context) {
-        var overlay = openOverlay(
-            '<h3>Sync Subtitles</h3>' +
+        var overlay = openDialog('Sync subtitles',
+            '<div class="fieldDescription">Sync with the engine and mode set in the LAPSE settings, or choose them under Advanced.</div>' +
             '<div class="lapseDialogButtons">' +
             '<button is="emby-button" type="button" class="raised button-submit" id="lapsePopupSync"><span>Sync</span></button>' +
             '<button is="emby-button" type="button" class="raised" id="lapsePopupAdvanced"><span>Advanced</span></button>' +
             '</div>');
 
         overlay.querySelector('#lapsePopupSync').addEventListener('click', function () {
-            overlay.remove();
+            closeDialog(overlay);
             runQuickSync(context.id);
         });
 
         overlay.querySelector('#lapsePopupAdvanced').addEventListener('click', function () {
-            overlay.remove();
+            closeDialog(overlay);
             openAdvancedDialog(context);
         });
     }
 
     function runQuickSync(itemId) {
-        showLapseToast('Checking subtitles...');
+        notify('Checking subtitles...', true);
 
         lapseGet('Lapse/Items/' + itemId + '/Subtitles').then(function (subtitles) {
             if (subtitles.length === 0) {
-                showLapseToast('No subtitle found for this item, in a file or in the video.');
+                tell('No subtitle found for this item, in a file or in the video.');
                 return;
             }
 
@@ -813,7 +1066,7 @@
             var usable = subtitles.filter(function (s) { return s.Supported !== false; });
 
             if (usable.length === 0) {
-                showLapseToast('The only subtitles on this item are picture based (PGS or VobSub), and the engine you are using cannot read those. LAPSE can sync them, or run OCR over them with something like Subtitle Edit first.');
+                tell('The only subtitles on this item are picture based (PGS or VobSub), and the engine you are using cannot read those. LAPSE can sync them, or run OCR over them with something like Subtitle Edit first.');
                 return;
             }
 
@@ -833,7 +1086,7 @@
 
             openSubtitlePickerPopup(itemId, syncable);
         }).catch(function (err) {
-            showLapseToast('Could not check subtitles: ' + err.message);
+            tell('Could not check subtitles: ' + err.message);
         });
     }
 
@@ -848,73 +1101,80 @@
             .filter(function (f, i, all) { return all.indexOf(f) === i; })
             .join(', ');
 
-        var overlay = openOverlay(
-            '<h3>Format not supported by the engines</h3>' +
+        var overlay = openDialog('Convert first',
             '<div class="fieldDescription">This item only has ' + escapeHtml(formats) +
             ', which no sync engine reads. The plugin can convert it first, and then sync the result.</div>' +
             (subtitles.length > 1
                 ? '<div class="selectContainer">' +
-                  '  <label class="selectLabel">Subtitle</label>' +
+                  '  <label class="selectLabel" for="lapseConvertPick">Subtitle</label>' +
                   '  <select is="emby-select" id="lapseConvertPick" class="emby-select-withcolor emby-select">' +
                   subtitleOptionsHtml(subtitles) +
                   '  </select>' +
                   '</div>'
                 : '') +
             '<div class="lapseDialogButtons">' +
-            '  <button is="emby-button" type="button" class="raised" id="lapseOfferCancel"><span>Cancel</span></button>' +
             '  <button is="emby-button" type="button" class="raised button-submit" id="lapseOfferConvert"><span>Convert</span></button>' +
             '</div>');
-
-        overlay.querySelector('#lapseOfferCancel').addEventListener('click', function () {
-            overlay.remove();
-        });
 
         overlay.querySelector('#lapseOfferConvert').addEventListener('click', function () {
             var picker = overlay.querySelector('#lapseConvertPick');
             var path = picker ? picker.value : subtitles[0].Path;
 
-            overlay.remove();
-            showLapseToast('Converting...');
+            closeDialog(overlay);
+            notify('Converting...', true);
 
             // No TargetFormat and no ReplaceOriginal: both come from the Conversion
             // settings, which is where that decision belongs.
             lapsePost('Lapse/Convert', { ItemId: itemId, SubtitlePath: path }).then(function (result) {
                 if (result.SyncedAfter && result.Sync) {
                     // only lowercase the first letter, the whole sentence would mangle the path and engine name
-                    showLapseToast('Converted to ' + result.Format + ' and ' +
+                    tell('Converted to ' + result.Format + ' and ' +
                         uncapitalize(describeSyncOutcome(result.Sync)));
                     return;
                 }
 
-                showLapseToast('Converted to ' + result.Format + ': ' + result.OutputPath);
+                tell('Converted to ' + result.Format + ': ' + result.OutputPath);
             }).catch(function (err) {
-                showLapseToast('Could not convert: ' + err.message);
+                tell('Could not convert: ' + err.message);
             });
         });
     }
 
     function openSubtitlePickerPopup(itemId, subtitles) {
-        var overlay = openOverlay(
-            '<h3>Pick a subtitle</h3>' +
+        var overlay = openDialog('Pick a subtitle',
             '<div class="selectContainer">' +
             '<select is="emby-select" id="lapsePickerSelect" class="emby-select-withcolor emby-select">' +
             subtitleOptionsHtml(subtitles) +
             '</select>' +
             '</div>' +
             '<div class="lapseDialogButtons">' +
-            '<button is="emby-button" type="button" class="raised" id="lapsePickerCancel"><span>Cancel</span></button>' +
             '<button is="emby-button" type="button" class="raised button-submit" id="lapsePickerSync"><span>Sync</span></button>' +
             '</div>');
 
-        overlay.querySelector('#lapsePickerCancel').addEventListener('click', function () {
-            overlay.remove();
-        });
-
         overlay.querySelector('#lapsePickerSync').addEventListener('click', function () {
             var path = overlay.querySelector('#lapsePickerSelect').value;
-            overlay.remove();
+            closeDialog(overlay);
             doSync(itemId, path);
         });
+    }
+
+    // "8.7 s later", "1:05 earlier", the way the dashboard and its history say it
+    function distance(ms) {
+        var size = Math.abs(ms);
+        var tenths = Math.floor((size + 50) / 100);
+        var whole = Math.floor((size + 500) / 1000);
+        var text = tenths >= 600 ? Math.floor(whole / 60) + ':' + ('0' + whole % 60).slice(-2)
+            : size && !tenths ? 'under 0.1 s'
+            : (tenths / 10).toFixed(1) + ' s';
+        return text + (ms < 0 ? ' earlier' : ' later');
+    }
+
+    // What an unsure answer would have done, for "LAPSE would have ... but was not sure"
+    function wouldHave(result) {
+        var split = result.PartOffsetsMs && result.PartOffsetsMs.length > 1;
+        return split ? 'moved it in ' + result.PartOffsetsMs.length + ' parts'
+            : result.OffsetMs ? 'moved it ' + distance(result.OffsetMs)
+            : 'left the timing as it was';
     }
 
     function describeResult(result) {
@@ -923,19 +1183,13 @@
 
         // LAPSE 2.3.0 says where each part went, older builds give one number for the lot
         if (split) {
-            parts.push('split into ' + split.length + ' parts, moved ' + split.map(function (o) {
-                return o + 'ms';
-            }).join(' then '));
+            parts.push('moved in ' + split.length + ' parts, from ' + distance(split[0]) + ' to ' + distance(split[split.length - 1]));
         } else if (result.OffsetMs != null && result.OffsetMs !== 0) {
-            parts.push('offset ' + result.OffsetMs + 'ms');
+            parts.push('moved ' + distance(result.OffsetMs));
         }
 
         if (result.Slope != null) {
-            parts.push('stretched by ' + (result.Slope * 100).toFixed(3) + '%');
-        }
-
-        if (!split && result.Mode === 'Split' && result.Penalty != null) {
-            parts.push('split into ' + result.Penalty + ' parts');
+            parts.push('stretched to fit');
         }
 
         if (result.Snapped) {
@@ -943,30 +1197,14 @@
         }
 
         if (result.Reference === 'vad+whisper') {
-            parts.push('checked with whisper');
+            parts.push('checked against the words with whisper');
         }
 
         if (parts.length === 0 && result.EngineOutput) {
             parts.push(result.EngineOutput);
         }
 
-        // LAPSE says what it made of its own answer, which beats a percentage nobody has
-        // a feel for. Engines that report nothing fall back to whatever they did give us.
-        if (result.Verdict) {
-            parts.push(result.Verdict);
-        } else if (result.Confidence != null) {
-            parts.push('confidence ' + Math.round(result.Confidence * 100) + '%');
-        }
-
-        return parts.join(', ') || 'done';
-    }
-
-    // "moved it 20ms", or for a split file every part, which LAPSE 2.3.0 reports
-    function wouldHaveMoved(result) {
-        var parts = result.PartOffsetsMs && result.PartOffsetsMs.length > 1 ? result.PartOffsetsMs : null;
-        return parts
-            ? 'moved its parts ' + parts.map(function (o) { return o + 'ms'; }).join(', ')
-            : 'moved it ' + (result.OffsetMs || 0) + 'ms';
+        return parts.join(', ') || 'lined up';
     }
 
     function describeSyncOutcome(result) {
@@ -975,8 +1213,8 @@
         }
 
         if (result.AlreadyInSync) {
-            return 'Already in sync, so nothing was changed. The engine would have ' + wouldHaveMoved(result) +
-                ', which is inside the tolerance set under File output.';
+            return 'Already in sync, so the file was left as it was. LAPSE would have ' + describeResult(result) +
+                ', which is inside the tolerance under File output.';
         }
 
         if (result.CandidateCount > 0) {
@@ -988,7 +1226,7 @@
         if (result.Forced && (result.Skipped || result.Unconfirmed)) {
             return 'This subtitle has too few lines for LAPSE to check its answer, so the original was left alone' +
                 (result.Unconfirmed && result.OutputPath ? ' and the forced guess went to ' + baseName(result.OutputPath) : '') +
-                '. A short track like this is best lined up against the full subtitle, with Sync Subtitles to Reference.';
+                '. A short track like this is best lined up against the full subtitle, with Sync to reference.';
         }
 
         if (result.Verdict === 'nothing' && (result.Skipped || result.Unconfirmed)) {
@@ -999,16 +1237,13 @@
         }
 
         if (result.Skipped) {
-            return 'Left the original alone: ' + describeResult(result) +
-                ', which is under the confidence threshold. Change what happens then under ' +
-                'File output in the LAPSE dashboard, or, if you are sure the subtitle belongs ' +
-                'to this video, turn on "Sync even when the engine is unsure" under Engines, Advanced.';
+            return 'LAPSE would have ' + wouldHave(result) + ' but was not sure, so the original was left alone. ' +
+                'If the subtitle does belong to this video, turn on "Sync even when the engine is unsure" under Engines in the LAPSE settings.';
         }
 
         if (result.Unconfirmed) {
-            return 'LAPSE was not sure about this one (' + describeResult(result) + '), so the original was left ' +
-                'alone and its answer was written beside it as ' + baseName(result.OutputPath || '') +
-                '. Play it and see if it lines up.';
+            return 'LAPSE ' + wouldHave(result) + ' but was not sure, so the original was left alone and the result ' +
+                'written beside it as ' + baseName(result.OutputPath || '') + '. An admin can keep or discard it under Review in the LAPSE settings.';
         }
 
         var converted = result.ConvertedFrom
@@ -1016,7 +1251,7 @@
               (result.OutputPath || '').split('.').pop() + '.'
             : '';
 
-        return 'Synced! ' + describeResult(result) + converted;
+        return 'Synced: ' + describeResult(result) + '.' + converted;
     }
 
     function describePipelineOutcome(result) {
@@ -1035,7 +1270,7 @@
         }
 
         if (result.Sync) {
-            parts.push(describeSyncOutcome(result.Sync).replace(/^Synced! /, 'synced: '));
+            parts.push(describeSyncOutcome(result.Sync).replace(/^Synced: /, 'synced: '));
         }
 
         if (result.Translation) {
@@ -1048,13 +1283,13 @@
     }
 
     function doSync(itemId, subtitlePath) {
-        showLapseToast('Syncing...');
+        notify('Syncing...', true);
 
         // no EngineId or Mode on purpose, the server uses the default engine and its default mode
         lapsePost('Lapse/Sync', { ItemId: itemId, SubtitlePath: subtitlePath }).then(function (result) {
-            showLapseToast(describeSyncOutcome(result));
+            tell(describeSyncOutcome(result));
         }).catch(function (err) {
-            showLapseToast('Sync failed: ' + err.message);
+            tell('Sync failed: ' + err.message);
         });
     }
 
@@ -1063,7 +1298,7 @@
     var CONVERT_FORMATS = ['srt', 'vtt', 'ass', 'ssa'];
 
     function openConvertPopup(context) {
-        showLapseToast('Checking subtitles...');
+        notify('Checking subtitles...', true);
 
         lapseGet('Lapse/Items/' + context.id + '/Subtitles').then(function (subtitles) {
             // Converting needs text, which a picture based subtitle has none of, whatever
@@ -1071,7 +1306,7 @@
             var convertible = subtitles.filter(function (s) { return s.TextBased !== false; });
 
             if (convertible.length === 0) {
-                showLapseToast(subtitles.length === 0
+                tell(subtitles.length === 0
                     ? 'No external subtitle found for this item.'
                     : 'The subtitles on this item are picture based (PGS or VobSub). There is no text in those to convert - they need OCR first.');
                 return;
@@ -1079,24 +1314,23 @@
 
             showConvertDialog(context, convertible);
         }).catch(function (err) {
-            showLapseToast('Could not check subtitles: ' + err.message);
+            tell('Could not check subtitles: ' + err.message);
         });
     }
 
     function showConvertDialog(context, subtitles) {
-        var overlay = openOverlay(
-            '<h3>Convert Subtitles</h3>' +
+        var overlay = openDialog('Convert subtitles',
             '<div class="fieldDescription">Writes a new file in the format you pick. The original is left ' +
             'alone unless you choose to delete it. Use this to turn formats no engine can sync, like ' +
             'MicroDVD .sub, into plain srt first.</div>' +
             '<div class="selectContainer">' +
-            '  <label class="selectLabel">Subtitle</label>' +
+            '  <label class="selectLabel" for="lapseConvertSubtitle">Subtitle</label>' +
             '  <select is="emby-select" id="lapseConvertSubtitle" class="emby-select-withcolor emby-select">' +
             subtitleOptionsHtml(subtitles) +
             '  </select>' +
             '</div>' +
             '<div class="selectContainer">' +
-            '  <label class="selectLabel">Convert to</label>' +
+            '  <label class="selectLabel" for="lapseConvertFormat">Convert to</label>' +
             '  <select is="emby-select" id="lapseConvertFormat" class="emby-select-withcolor emby-select">' +
             CONVERT_FORMATS.map(function (f) {
                 return '<option value="' + f + '">.' + f + '</option>';
@@ -1108,7 +1342,6 @@
             '  <span>Delete the original once the new file is written</span>' +
             '</label>' +
             '<div class="lapseDialogButtons">' +
-            '  <button is="emby-button" type="button" class="raised" id="lapseConvertCancel"><span>Cancel</span></button>' +
             '  <button is="emby-button" type="button" class="raised button-submit" id="lapseConvertApply"><span>Convert</span></button>' +
             '</div>');
 
@@ -1123,15 +1356,11 @@
         // srt is what people want almost every time, so it's the default selection
         formatSelect.value = 'srt';
 
-        overlay.querySelector('#lapseConvertCancel').addEventListener('click', function () {
-            overlay.remove();
-        });
-
         overlay.querySelector('#lapseConvertApply').addEventListener('click', function () {
             var target = formatSelect.value;
 
             if (target === currentFormat()) {
-                showLapseToast('That subtitle is already ' + target + '.');
+                notify('That subtitle is already ' + target + '.');
                 return;
             }
 
@@ -1141,8 +1370,8 @@
             // detached nodes from the callback.
             var subtitlePath = select.value;
 
-            overlay.remove();
-            showLapseToast('Converting to ' + target + '...');
+            closeDialog(overlay);
+            notify('Converting to ' + target + '...', true);
 
             lapsePost('Lapse/Convert', {
                 ItemId: context.id,
@@ -1150,9 +1379,9 @@
                 TargetFormat: target,
                 ReplaceOriginal: replace
             }).then(function (result) {
-                showLapseToast(describeConvertOutcome(result));
+                tell(describeConvertOutcome(result));
             }).catch(function (err) {
-                showLapseToast('Could not convert: ' + err.message);
+                tell('Could not convert: ' + err.message);
             });
         });
     }
@@ -1485,10 +1714,16 @@
 
     var panelWatchdog = null;
 
+    var panelOpener = null;
+
     function closePlayerPanel() {
         var panel = document.getElementById(PANEL_ID);
         if (panel) {
             panel.remove();
+
+            if (panelOpener && document.body.contains(panelOpener)) {
+                panelOpener.focus();
+            }
         }
 
         document.removeEventListener('keydown', panelKeyHandler, true);
@@ -1499,23 +1734,40 @@
         }
     }
 
-    // Capture, so this runs before the client's own shortcut handling. Without it, typing
-    // in the panel plays and pauses the film and the arrow keys seek it.
+    // Escape closes the panel wherever the focus is.
     function panelKeyHandler(e) {
-        var panel = document.getElementById(PANEL_ID);
-        if (!panel) {
-            return;
-        }
-
-        if (e.key === 'Escape') {
+        if (e.key === 'Escape' && document.getElementById(PANEL_ID)) {
             closePlayerPanel();
             e.stopPropagation();
             e.preventDefault();
+        }
+    }
+
+    // Keys pressed in the panel stop at the panel. Without it, typing in the panel plays and
+    // pauses the film and the arrow keys seek it. Enter on a button goes on to the player like
+    // it does for the player's own buttons: the player only lets the click that follows through
+    // to the element its key handling saw last, and in Firefox that click comes after the key.
+    function panelKeys(e) {
+        var panel = e.currentTarget;
+
+        if (e.key === 'Enter' && e.target.tagName === 'BUTTON') {
             return;
         }
 
-        if (panel.contains(e.target)) {
-            e.stopPropagation();
+        e.stopPropagation();
+
+        // A TV remote has only arrows, so up and down walk the panel like the client's own lists.
+        // Left and right stay with the control, which is how a slider is moved.
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            var stops = Array.prototype.filter.call(panel.querySelectorAll('button, input'), function (el) {
+                return !el.disabled && el.offsetParent !== null;
+            });
+            var next = stops.indexOf(e.target) + (e.key === 'ArrowDown' ? 1 : -1);
+
+            if (next >= 0 && next < stops.length) {
+                stops[next].focus();
+                e.preventDefault();
+            }
         }
     }
 
@@ -1538,12 +1790,16 @@
             return;
         }
 
+        panelOpener = document.querySelector('.btnSubtitles');
+
         var panel = document.createElement('div');
         panel.id = PANEL_ID;
         panel.className = 'lapseTools';
+        panel.setAttribute('role', 'dialog');
+        panel.setAttribute('aria-labelledby', 'lapseToolsTitle');
         panel.innerHTML =
             '<div class="lapseToolsHead">' +
-            '  <span class="lapseToolsTitleText">Subtitles</span>' +
+            '  <span class="lapseToolsTitleText" id="lapseToolsTitle">Subtitle tools</span>' +
             '  <button type="button" class="lapseToolsClose" id="lapseToolsClose" aria-label="Close">&times;</button>' +
             '</div>' +
             '<div class="lapseToolsBody" id="lapseToolsBody">' +
@@ -1552,9 +1808,11 @@
 
         document.body.appendChild(panel);
         document.addEventListener('keydown', panelKeyHandler, true);
+        panel.addEventListener('keydown', panelKeys);
         watchForPlaybackEnding();
 
         panel.querySelector('#lapseToolsClose').addEventListener('click', closePlayerPanel);
+        panel.querySelector('#lapseToolsClose').focus();
 
         loadPanel();
     }
@@ -1620,15 +1878,15 @@
         return '<div class="lapseToolsSection">' +
             '  <div class="lapseToolsLabel">Delay</div>' +
             '  <div class="lapseToolsNudge">' +
-            '    <button type="button" data-nudge="-1">-1s</button>' +
-            '    <button type="button" data-nudge="-0.1">-100</button>' +
-            '    <button type="button" data-nudge="-0.025">-25</button>' +
-            '    <span class="lapseToolsValue" id="lapseDelayValue">' + formatDelay(panelDelay) + '</span>' +
-            '    <button type="button" data-nudge="0.025">+25</button>' +
-            '    <button type="button" data-nudge="0.1">+100</button>' +
-            '    <button type="button" data-nudge="1">+1s</button>' +
+            '    <button type="button" data-nudge="-1" aria-label="1 second earlier">-1s</button>' +
+            '    <button type="button" data-nudge="-0.1" aria-label="100 ms earlier">-100</button>' +
+            '    <button type="button" data-nudge="-0.025" aria-label="25 ms earlier">-25</button>' +
+            '    <span class="lapseToolsValue" id="lapseDelayValue" aria-live="polite">' + formatDelay(panelDelay) + '</span>' +
+            '    <button type="button" data-nudge="0.025" aria-label="25 ms later">+25</button>' +
+            '    <button type="button" data-nudge="0.1" aria-label="100 ms later">+100</button>' +
+            '    <button type="button" data-nudge="1" aria-label="1 second later">+1s</button>' +
             '  </div>' +
-            '  <input type="range" class="lapseToolsSlider" id="lapseDelaySlider" min="-30" max="30" step="0.025" value="' + panelDelay + '" />' +
+            '  <input type="range" class="lapseToolsSlider" id="lapseDelaySlider" min="-30" max="30" step="0.025" value="' + panelDelay + '" aria-label="Delay in seconds" />' +
             '  <div class="lapseToolsHint">' + note + ' Positive means the subtitles show up later.</div>' +
             '  <div class="lapseToolsButtons">' +
             '    <button type="button" class="lapseToolsButton" id="lapseDelayReset">Reset</button>' +
@@ -1645,7 +1903,7 @@
                 : 'The subtitle on screen is not a file LAPSE can edit, so it can only be moved for this session. ' +
                   'A track still inside the video or a burnt-in one cannot be saved.') +
             '  </div>' +
-            '  <div class="lapseToolsResult" id="lapseDelayResult"></div>' +
+            '  <div class="lapseToolsResult" id="lapseDelayResult" role="status"></div>' +
             '</div>';
     }
 
@@ -1691,7 +1949,7 @@
         }
 
         var offsetMs = delayToShiftMs(panelDelay);
-        result.textContent = 'Writing ' + offsetMs + 'ms into the file...';
+        result.textContent = 'Shifting it ' + distance(offsetMs) + '...';
 
         lapsePost('Lapse/Shift', {
             ItemId: panelContext.ItemId,
@@ -1746,7 +2004,7 @@
             '    <button type="button" class="lapseToolsButton" id="lapseToolsAdvanced">Advanced</button>' +
             '  </div>' +
             (playing ? '' : '<div class="lapseToolsHint">The subtitle on screen is not a file, so there is nothing to sync.</div>') +
-            '  <div class="lapseToolsResult" id="lapseSyncResult"></div>' +
+            '  <div class="lapseToolsResult" id="lapseSyncResult" role="status"></div>' +
             '</div>';
     }
 
@@ -1817,7 +2075,7 @@
                 ? '<div class="lapseToolsButtons"><button type="button" class="lapseToolsButton" id="lapseTrackFetch">' +
                   'Find one online</button></div>'
                 : '') +
-            '  <div class="lapseToolsResult" id="lapseTrackResult"></div>' +
+            '  <div class="lapseToolsResult" id="lapseTrackResult" role="status"></div>' +
             '</div>';
     }
 
@@ -1884,8 +2142,7 @@
     function openOnlineSubtitlePicker(itemId, name, done) {
         var language = (accessInfo && accessInfo.OpenSubtitlesLanguage) || '';
 
-        var overlay = openOverlay(
-            '<h3>Find Subtitles Online</h3>' +
+        var overlay = openDialog('Find subtitles online',
             '<div class="fieldDescription">Searches OpenSubtitles for ' + escapeHtml(name || 'this item') +
             ', by the file itself first and then by its title. Downloads come out of the account\'s daily allowance.</div>' +
             '<div class="inputContainer">' +
@@ -1901,7 +2158,6 @@
             '  <span>Sync it to this video straight after</span>' +
             '</label>' +
             '<div class="lapseDialogButtons">' +
-            '  <button is="emby-button" type="button" class="raised" id="lapseOsCancel"><span>Close</span></button>' +
             '  <button is="emby-button" type="button" class="raised button-submit" id="lapseOsGet" disabled><span>Download</span></button>' +
             '</div>', true);
 
@@ -1954,9 +2210,6 @@
         }
 
         overlay.querySelector('#lapseOsSearch').addEventListener('click', search);
-        overlay.querySelector('#lapseOsCancel').addEventListener('click', function () {
-            overlay.remove();
-        });
 
         getButton.addEventListener('click', function () {
             var picked = overlay.querySelector('input[name="lapseOsPick"]:checked');
@@ -1966,8 +2219,8 @@
             }
 
             var sync = overlay.querySelector('#lapseOsSync').checked;
-            overlay.remove();
-            showLapseToast(sync ? 'Downloading and syncing...' : 'Downloading...');
+            closeDialog(overlay);
+            notify(sync ? 'Downloading and syncing...' : 'Downloading...', true);
 
             lapsePost('Lapse/Items/' + itemId + '/OpenSubtitles/Download', {
                 FileId: candidate.FileId,
@@ -1983,13 +2236,13 @@
                     message += ' ' + describeSyncOutcome(outcome.Sync);
                 }
 
-                showLapseToast(message);
+                tell(message);
 
                 if (done) {
                     done(message);
                 }
             }).catch(function (err) {
-                showLapseToast('Could not download it: ' + err.message);
+                tell('Could not download it: ' + err.message);
             });
         });
 
@@ -2006,15 +2259,15 @@
             '    <span>Let LAPSE style the subtitles</span>' +
             '  </label>' +
             '  <div class="lapseToolsRow"><span>Size</span>' +
-            '    <input type="range" id="lapseLookSize" min="16" max="120" step="1" value="' + (a.FontSizePx || 48) + '" />' +
+            '    <input type="range" id="lapseLookSize" aria-label="Size" min="16" max="120" step="1" value="' + (a.FontSizePx || 48) + '" />' +
             '    <span class="lapseToolsValue" id="lapseLookSizeValue">' + (a.FontSizePx || 48) + '</span></div>' +
             '  <div class="lapseToolsRow"><span>Height</span>' +
-            '    <input type="range" id="lapseLookPosition" min="0" max="85" step="1" value="' + (a.VerticalPositionPercent || 0) + '" />' +
+            '    <input type="range" id="lapseLookPosition" aria-label="Height" min="0" max="85" step="1" value="' + (a.VerticalPositionPercent || 0) + '" />' +
             '    <span class="lapseToolsValue" id="lapseLookPositionValue">' + (a.VerticalPositionPercent || 0) + '%</span></div>' +
             '  <div class="lapseToolsHint">Height lifts the subtitles off the bottom of the picture. ' +
             'It does not move an ASS track, which carries its own positioning.</div>' +
             '  <div class="lapseToolsRow"><span>Text</span>' +
-            '    <input type="color" id="lapseLookColor" value="' + (a.TextColor || '#FFFFFF') + '" /></div>' +
+            '    <input type="color" id="lapseLookColor" aria-label="Text colour" value="' + escapeHtml(a.TextColor || '#FFFFFF') + '" /></div>' +
             '  <label class="lapseToolsCheck">' +
             '    <input type="checkbox" id="lapseLookBackground"' + (a.BackgroundEnabled ? ' checked' : '') + ' />' +
             '    <span>Box behind the text</span>' +
@@ -2028,7 +2281,7 @@
             '  <div class="lapseToolsButtons">' +
             '    <button type="button" class="lapseToolsButton" id="lapseLookMore">Font and spacing</button>' +
             '  </div>' +
-            '  <div class="lapseToolsResult" id="lapseLookResult"></div>' +
+            '  <div class="lapseToolsResult" id="lapseLookResult" role="status"></div>' +
             '</div>';
     }
 
@@ -2220,12 +2473,12 @@
     }
 
     function keepPlayingSubtitle(itemId) {
-        showLapseToast('Keeping this one...');
+        notify('Keeping this one...', true);
 
         lapsePost('Lapse/Candidates/Keep', { ItemId: itemId }).then(function (decision) {
-            showLapseToast((decision && decision.Message) || 'Kept it.', true);
+            tell((decision && decision.Message) || 'Kept it.');
         }).catch(function (err) {
-            showLapseToast('Could not keep it: ' + err.message, true);
+            tell('Could not keep it: ' + err.message);
         });
     }
 
@@ -2236,13 +2489,13 @@
             var sets = (status && status.Sets) || [];
 
             if (!sets.length) {
-                showLapseToast('There are no synced subtitles waiting to be chosen for this item.');
+                tell('There are no synced subtitles waiting to be chosen for this item.');
                 return;
             }
 
             showCandidateDialog(itemId, sets, status.PlayingPath);
         }).catch(function (err) {
-            showLapseToast('Could not read the waiting subtitles: ' + err.message);
+            tell('Could not read the waiting subtitles: ' + err.message);
         });
     }
 
@@ -2261,30 +2514,30 @@
                 ' has not been touched. Pick the answer that lines up:</div>' + options;
         }).join('');
 
-        var overlay = openOverlay(
-            '<h3>Choose the right subtitle</h3>' +
+        var overlay = openDialog('Choose the right subtitle',
             '<div class="fieldDescription">Play the item and switch between these tracks to compare them. ' +
             'Keeping one writes it out using your File output setting and deletes the rest.</div>' +
             body +
             '<div class="lapseDialogButtons">' +
-            '  <button is="emby-button" type="button" class="raised" id="lapseCandidateCancel"><span>Close</span></button>' +
-            '  <button is="emby-button" type="button" class="raised" id="lapseCandidateDiscard"><span>Throw all away</span></button>' +
+            '  <button is="emby-button" type="button" class="raised" id="lapseCandidateDiscard"><span>Discard all</span></button>' +
             '  <button is="emby-button" type="button" class="raised button-submit" id="lapseCandidateKeep"><span>Keep</span></button>' +
             '</div>',
             true);
 
-        overlay.querySelector('#lapseCandidateCancel').addEventListener('click', function () {
-            overlay.remove();
-        });
-
         overlay.querySelector('#lapseCandidateDiscard').addEventListener('click', function () {
-            overlay.remove();
-            showLapseToast('Removing them...');
+            confirmAction('Discard these answers', 'Every answer file is deleted and the original stays as it is.', 'Discard').then(function (yes) {
+                if (!yes) {
+                    return;
+                }
 
-            lapsePost('Lapse/Candidates/Discard', { ItemId: itemId }).then(function (decision) {
-                showLapseToast((decision && decision.Message) || 'Removed.', true);
-            }).catch(function (err) {
-                showLapseToast('Could not remove them: ' + err.message, true);
+                closeDialog(overlay);
+                notify('Removing them...', true);
+
+                lapsePost('Lapse/Candidates/Discard', { ItemId: itemId }).then(function (decision) {
+                    tell((decision && decision.Message) || 'Removed.');
+                }).catch(function (err) {
+                    tell('Could not remove them: ' + err.message);
+                });
             });
         });
 
@@ -2292,17 +2545,17 @@
             var picked = overlay.querySelector('input[name="lapseCandidate"]:checked');
 
             if (!picked) {
-                showLapseToast('Pick one of them first.');
+                notify('Pick one of them first.');
                 return;
             }
 
-            overlay.remove();
-            showLapseToast('Keeping it...');
+            closeDialog(overlay);
+            notify('Keeping it...', true);
 
             lapsePost('Lapse/Candidates/Keep', { ItemId: itemId, Path: picked.value }).then(function (decision) {
-                showLapseToast((decision && decision.Message) || 'Kept it.', true);
+                tell((decision && decision.Message) || 'Kept it.');
             }).catch(function (err) {
-                showLapseToast('Could not keep it: ' + err.message, true);
+                tell('Could not keep it: ' + err.message);
             });
         });
     }
@@ -2323,7 +2576,7 @@
         ]).then(function (results) {
             showSubtitleSettingsDialog(results[0] || {}, results[1] || { Fonts: [] });
         }).catch(function (err) {
-            showLapseToast('Could not read the subtitle settings: ' + err.message);
+            tell('Could not read the subtitle settings: ' + err.message);
         });
     }
 
@@ -2361,8 +2614,7 @@
             : '<div class="fieldDescription">No font has been installed on this server yet, so the list only offers the ' +
               'client\'s own. An admin can add OpenDyslexic from the LAPSE dashboard under Subtitle appearance.</div>';
 
-        var overlay = openOverlay(
-            '<h3>Subtitle settings</h3>' +
+        var overlay = openDialog('Subtitle settings',
             '<div class="fieldDescription">Yours alone. These follow your account onto every device you sign in on, ' +
             'and change nothing for anybody else using this server.</div>' +
             '<label class="emby-checkbox-label lapseStackedCheck">' +
@@ -2370,18 +2622,18 @@
             '  <span>Style subtitles during playback</span>' +
             '</label>' +
             '<div class="selectContainer">' +
-            '  <label class="selectLabel">Font</label>' +
+            '  <label class="selectLabel" for="lapseAppearanceFont">Font</label>' +
             '  <select is="emby-select" id="lapseAppearanceFont" class="emby-select-withcolor emby-select">' +
             fontOptionsHtml(fonts, appearance.FontFamily || '') +
             '  </select>' +
             '</div>' +
             note +
             '<div class="inputContainer">' +
-            '  <label class="inputLabel inputLabelUnfocused">Text size: <span id="lapseAppearanceSizeValue">' + size + 'px</span></label>' +
+            '  <label class="inputLabel inputLabelUnfocused" for="lapseAppearanceSize">Text size: <span id="lapseAppearanceSizeValue">' + size + 'px</span></label>' +
             '  <input type="range" id="lapseAppearanceSize" min="16" max="120" value="' + size + '" class="lapseRange" />' +
             '</div>' +
             '<div class="inputContainer">' +
-            '  <label class="inputLabel inputLabelUnfocused">Letter spacing: <span id="lapseAppearanceSpacingValue">' + spacing + 'px</span></label>' +
+            '  <label class="inputLabel inputLabelUnfocused" for="lapseAppearanceSpacing">Letter spacing: <span id="lapseAppearanceSpacingValue">' + spacing + 'px</span></label>' +
             '  <input type="range" id="lapseAppearanceSpacing" min="0" max="10" step="0.5" value="' + spacing + '" class="lapseRange" />' +
             '</div>' +
             '<div class="inputContainer">' +
@@ -2423,26 +2675,26 @@
         }
 
         overlay.querySelector('#lapseAppearanceDyslexic').addEventListener('click', function () {
-            overlay.remove();
+            closeDialog(overlay);
             saveMyAppearance(DYSLEXIC_PRESET, 'Subtitles are now dyslexia-friendly, for you.');
         });
 
         overlay.querySelector('#lapseAppearanceReset').addEventListener('click', function () {
-            overlay.remove();
-            showLapseToast('Putting your subtitle settings back...');
+            closeDialog(overlay);
+            notify('Putting your subtitle settings back...', true);
 
             lapsePost('Lapse/Appearance/Mine/Reset').then(function (applied) {
                 appearanceSettings = applied;
                 applySubtitleAppearance();
-                showLapseToast('Back to this server\'s own subtitle settings.');
+                tell('Back to this server\'s own subtitle settings.');
             }).catch(function (err) {
-                showLapseToast('Could not reset: ' + err.message);
+                tell('Could not reset: ' + err.message);
             });
         });
 
         overlay.querySelector('#lapseAppearanceSave').addEventListener('click', function () {
             var wanted = collect();
-            overlay.remove();
+            closeDialog(overlay);
             saveMyAppearance(wanted, 'Subtitle settings saved.');
         });
     }
@@ -2454,10 +2706,10 @@
             // change is visible on the film that is playing right now.
             appearanceSettings = saved;
             applySubtitleAppearance();
-            showLapseToast(message);
+            tell(message);
             return true;
         }).catch(function (err) {
-            showLapseToast('Could not save the subtitle settings: ' + err.message);
+            tell('Could not save the subtitle settings: ' + err.message);
             return false;
         });
     }
@@ -2468,7 +2720,7 @@
     // dyslexia font on every device since most clients have no font picker.
 
     function openRestylePopup(context) {
-        showLapseToast('Checking subtitles...');
+        notify('Checking subtitles...', true);
 
         Promise.all([
             lapseGet('Lapse/Items/' + context.id + '/Subtitles'),
@@ -2477,13 +2729,13 @@
             var subtitles = results[0].filter(function (s) { return s.TextBased !== false; });
 
             if (subtitles.length === 0) {
-                showLapseToast('No subtitle on this item has text in it to restyle.');
+                tell('No subtitle on this item has text in it to restyle.');
                 return;
             }
 
             showRestyleDialog(context, subtitles, results[1]);
         }).catch(function (err) {
-            showLapseToast('Could not check subtitles: ' + err.message);
+            tell('Could not check subtitles: ' + err.message);
         });
     }
 
@@ -2517,8 +2769,7 @@
               'written, and the larger text and wider letter spacing will apply, but it will render in the player\'s ' +
               'normal font until an admin installs OpenDyslexic from the LAPSE dashboard under Subtitle appearance.</div>';
 
-        var overlay = openOverlay(
-            '<h3>Readable Subtitles</h3>' +
+        var overlay = openDialog('Readable subtitles',
             '<div class="fieldDescription">Writes a copy of the subtitles you tick, with a dyslexia-friendly font, larger ' +
             'text and wider letter spacing set inside the file. Because the styling is in the file rather than in a client ' +
             'setting, every client that plays it honours it - phone, TV and browser alike, with nothing to set up on each one.</div>' +
@@ -2528,7 +2779,7 @@
             '<div class="fieldDescription">Only the ones you tick are touched. The rest are left exactly as they are, which ' +
             'is what you want on a library other people read the other languages of.</div>' +
             '<div class="selectContainer">' +
-            '  <label class="selectLabel">What to do with the original</label>' +
+            '  <label class="selectLabel" for="lapseRestyleMode">What to do with the original</label>' +
             '  <select is="emby-select" id="lapseRestyleMode" class="emby-select-withcolor emby-select">' +
             '    <option value="copy" selected>Keep it, and add the readable one beside it</option>' +
             '    <option value="replace">Replace it (the original is kept as a backup)</option>' +
@@ -2537,20 +2788,15 @@
             '<div class="fieldDescription">Keeping it means both are offered as separate tracks in the player, so the styled ' +
             'one can be picked by whoever wants it and everyone else keeps the original. Either way this can be undone.</div>' +
             '<div class="lapseDialogButtons">' +
-            '  <button is="emby-button" type="button" class="raised" id="lapseRestyleCancel"><span>Cancel</span></button>' +
             (anyReadable
                 ? '  <button is="emby-button" type="button" class="raised" id="lapseRestyleRevert"><span>Back to normal</span></button>'
                 : '') +
             '  <button is="emby-button" type="button" class="raised button-submit" id="lapseRestyleApply"><span>Write it</span></button>' +
             '</div>');
 
-        overlay.querySelector('#lapseRestyleCancel').addEventListener('click', function () {
-            overlay.remove();
-        });
-
         if (anyReadable) {
             overlay.querySelector('#lapseRestyleRevert').addEventListener('click', function () {
-                overlay.remove();
+                closeDialog(overlay);
                 revertReadable(context, null);
             });
         }
@@ -2561,23 +2807,23 @@
                 .map(function (box) { return box.value; });
 
             if (picked.length === 0) {
-                showLapseToast('Tick at least one subtitle first.');
+                notify('Tick at least one subtitle first.');
                 return;
             }
 
             var replace = overlay.querySelector('#lapseRestyleMode').value === 'replace';
 
-            overlay.remove();
-            showLapseToast('Writing ' + (picked.length === 1 ? 'a readable copy' : picked.length + ' readable copies') + '...');
+            closeDialog(overlay);
+            notify('Writing ' + (picked.length === 1 ? 'a readable copy' : picked.length + ' readable copies') + '...', true);
 
             lapsePost('Lapse/Restyle', {
                 ItemId: context.id,
                 SubtitlePaths: picked,
                 ReplaceOriginal: replace
             }).then(function (response) {
-                showLapseToast(describeRestyle(response));
+                tell(describeRestyle(response));
             }).catch(function (err) {
-                showLapseToast('Could not restyle: ' + err.message);
+                tell('Could not restyle: ' + err.message);
             });
         });
     }
@@ -2620,7 +2866,7 @@
     }
 
     function revertReadable(context, subtitlePath) {
-        showLapseToast('Putting the subtitles back...');
+        notify('Putting the subtitles back...', true);
 
         lapsePost('Lapse/Restyle/Revert', {
             ItemId: context.id,
@@ -2630,7 +2876,7 @@
             var done = files.filter(function (f) { return f.Success; });
 
             if (done.length === 0) {
-                showLapseToast('Nothing to put back' + (files[0] && files[0].Error ? ': ' + files[0].Error : '.'));
+                tell('Nothing to put back' + (files[0] && files[0].Error ? ': ' + files[0].Error : '.'));
                 return;
             }
 
@@ -2641,9 +2887,9 @@
                 message += ', restoring ' + restored + ' original' + (restored === 1 ? '' : 's') + ' from backup';
             }
 
-            showLapseToast(message + '. Run a library scan so the player stops offering the removed ones.');
+            tell(message + '. Run a library scan so the player stops offering the removed ones.');
         }).catch(function (err) {
-            showLapseToast('Could not put them back: ' + err.message);
+            tell('Could not put them back: ' + err.message);
         });
     }
 
@@ -2653,19 +2899,19 @@
     // own checkbox.
 
     function openExtractPopup(context) {
-        showLapseToast('Checking subtitles...');
+        notify('Checking subtitles...', true);
 
         lapseGet('Lapse/Items/' + context.id + '/Subtitles').then(function (subtitles) {
             var embedded = subtitles.filter(function (s) { return s.IsEmbedded; });
 
             if (embedded.length === 0) {
-                showLapseToast('There are no subtitle tracks inside this video file.');
+                tell('There are no subtitle tracks inside this video file.');
                 return;
             }
 
             showExtractDialog(context, embedded);
         }).catch(function (err) {
-            showLapseToast('Could not check subtitles: ' + err.message);
+            tell('Could not check subtitles: ' + err.message);
         });
     }
 
@@ -2679,8 +2925,7 @@
                 '</li>';
         }).join('');
 
-        var overlay = openOverlay(
-            '<h3>Extract Embedded Subtitles</h3>' +
+        var overlay = openDialog('Extract embedded subtitles',
             '<div class="fieldDescription">Writes every text subtitle track inside this video out as a file ' +
             'beside it. A subtitle as a file plays back on every client without the video having to be ' +
             'transcoded, which a track inside the video often does need.</div>' +
@@ -2705,7 +2950,6 @@
                   'is written beside the original as a .nosubs file, so you can check it before deleting anything. ' +
                   'Turn it on and the original is replaced once the rebuild has finished cleanly.</div>') +
             '<div class="lapseDialogButtons">' +
-            '  <button is="emby-button" type="button" class="raised" id="lapseExtractCancel"><span>Cancel</span></button>' +
             '  <button is="emby-button" type="button" class="raised button-submit" id="lapseExtractApply"' +
             (textual.length === 0 ? ' disabled' : '') + '><span>Extract</span></button>' +
             '</div>');
@@ -2729,33 +2973,34 @@
             });
         }
 
-        overlay.querySelector('#lapseExtractCancel').addEventListener('click', function () {
-            overlay.remove();
-        });
-
         overlay.querySelector('#lapseExtractApply').addEventListener('click', function () {
             var remove = !!(removeCheck && removeCheck.checked);
             var replace = !!(replaceCheck && replaceCheck.checked);
 
-            if (replace && !window.confirm(
-                'This replaces the original video file with a rebuilt copy that has no subtitle tracks in it. ' +
-                'The subtitles are written out as files first, and nothing is re-encoded. Carry on?')) {
-                return;
-            }
+            var asked = replace
+                ? confirmAction('Replace the video file', 'The original video is replaced by a rebuilt copy without its subtitle tracks. ' +
+                    'The subtitles are written out as files first, and nothing is re-encoded.', 'Replace it')
+                : Promise.resolve(true);
 
-            overlay.remove();
-            showLapseToast(remove
-                ? 'Extracting subtitles and rebuilding the video. This can take a while on a large file...'
-                : 'Extracting subtitles...');
+            asked.then(function (yes) {
+                if (!yes) {
+                    return;
+                }
 
-            lapsePost('Lapse/ExtractEmbedded', {
-                ItemId: context.id,
-                RemoveFromVideo: remove,
-                ReplaceOriginal: replace
-            }).then(function (result) {
-                showLapseToast(describeExtractOutcome(result));
-            }).catch(function (err) {
-                showLapseToast('Could not extract: ' + err.message);
+                closeDialog(overlay);
+                notify(remove
+                    ? 'Extracting subtitles and rebuilding the video. This can take a while on a large file...'
+                    : 'Extracting subtitles...', true);
+
+                lapsePost('Lapse/ExtractEmbedded', {
+                    ItemId: context.id,
+                    RemoveFromVideo: remove,
+                    ReplaceOriginal: replace
+                }).then(function (result) {
+                    tell(describeExtractOutcome(result));
+                }).catch(function (err) {
+                    tell('Could not extract: ' + err.message);
+                });
             });
         });
     }
@@ -2785,31 +3030,30 @@
     // --- "Shift Subtitles" ---
 
     function openShiftPopup(context) {
-        showLapseToast('Checking subtitles...');
+        notify('Checking subtitles...', true);
 
         lapseGet('Lapse/Items/' + context.id + '/Subtitles').then(function (subtitles) {
             var shiftable = subtitles.filter(function (s) {
-                return /\.(srt|vtt|ass|ssa)$/i.test(s.Path);
+                return /\.(srt|vtt|ass|ssa|sub|mpl2|sup|sbv|idx|smi|sami|ttml|dfxp|itt)$/i.test(s.Path);
             });
 
             if (shiftable.length === 0) {
-                showLapseToast(subtitles.length === 0
+                tell(subtitles.length === 0
                     ? 'No external subtitle found for this item.'
-                    : 'Shifting works on .srt, .vtt, .ass and .ssa files, and this item has none of those. Convert it first.');
+                    : 'None of this item\'s subtitles is in a format that can be shifted. Convert one to .srt first.');
                 return;
             }
 
             showShiftDialog(context, shiftable);
         }).catch(function (err) {
-            showLapseToast('Could not check subtitles: ' + err.message);
+            tell('Could not check subtitles: ' + err.message);
         });
     }
 
     function showShiftDialog(context, subtitles) {
-        var overlay = openOverlay(
-            '<h3>Shift Subtitles</h3>' +
+        var overlay = openDialog('Shift subtitles',
             '<div class="selectContainer">' +
-            '  <label class="selectLabel">Subtitle</label>' +
+            '  <label class="selectLabel" for="lapseShiftSubtitle">Subtitle</label>' +
             '  <select is="emby-select" id="lapseShiftSubtitle" class="emby-select-withcolor emby-select">' +
             subtitleOptionsHtml(subtitles) +
             '  </select>' +
@@ -2817,21 +3061,19 @@
             '<div class="lapsePreviewBox" id="lapseShiftPreview">Loading an example line...</div>' +
             // slider to find it roughly, box to type it exactly, they move together
             '<div class="lapseShiftControls">' +
-            '  <input type="range" id="lapseShiftSlider" class="lapseShiftSlider" min="-10000" max="10000" step="50" value="0" />' +
+            '  <input type="range" id="lapseShiftSlider" class="lapseShiftSlider" min="-10000" max="10000" step="50" value="0" aria-label="Shift" />' +
             '  <div class="lapseShiftScale">' +
             '    <span>-10s</span><span>0</span><span>+10s</span>' +
             '  </div>' +
             '  <div class="lapseStepperRow">' +
-            '    <button is="emby-button" type="button" class="raised lapseStepButton" id="lapseShiftMinus"><span>&minus;</span></button>' +
-            '    <input is="emby-input" id="lapseShiftOffset" class="lapseShiftNumber" type="number" step="100" value="0" />' +
+            '    <button is="emby-button" type="button" class="raised lapseStepButton" id="lapseShiftMinus" aria-label="100 ms earlier"><span>&minus;</span></button>' +
+            '    <input is="emby-input" id="lapseShiftOffset" class="lapseShiftNumber" type="number" step="100" value="0" aria-label="Milliseconds" />' +
             '    <span class="lapseShiftUnit">ms</span>' +
-            '    <button is="emby-button" type="button" class="raised lapseStepButton" id="lapseShiftPlus"><span>+</span></button>' +
+            '    <button is="emby-button" type="button" class="raised lapseStepButton" id="lapseShiftPlus" aria-label="100 ms later"><span>+</span></button>' +
             '  </div>' +
-            '  <div class="fieldDescription">Minus makes subtitles appear earlier, plus later. The buttons move in 100ms steps. ' +
-            'The slider covers 10 seconds either way; type a bigger number if you need one.</div>' +
+            '  <div class="fieldDescription">Minus shows the subtitles earlier, plus later. Type a number for more than 10 seconds.</div>' +
             '</div>' +
             '<div class="lapseDialogButtons">' +
-            '  <button is="emby-button" type="button" class="raised" id="lapseShiftCancel"><span>Cancel</span></button>' +
             '  <button is="emby-button" type="button" class="raised button-submit" id="lapseShiftApply"><span>Apply</span></button>' +
             '</div>',
             // wide enough for a 29 char timing line without a scrollbar
@@ -2902,19 +3144,15 @@
         overlay.querySelector('#lapseShiftMinus').addEventListener('click', function () { step(-100); });
         overlay.querySelector('#lapseShiftPlus').addEventListener('click', function () { step(100); });
 
-        overlay.querySelector('#lapseShiftCancel').addEventListener('click', function () {
-            overlay.remove();
-        });
-
         overlay.querySelector('#lapseShiftApply').addEventListener('click', function () {
             var offset = currentOffset();
             if (!offset) {
-                showLapseToast('Set an offset first - zero would not change anything.');
+                notify('Set an offset first - zero would not change anything.');
                 return;
             }
 
-            overlay.remove();
-            showLapseToast('Shifting by ' + offset + 'ms...');
+            closeDialog(overlay);
+            notify('Shifting it ' + distance(offset) + '...', true);
 
             // no OutputMode here: the server falls back to the configured one, which is
             // the whole point of "output follows the configured mode"
@@ -2923,9 +3161,10 @@
                 SubtitlePath: select.value,
                 OffsetMs: offset
             }).then(function (result) {
-                showLapseToast('Moved ' + result.Shifted + ' timestamps by ' + offset + 'ms. Wrote ' + result.OutputPath);
+                tell('Shifted ' + distance(offset) + ' into ' + baseName(result.OutputPath) +
+                    '. It can be undone from Recent activity in the LAPSE settings.');
             }).catch(function (err) {
-                showLapseToast('Could not shift the subtitle: ' + err.message);
+                tell('Could not shift the subtitle: ' + err.message);
             });
         });
 
@@ -2963,64 +3202,58 @@
     // --- "Sync Subtitles to Reference" on a single item ---
 
     function openReferencePopup(context) {
-        showLapseToast('Checking subtitles...');
+        notify('Checking subtitles...', true);
 
         lapseGet('Lapse/Items/' + context.id + '/Subtitles').then(function (subtitles) {
             if (subtitles.length < 2) {
-                showLapseToast('This item needs at least two external subtitles for that.');
+                tell('This item needs at least two external subtitles for that.');
                 return;
             }
 
-            var overlay = openOverlay(
-                '<h3>Sync Subtitles to Reference</h3>' +
+            var overlay = openDialog('Sync to reference',
                 '<p class="fieldDescription">Pick the subtitle that is already correct, then say what to line up against it.</p>' +
                 '<div class="selectContainer">' +
-                '<label class="selectLabel">Reference (the correct one)</label>' +
+                '<label class="selectLabel" for="lapseRefSelect">Reference (the correct one)</label>' +
                 '<select is="emby-select" id="lapseRefSelect" class="emby-select-withcolor emby-select">' +
                 subtitleOptionsHtml(subtitles) +
                 '</select>' +
                 '</div>' +
                 '<div class="selectContainer">' +
-                '<label class="selectLabel">Sync</label>' +
+                '<label class="selectLabel" for="lapseRefTarget">Sync</label>' +
                 '<select is="emby-select" id="lapseRefTarget" class="emby-select-withcolor emby-select">' +
                 '<option value="">Every other subtitle</option>' +
                 subtitleOptionsHtml(subtitles) +
                 '</select>' +
                 '</div>' +
                 '<div class="lapseDialogButtons">' +
-                '<button is="emby-button" type="button" class="raised" id="lapseRefCancel"><span>Cancel</span></button>' +
                 '<button is="emby-button" type="button" class="raised button-submit" id="lapseRefSync"><span>Sync</span></button>' +
                 '</div>');
 
             var referenceSelect = overlay.querySelector('#lapseRefSelect');
             var targetSelect = overlay.querySelector('#lapseRefTarget');
 
-            overlay.querySelector('#lapseRefCancel').addEventListener('click', function () {
-                overlay.remove();
-            });
-
             overlay.querySelector('#lapseRefSync').addEventListener('click', function () {
                 var referencePath = referenceSelect.value;
                 var targetPath = targetSelect.value;
 
                 if (targetPath && targetPath === referencePath) {
-                    showLapseToast('That is the reference itself. Pick another subtitle, or sync every other one.');
+                    notify('That is the reference itself. Pick another subtitle, or sync every other one.');
                     return;
                 }
 
-                overlay.remove();
+                closeDialog(overlay);
                 doSyncAll(context.id, referencePath, targetPath ? 1 : subtitles.length - 1,
                     targetPath ? [targetPath] : null);
             });
         }).catch(function (err) {
-            showLapseToast('Could not check subtitles: ' + err.message);
+            tell('Could not check subtitles: ' + err.message);
         });
     }
 
     // subtitlePaths names the tracks to sync, or null for every track except the
     // reference.
     function doSyncAll(itemId, referencePath, count, subtitlePaths) {
-        showLapseToast('Syncing ' + count + ' subtitle' + (count === 1 ? '' : 's') + ' to the reference...');
+        notify('Syncing ' + count + ' subtitle' + (count === 1 ? '' : 's') + ' to the reference...', true);
 
         lapsePost('Lapse/SyncAllSubtitles', {
             ItemId: itemId,
@@ -3028,22 +3261,22 @@
             SubtitlePaths: subtitlePaths || null
         }).then(function (result) {
             var failed = result.Results.length - result.SucceededCount;
-            showLapseToast(failed === 0
+            tell(failed === 0
                 ? ('Synced ' + result.SucceededCount + ' subtitle' + (result.SucceededCount === 1 ? '' : 's') + ' to the reference.')
                 : (result.SucceededCount + ' of ' + result.Results.length + ' synced, ' + failed + ' failed. See the LAPSE dashboard for details.'));
         }).catch(function (err) {
-            showLapseToast('Sync failed: ' + err.message);
+            tell('Sync failed: ' + err.message);
         });
     }
 
     // --- series and season sync ---
 
     function openSeriesReferencePopup(context) {
-        showLapseToast('Looking at the subtitles across these episodes...');
+        notify('Looking at the subtitles across these episodes...', true);
 
         lapseGet('Lapse/Series/' + context.id + '/ReferenceOptions').then(function (options) {
             if (!options || options.length === 0) {
-                showLapseToast('No subtitle track here is named consistently enough to use as a reference across episodes.');
+                tell('No subtitle track here is named consistently enough to use as a reference across episodes.');
                 return;
             }
 
@@ -3052,8 +3285,7 @@
                     ' (on ' + o.EpisodeCount + ' of ' + o.TotalEpisodes + ' episodes)</option>';
             }).join('');
 
-            var overlay = openOverlay(
-                '<h3>Sync All to Reference</h3>' +
+            var overlay = openDialog('Sync all to reference',
                 '<p class="fieldDescription">Pick the subtitle track that is already correct. On every episode, the other subtitles get lined up against that episode\'s copy of it.</p>' +
                 '<div class="selectContainer">' +
                 '<select is="emby-select" id="lapseSeriesRefSelect" class="emby-select-withcolor emby-select">' +
@@ -3061,26 +3293,21 @@
                 '</select>' +
                 '</div>' +
                 '<div class="lapseDialogButtons">' +
-                '<button is="emby-button" type="button" class="raised" id="lapseSeriesRefCancel"><span>Cancel</span></button>' +
                 '<button is="emby-button" type="button" class="raised button-submit" id="lapseSeriesRefSync"><span>Sync</span></button>' +
                 '</div>');
 
-            overlay.querySelector('#lapseSeriesRefCancel').addEventListener('click', function () {
-                overlay.remove();
-            });
-
             overlay.querySelector('#lapseSeriesRefSync').addEventListener('click', function () {
                 var key = overlay.querySelector('#lapseSeriesRefSelect').value;
-                overlay.remove();
+                closeDialog(overlay);
                 startSeriesSync(context, key);
             });
         }).catch(function (err) {
-            showLapseToast('Could not read the subtitle tracks: ' + err.message);
+            tell('Could not read the subtitle tracks: ' + err.message);
         });
     }
 
     function startSeriesSync(context, referenceKey) {
-        showLapseToast('Queuing episodes...');
+        notify('Queuing episodes...', true);
 
         lapsePost('Lapse/Series/Sync', {
             ItemId: context.id,
@@ -3090,7 +3317,7 @@
             // stays usable while a whole show works through in the background.
             startProgressPolling();
         }).catch(function (err) {
-            showLapseToast('Could not start the sync: ' + err.message);
+            tell('Could not start the sync: ' + err.message);
         });
     }
 
@@ -3099,14 +3326,15 @@
             return;
         }
 
-        var toast = showLapseToast('', true);
+        var toast = notify('', true);
 
         // Stop button in the toast so a wrong job can be stopped from where it started
-        toast.innerHTML = '<span class="lapseToastText">Starting...</span>' +
-            '<button is="emby-button" type="button" class="raised lapseToastButton" id="lapseProgressStop">' +
+        toast.classList.add('lapseProgressNotice');
+        toast.innerHTML = '<span class="lapseProgressText">Starting...</span>' +
+            '<button is="emby-button" type="button" class="raised" id="lapseProgressStop">' +
             '<span>Stop</span></button>';
 
-        var text = toast.querySelector('.lapseToastText');
+        var text = toast.querySelector('.lapseProgressText');
         var stopButton = toast.querySelector('#lapseProgressStop');
 
         stopButton.addEventListener('click', function () {
@@ -3166,7 +3394,7 @@
 
     function openMoveFromCopyPopup(context, list) {
         if (!list.CanMove) {
-            showLapseToast(list.Problem || 'Moving a subtitle between copies needs LAPSE 2.3.0 or newer.');
+            tell(list.Problem || 'Moving a subtitle between copies needs LAPSE 2.3.0 or newer.');
             return;
         }
 
@@ -3175,14 +3403,13 @@
             return (b.SubtitleCount > 0) - (a.SubtitleCount > 0);
         });
 
-        var overlay = openOverlay(
-            '<h3>Move Subtitles from Another Copy</h3>' +
-            '<div class="fieldDescription lapseDialogIntro">For a subtitle that fits another copy (a TV recording, another cut, ' +
+        var overlay = openDialog('Move subtitles from another copy',
+            '<div class="fieldDescription">For a subtitle that fits another copy (a TV recording, another cut, ' +
             'a PAL release) but not this one. LAPSE listens to both copies and moves every line the way the ' +
             'speech around it moved, so a scene that was cut or a copy that runs faster is no problem. The ' +
             'result is a new file named after this video, nothing that is already there gets replaced.</div>' +
             '<div class="selectContainer">' +
-            '  <label class="selectLabel">The copy the subtitle fits</label>' +
+            '  <label class="selectLabel" for="lapseCopySource">The copy the subtitle fits</label>' +
             '  <select is="emby-select" id="lapseCopySource" class="emby-select-withcolor emby-select">' +
             copies.map(function (c) {
                 return '<option value="' + escapeHtml(c.ItemId) + '">' + escapeHtml(c.Name) + '</option>';
@@ -3191,11 +3418,10 @@
             '  <div class="fieldDescription" id="lapseCopyDetail"></div>' +
             '</div>' +
             '<div class="selectContainer">' +
-            '  <label class="selectLabel">Subtitle</label>' +
+            '  <label class="selectLabel" for="lapseCopySubtitle">Subtitle</label>' +
             '  <select is="emby-select" id="lapseCopySubtitle" class="emby-select-withcolor emby-select"></select>' +
             '</div>' +
             '<div class="lapseDialogButtons">' +
-            '  <button is="emby-button" type="button" class="raised" id="lapseCopyCancel"><span>Cancel</span></button>' +
             '  <button is="emby-button" type="button" class="raised button-submit" id="lapseCopyMove" disabled><span>Move</span></button>' +
             '</div>');
 
@@ -3235,10 +3461,6 @@
         sourceSelect.addEventListener('change', loadSubtitles);
         loadSubtitles();
 
-        overlay.querySelector('#lapseCopyCancel').addEventListener('click', function () {
-            overlay.remove();
-        });
-
         moveButton.addEventListener('click', function () {
             var request = {
                 ItemId: context.id,
@@ -3246,13 +3468,13 @@
                 SubtitlePath: subtitleSelect.value
             };
 
-            overlay.remove();
-            showLapseToast('Moving it across. LAPSE listens to both copies, so give it a minute...');
+            closeDialog(overlay);
+            notify('Moving it across. LAPSE listens to both copies, so give it a minute...', true);
 
             lapsePost('Lapse/SyncFromCopy', request).then(function (result) {
-                showLapseToast(describeMoveOutcome(result));
+                tell(describeMoveOutcome(result));
             }).catch(function (err) {
-                showLapseToast('Could not move it: ' + err.message);
+                tell('Could not move it: ' + err.message);
             });
         });
     }
@@ -3272,8 +3494,7 @@
                 baseName(result.OutputPath || '') + ' for you to check, and is not counted as synced.';
         }
 
-        return 'Moved! Written as ' + baseName(result.OutputPath || '') + ': ' + describeResult(result) +
-            '. It shows up as a subtitle track once Jellyfin has had a look at the folder.';
+        return 'Moved across as ' + baseName(result.OutputPath || '') + '. It shows up as a subtitle track once Jellyfin has scanned the folder.';
     }
 
     // --- the Advanced dialog ---
@@ -3281,7 +3502,7 @@
     // A normal dialog now (it used to load the whole dashboard in an iframe and navigate away).
     // Everything here is a plain API call.
     function openAdvancedDialog(context) {
-        showLapseToast('Loading...');
+        notify('Loading...', true);
 
         Promise.all([
             lapseGet('Lapse/Items/' + context.id + '/Subtitles'),
@@ -3289,14 +3510,10 @@
             lapseGet('Lapse/Translate/Providers'),
             lapseGet('Lapse/Translate/Defaults')
         ]).then(function (results) {
-            var toast = document.querySelector('.lapseToast');
-            if (toast) {
-                toast.remove();
-            }
-
+            clearNotice();
             showAdvancedDialog(context, results[0], results[1], results[2], results[3] || {});
         }).catch(function (err) {
-            showLapseToast('Could not open the advanced options: ' + err.message);
+            tell('Could not open the advanced options: ' + err.message);
         });
     }
 
@@ -3305,7 +3522,7 @@
     function showAdvancedDialog(context, subtitles, engines, providers, defaults) {
         var usableEngines = engines.filter(function (e) { return e.Installed && !e.RunCheckError; });
         if (usableEngines.length === 0) {
-            showLapseToast('No engine is installed and working. Install one from the LAPSE dashboard first.');
+            tell('No engine is installed and working. Install one from the LAPSE dashboard first.');
             return;
         }
 
@@ -3322,7 +3539,7 @@
         var subtitleSection = subtitles.length === 0
             ? '<p class="fieldDescription">No subtitle found for this item.</p>'
             : '<div class="selectContainer">' +
-              '  <label class="selectLabel">Subtitle</label>' +
+              '  <label class="selectLabel" for="lapseAdvSubtitle">Subtitle</label>' +
               '  <select is="emby-select" id="lapseAdvSubtitle" class="emby-select-withcolor emby-select">' +
               subtitleOptionsHtml(subtitles) +
               '  </select>' +
@@ -3332,7 +3549,7 @@
         // syncing to another subtitle is just a different reference, so it's a dropdown, not a second button
         var referenceSection = subtitles.length > 1
             ? '<div class="selectContainer">' +
-              '  <label class="selectLabel">Line it up against</label>' +
+              '  <label class="selectLabel" for="lapseAdvReference">Line it up against</label>' +
               '  <select is="emby-select" id="lapseAdvReference" class="emby-select-withcolor emby-select">' +
               '    <option value="">The audio in the video</option>' +
               subtitleOptionsHtml(subtitles) +
@@ -3346,8 +3563,7 @@
             : '';
 
         var translationSection = canTranslate
-            ? '<hr class="lapseDialogRule" />' +
-              '<h4 class="lapseDialogSubhead">Translate</h4>' +
+            ? '<h3 class=\"lapseDialogSection\">Translate</h3>' +
               '<label class="emby-checkbox-label lapseStackedCheck">' +
               '  <input type="checkbox" is="emby-checkbox" id="lapseAdvAlsoTranslate" />' +
               '  <span>Translate as well when Sync runs</span>' +
@@ -3356,18 +3572,18 @@
               'lines the subtitle up, then translates the result. Translate on its own only translates.</div>' +
               '<div class="lapseFieldPair">' +
               '  <div class="inputContainer">' +
-              '    <label class="inputLabel inputLabelUnfocused">From</label>' +
+              '    <label class="inputLabel inputLabelUnfocused" for="lapseAdvSourceLang">From</label>' +
               '    <input is="emby-input" id="lapseAdvSourceLang" type="text" placeholder="auto" value="' +
               escapeHtml(defaults.SourceLanguage || '') + '" />' +
               '  </div>' +
               '  <div class="inputContainer">' +
-              '    <label class="inputLabel inputLabelUnfocused">To</label>' +
+              '    <label class="inputLabel inputLabelUnfocused" for="lapseAdvTargetLang">To</label>' +
               '    <input is="emby-input" id="lapseAdvTargetLang" type="text" placeholder="es" value="' +
               escapeHtml(defaults.TargetLanguage || '') + '" />' +
               '  </div>' +
               '</div>' +
               '<div class="selectContainer">' +
-              '  <label class="selectLabel">Provider</label>' +
+              '  <label class="selectLabel" for="lapseAdvProvider">Provider</label>' +
               '  <select is="emby-select" id="lapseAdvProvider" class="emby-select-withcolor emby-select">' +
               configuredProviders.map(function (p) {
                   var selected = defaults.Provider ? p.Id === defaults.Provider : p.IsDefault;
@@ -3390,32 +3606,29 @@
               'A translation always writes a new file next to the original, never over it.</div>'
             : '';
 
-        var overlay = openOverlay(
-            '<h3>' + escapeHtml(context.name || 'Advanced') + '</h3>' +
-            '<h4 class="lapseDialogSubhead">What to sync</h4>' +
+        var overlay = openDialog(context.name || 'Advanced',
+            '<h3 class="lapseDialogSection">What to sync</h3>' +
             subtitleSection +
             referenceSection +
-            '<hr class="lapseDialogRule" />' +
-            '<h4 class="lapseDialogSubhead">How</h4>' +
+            '<h3 class=\"lapseDialogSection\">How</h3>' +
             '<div class="selectContainer">' +
-            '  <label class="selectLabel">Engine</label>' +
+            '  <label class="selectLabel" for="lapseAdvEngine">Engine</label>' +
             '  <select is="emby-select" id="lapseAdvEngine" class="emby-select-withcolor emby-select">' + engineOptions + '</select>' +
             '</div>' +
             '<div class="selectContainer">' +
-            '  <label class="selectLabel">Mode</label>' +
+            '  <label class="selectLabel" for="lapseAdvMode">Mode</label>' +
             '  <select is="emby-select" id="lapseAdvMode" class="emby-select-withcolor emby-select">' +
             modeOptionsFor(startEngine) +
             '  </select>' +
             '</div>' +
             '<div class="inputContainer hide" id="lapseAdvPenaltyContainer">' +
-            '  <label class="inputLabel inputLabelUnfocused">Penalty</label>' +
+            '  <label class="inputLabel inputLabelUnfocused" for="lapseAdvPenalty">Penalty</label>' +
             '  <input is="emby-input" id="lapseAdvPenalty" type="number" value="' + startEngine.Penalty + '" />' +
             '  <div class="fieldDescription" id="lapseAdvPenaltyNote"></div>' +
             '</div>' +
-            '<hr class="lapseDialogRule" />' +
-            '<h4 class="lapseDialogSubhead">Where it goes</h4>' +
+            '<h3 class=\"lapseDialogSection\">Where it goes</h3>' +
             '<div class="selectContainer">' +
-            '  <label class="selectLabel">Write the result as</label>' +
+            '  <label class="selectLabel" for="lapseAdvFormat">Write the result as</label>' +
             '  <select is="emby-select" id="lapseAdvFormat" class="emby-select-withcolor emby-select">' +
             '    <option value="">Same format as the subtitle</option>' +
             CONVERT_FORMATS.map(function (f) {
@@ -3426,7 +3639,7 @@
             'format and leaves the original file where it is.</div>' +
             '</div>' +
             '<div class="selectContainer">' +
-            '  <label class="selectLabel">File output</label>' +
+            '  <label class="selectLabel" for="lapseAdvOutputMode">File output</label>' +
             '  <select is="emby-select" id="lapseAdvOutputMode" class="emby-select-withcolor emby-select">' +
             '    <option value="">Whatever the settings say</option>' +
             '    <option value="SidecarOnly">Write a new file</option>' +
@@ -3441,7 +3654,6 @@
             '</div>' +
             translationSection +
             '<div class="lapseDialogButtons">' +
-            '  <button is="emby-button" type="button" class="raised" id="lapseAdvClose"><span>Close</span></button>' +
             (canTranslate
                 ? '  <button is="emby-button" type="button" class="raised" id="lapseAdvTranslate"><span>Translate only</span></button>'
                 : '') +
@@ -3527,10 +3739,6 @@
                 : 0;
         }
 
-        overlay.querySelector('#lapseAdvClose').addEventListener('click', function () {
-            overlay.remove();
-        });
-
         if (confidenceSlider) {
             confidenceSlider.addEventListener('input', function () {
                 overlay.querySelector('#lapseAdvConfidenceValue').textContent = confidenceSlider.value;
@@ -3559,14 +3767,14 @@
         }
 
         function runTranslation(job, prefix) {
-            showLapseToast(prefix + 'translating into ' + job.TargetLanguage + '...');
+            notify(prefix + 'translating into ' + job.TargetLanguage + '...', true);
 
             return lapsePost('Lapse/Translate', job).then(function (result) {
-                showLapseToast(result.Success
+                tell(result.Success
                     ? ('Translated ' + result.TranslatedCount + ' of ' + result.LineCount + ' lines. Wrote ' + result.OutputPath)
                     : ('Translation failed: ' + result.Error));
             }).catch(function (err) {
-                showLapseToast('Translation failed: ' + err.message);
+                tell('Translation failed: ' + err.message);
             });
         }
 
@@ -3576,7 +3784,7 @@
             var translation = alsoTranslate ? collectTranslationRequest() : null;
 
             if (alsoTranslate && !translation) {
-                showLapseToast('Fill in the language to translate into before asking for a translation too.');
+                notify('Fill in the language to translate into before asking for a translation too.');
                 return;
             }
 
@@ -3590,15 +3798,15 @@
             var penalty = currentPenalty();
 
             if (referencePath && !syncAll && referencePath === subtitlePath) {
-                showLapseToast('That subtitle is the reference. Pick another one, or tick the box to sync every other subtitle to it.');
+                notify('That subtitle is the reference. Pick another one, or tick the box to sync every other subtitle to it.');
                 return;
             }
 
-            overlay.remove();
+            closeDialog(overlay);
 
             if (referencePath) {
                 var count = syncAll ? subtitles.length - 1 : 1;
-                showLapseToast('Syncing ' + count + ' subtitle' + (count === 1 ? '' : 's') + ' to the reference...');
+                notify('Syncing ' + count + ' subtitle' + (count === 1 ? '' : 's') + ' to the reference...', true);
 
                 lapsePost('Lapse/SyncAllSubtitles', {
                     ItemId: context.id,
@@ -3610,7 +3818,7 @@
                     OutputMode: outputMode
                 }).then(function (result) {
                     var failed = result.Results.length - result.SucceededCount;
-                    showLapseToast(failed === 0
+                    tell(failed === 0
                         ? ('Synced ' + result.SucceededCount + ' subtitle' + (result.SucceededCount === 1 ? '' : 's') + ' to the reference.')
                         : (result.SucceededCount + ' of ' + result.Results.length + ' synced, ' + failed + ' failed. See the LAPSE dashboard for details.'));
 
@@ -3620,13 +3828,13 @@
 
                     return null;
                 }).catch(function (err) {
-                    showLapseToast('Sync failed: ' + err.message);
+                    tell('Sync failed: ' + err.message);
                 });
 
                 return;
             }
 
-            showLapseToast(alsoTranslate ? 'Syncing and translating...' : 'Syncing...');
+            notify(alsoTranslate ? 'Syncing and translating...' : 'Syncing...', true);
 
             lapsePost('Lapse/Pipeline', {
                 ItemId: context.id,
@@ -3639,9 +3847,9 @@
                 OutputMode: outputMode,
                 Translation: translation
             }).then(function (result) {
-                showLapseToast(describePipelineOutcome(result));
+                tell(describePipelineOutcome(result));
             }).catch(function (err) {
-                showLapseToast('Sync failed: ' + err.message);
+                tell('Sync failed: ' + err.message);
             });
         });
 
@@ -3650,11 +3858,11 @@
             translateButton.addEventListener('click', function () {
                 var job = collectTranslationRequest();
                 if (!job) {
-                    showLapseToast('Enter the language code to translate into first, e.g. es for Spanish.');
+                    notify('Enter the language code to translate into first, e.g. es for Spanish.');
                     return;
                 }
 
-                overlay.remove();
+                closeDialog(overlay);
                 runTranslation(job, '');
             });
         }
@@ -3668,6 +3876,55 @@
                 (m.Value === engine.DefaultMode ? ' selected' : '') + '>' + escapeHtml(m.Label) + '</option>';
         }).join('');
     }
+
+    // --- playing a review answer ---
+
+    // Review's times play the item with the answer on. The client can still pick another track
+    // as it starts (its own memory of the last one), so the answer is put back on once it plays.
+    // Returns false when the player can't be reached, and the dashboard asks the server instead.
+    function playWithSubtitle(itemId, streamIndex, seconds) {
+        var manager = playbackManager();
+        if (!manager || typeof manager.play !== 'function' || typeof manager.setSubtitleStreamIndex !== 'function') {
+            return false;
+        }
+
+        manager.play({
+            ids: [itemId],
+            serverId: ApiClient.serverId(),
+            startPositionTicks: Math.round(Math.max(0, seconds - 3) * 10000000),
+            subtitleStreamIndex: streamIndex
+        });
+
+        // let go once it has played on the right track for two seconds, or after fifteen, so
+        // switching tracks by hand to compare isn't undone
+        var tries = 0;
+        var settled = 0;
+        var holder = setInterval(function () {
+            tries++;
+
+            try {
+                var video = document.querySelector('video');
+                if (manager.getCurrentPlayer() && video && video.currentTime > 0) {
+                    if (manager.getSubtitleStreamIndex() === streamIndex) {
+                        settled++;
+                    } else {
+                        settled = 0;
+                        manager.setSubtitleStreamIndex(streamIndex);
+                    }
+                }
+            } catch (err) {
+                log('could not hold the review track: ' + err);
+            }
+
+            if (settled >= 4 || tries >= 30) {
+                clearInterval(holder);
+            }
+        }, 500);
+
+        return true;
+    }
+
+    window.lapsePlayWithSubtitle = playWithSubtitle;
 
     // --- go ---
 

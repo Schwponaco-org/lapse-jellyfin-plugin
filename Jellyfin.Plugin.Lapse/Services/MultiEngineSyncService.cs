@@ -211,6 +211,40 @@ public class MultiEngineSyncService
     }
 
     /// <summary>
+    /// Puts an unsure answer that went to a sidecar up for review, as a set of one, so
+    /// keeping or discarding it works the same as for the multi engine answers.
+    /// </summary>
+    public void AddForReview(BaseItem item, IEngine engine, string subtitlePath, SyncResult result)
+    {
+        // a copy moved from another version with nothing there yet is the new file itself, not a sidecar
+        if (!result.Unconfirmed || result.Skipped || result.OutputPath is not { } written
+            || string.Equals(written, subtitlePath, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var set = new SyncCandidateSet
+        {
+            ItemId = item.Id,
+            ItemName = SyncQueueManager.DescribeItem(item),
+            OriginalPath = subtitlePath
+        };
+
+        set.Candidates.Add(Describe(engine, written, result));
+
+        lock (Plugin.ConfigurationLock)
+        {
+            // a second go at the same subtitle wrote over the same sidecar, so that file stays
+            DiscardFor(item.Id, subtitlePath, save: false, keepPath: written);
+            Plugin.Instance!.Configuration.PendingCandidates.Add(set);
+            Plugin.Instance.SaveConfigurationSoon();
+        }
+
+        // the spot checks need it as a track the player can switch to
+        RequestRefresh(item.Id);
+    }
+
+    /// <summary>
     /// Gets every set still waiting on a decision, newest first.
     /// </summary>
     public static IReadOnlyList<SyncCandidateSet> GetPending()
@@ -280,11 +314,12 @@ public class MultiEngineSyncService
                 ? null
                 : winnerFormat;
 
-            var destination = EngineRunner.ResolveDestination(set.OriginalPath, outputMode, outputFormat);
+            string destination;
             string? backupPath;
 
             try
             {
+                destination = EngineRunner.ResolveDestination(set.OriginalPath, outputMode, outputFormat);
                 backupPath = EngineRunner.TakeBackup(destination, outputMode);
 
                 if (!string.Equals(winner.Path, destination, StringComparison.Ordinal))
@@ -294,7 +329,7 @@ public class MultiEngineSyncService
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                _logger.LogWarning(ex, "Could not put the chosen subtitle at {Destination}", destination);
+                _logger.LogWarning(ex, "Could not put the chosen subtitle in place of {Subtitle}", set.OriginalPath);
                 return new CandidateDecision { Message = "Could not write the subtitle you chose: " + ex.Message };
             }
 
@@ -357,6 +392,21 @@ public class MultiEngineSyncService
     }
 
     /// <summary>
+    /// Takes an answer off the waiting list once its file was removed some other way, by an
+    /// Undo say. Hold <see cref="Plugin.ConfigurationLock"/>, the caller saves.
+    /// </summary>
+    public static void Forget(string candidatePath)
+    {
+        var config = Plugin.Instance!.Configuration;
+        foreach (var set in config.PendingCandidates)
+        {
+            set.Candidates.RemoveAll(c => string.Equals(c.Path, candidatePath, StringComparison.Ordinal));
+        }
+
+        config.PendingCandidates.RemoveAll(s => s.Candidates.Count == 0);
+    }
+
+    /// <summary>
     /// Finds the candidate the caller is watching, so keeping it is one press.
     /// </summary>
     public static SyncCandidate? MatchPlaying(Guid itemId, string? sessionSubtitlePath)
@@ -394,7 +444,7 @@ public class MultiEngineSyncService
     }
 
     // Deletes the candidate files for an item (or one subtitle of it) and forgets the sets.
-    private int DiscardFor(Guid itemId, string? originalPath, bool save)
+    private int DiscardFor(Guid itemId, string? originalPath, bool save, string? keepPath = null)
     {
         lock (Plugin.ConfigurationLock)
         {
@@ -412,7 +462,7 @@ public class MultiEngineSyncService
             var removed = 0;
             foreach (var set in matches)
             {
-                removed += set.Candidates.Count(c => QuietFile.TryDelete(c.Path));
+                removed += set.Candidates.Count(c => !string.Equals(c.Path, keepPath, StringComparison.Ordinal) && QuietFile.TryDelete(c.Path));
                 config.PendingCandidates.Remove(set);
             }
 
@@ -457,6 +507,7 @@ public class MultiEngineSyncService
             if (string.Equals(Path.GetExtension(written), Path.GetExtension(target), StringComparison.OrdinalIgnoreCase))
             {
                 File.Move(written, target, overwrite: true);
+                SubtitleFileLock.NoteWritten(target);
             }
             else
             {
@@ -513,24 +564,7 @@ public class MultiEngineSyncService
 
     private static SyncCandidate Describe(IEngine engine, string path, SyncResult result)
     {
-        var parts = new List<string>();
-
-        if (result.OffsetMs is { } offset)
-        {
-            parts.Add(offset == 0 ? "left the timing alone" : string.Create(CultureInfo.InvariantCulture, $"moved it {offset}ms"));
-        }
-
-        if (result.Slope is { } slope)
-        {
-            parts.Add(string.Create(CultureInfo.InvariantCulture, $"stretched it {slope * 100:0.###}%"));
-        }
-
-        if (result.Verdict is not null)
-        {
-            parts.Add("LAPSE called this " + result.Verdict);
-        }
-
-        return new SyncCandidate
+        var candidate = new SyncCandidate
         {
             EngineId = engine.Descriptor.Id,
             EngineName = engine.Descriptor.DisplayName,
@@ -539,8 +573,11 @@ public class MultiEngineSyncService
             OffsetMs = result.OffsetMs,
             Slope = result.Slope,
             Verdict = result.Verdict,
-            Detail = parts.Count == 0 ? result.EngineOutput : string.Join(", ", parts)
+            Detail = SyncQueueManager.DescribeMove(result) + "."
         };
+
+        candidate.PartStarts.AddRange(result.PartStarts ?? Array.Empty<int>());
+        return candidate;
     }
 
     // Movie.en.srt -> Movie.en.lapse.srt so the engine shows in the player's track list.

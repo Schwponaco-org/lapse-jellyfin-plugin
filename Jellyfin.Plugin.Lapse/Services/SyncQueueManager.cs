@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.Lapse.Data;
@@ -22,7 +23,7 @@ namespace Jellyfin.Plugin.Lapse.Services;
 /// the default engine and mode against every external subtitle the item has. What it does
 /// to each subtitle (sync, convert, both) comes from <see cref="AutomationAction"/>.
 /// </summary>
-public class SyncQueueManager : IDisposable
+public partial class SyncQueueManager : IDisposable
 {
     private readonly ILibraryManager _libraryManager;
     private readonly LibraryService _libraryService;
@@ -33,6 +34,8 @@ public class SyncQueueManager : IDisposable
     private readonly Translation.TranslationService _translationService;
     private readonly ReadableSubtitleService _readable;
     private readonly MultiEngineSyncService _multiEngine;
+    private readonly SyncHistoryService _historyService;
+    private readonly RunNotifier _notifier;
     private readonly ILogger<SyncQueueManager> _logger;
     private readonly object _lock = new();
 
@@ -64,9 +67,19 @@ public class SyncQueueManager : IDisposable
     private string? _unitName;
     private string? _referenceKey;
 
+    // The user who started the job when it wasn't an admin. Only they and admins see or stop it.
+    private Guid? _startedBy;
+
     // Stop button. Replaced when the next job starts.
     private CancellationTokenSource _jobCancellation = new();
     private bool _cancelRequested;
+
+    // What the job adds up to, for the notification when it's done. An item synced twice
+    // in one job counts once, the way it went the last time.
+    private readonly Dictionary<Guid, MovieSyncStatus> _counted = new();
+    private bool _runOpen;
+    private DateTime _startedUtc;
+    private List<SyncHistoryEntry> _runFiles = new();
 
     /// <summary>
     /// Initializes a new instance of the <see cref="SyncQueueManager"/> class.
@@ -81,6 +94,8 @@ public class SyncQueueManager : IDisposable
         Translation.TranslationService translationService,
         ReadableSubtitleService readable,
         MultiEngineSyncService multiEngine,
+        SyncHistoryService historyService,
+        RunNotifier notifier,
         ILogger<SyncQueueManager> logger)
     {
         _libraryManager = libraryManager;
@@ -92,6 +107,8 @@ public class SyncQueueManager : IDisposable
         _translationService = translationService;
         _readable = readable;
         _multiEngine = multiEngine;
+        _historyService = historyService;
+        _notifier = notifier;
         _logger = logger;
     }
 
@@ -111,10 +128,16 @@ public class SyncQueueManager : IDisposable
     /// Builds a progress snapshot for the dashboard.
     /// </summary>
     /// <param name="includeItems">Include a row per item. The progress bar polls every couple of seconds and only needs counts.</param>
-    public QueueSnapshot GetSnapshot(bool includeItems = false)
+    /// <param name="viewer">The user asking when it isn't an admin. Someone else's job looks like no job.</param>
+    public QueueSnapshot GetSnapshot(bool includeItems = false, Guid? viewer = null)
     {
         lock (_lock)
         {
+            if (viewer is not null && viewer != _startedBy)
+            {
+                return new QueueSnapshot();
+            }
+
             var current = _runningCount > 0 ? _items.Find(i => i.Status == QueueItemStatus.Running) : null;
             return new QueueSnapshot
             {
@@ -154,9 +177,10 @@ public class SyncQueueManager : IDisposable
     /// <param name="jobName">Name for the progress readout.</param>
     /// <param name="unitName">What one item is called, e.g. "episode".</param>
     /// <param name="referenceKey">Key from <see cref="SeriesSyncService.GetReferenceOptions"/>, or null for audio.</param>
-    public bool EnqueueItems(IReadOnlyList<BaseItem> items, string jobName, string unitName, string? referenceKey = null)
+    /// <param name="startedBy">The user starting it when it isn't an admin.</param>
+    public bool EnqueueItems(IReadOnlyList<BaseItem> items, string jobName, string unitName, string? referenceKey = null, Guid? startedBy = null)
     {
-        return StartBulkJob(items, jobName, unitName, referenceKey);
+        return StartBulkJob(items, jobName, unitName, referenceKey, startedBy);
     }
 
     /// <summary>
@@ -169,6 +193,18 @@ public class SyncQueueManager : IDisposable
         if (!ItemExclusions.Load().Excludes(item))
         {
             EnqueueRange(new[] { item });
+        }
+    }
+
+    /// <summary>
+    /// Says whether an item is waiting in the queue or syncing right now.
+    /// </summary>
+    public bool IsQueuedOrRunning(Guid itemId)
+    {
+        lock (_lock)
+        {
+            return _queuedIds.Contains(itemId)
+                || (_itemsById.TryGetValue(itemId, out var row) && row.Status == QueueItemStatus.Running);
         }
     }
 
@@ -190,6 +226,11 @@ public class SyncQueueManager : IDisposable
                 // new job, don't carry the last one's rows or reference track along
                 StartFreshJobLocked(null, null, null);
             }
+            else
+            {
+                // automatic items joining a user's own job make it one for admins only
+                _startedBy = null;
+            }
 
             foreach (var item in items)
             {
@@ -208,15 +249,16 @@ public class SyncQueueManager : IDisposable
     /// Stops the running job: drops what's queued and cancels the current item (which kills
     /// the engine). Files already written stay written.
     /// </summary>
+    /// <param name="viewer">The user asking when it isn't an admin, who may only stop their own job.</param>
     /// <returns>How many queued items were dropped, or null if nothing was running.</returns>
-    public int? Cancel()
+    public int? Cancel(Guid? viewer = null)
     {
         CancellationTokenSource cancellation;
         int dropped;
 
         lock (_lock)
         {
-            if (IsIdleLocked())
+            if (IsIdleLocked() || (viewer is not null && viewer != _startedBy))
             {
                 return null;
             }
@@ -256,6 +298,7 @@ public class SyncQueueManager : IDisposable
         CancellationToken cancellationToken)
     {
         var succeeded = 0;
+        BulkRun? finished = null;
 
         lock (_lock)
         {
@@ -296,10 +339,12 @@ public class SyncQueueManager : IDisposable
             lock (_lock)
             {
                 _scheduledRuns--;
+                finished = TakeFinishedRunLocked();
             }
 
             await CloseBatchSessionAsync().ConfigureAwait(false);
             Plugin.Instance?.FlushDeferredSave();
+            Report(finished);
         }
 
         return succeeded;
@@ -322,8 +367,8 @@ public class SyncQueueManager : IDisposable
         {
             var tolerance = Plugin.Instance?.Configuration.AlreadyInSyncToleranceMs ?? 100;
             var moved = result.PartOffsetsMs is { Count: > 1 } split
-                ? "moved its parts " + string.Join(", ", split.Select(o => o + "ms"))
-                : $"moved it {result.OffsetMs}ms";
+                ? "moved its parts " + string.Join(", ", split.Select(Seconds))
+                : "moved it " + Seconds(result.OffsetMs ?? 0);
             return $"Already in sync (the engine would have {moved}, which is inside the "
                 + $"{tolerance}ms tolerance), so the file was left exactly as it was.";
         }
@@ -387,18 +432,22 @@ public class SyncQueueManager : IDisposable
     /// <param name="result">Engine result, if any.</param>
     /// <param name="syncedPaths">Files that actually got written. Only these count as synced.</param>
     /// <param name="deferSave">Let the disk write wait a few seconds so a bulk run doesn't rewrite the config per item.</param>
-    public static void SaveRecord(
+    /// <param name="results">Every engine result when there was more than one subtitle, each file written gets a history entry. Defaults to <paramref name="result"/>.</param>
+    /// <returns>The history entries added.</returns>
+    public static List<SyncHistoryEntry> SaveRecord(
         Guid itemId,
         MovieSyncStatus status,
         string? error,
         SyncResult? result = null,
         IEnumerable<string>? syncedPaths = null,
-        bool deferSave = false)
+        bool deferSave = false,
+        IEnumerable<SyncResult?>? results = null)
     {
+        var added = new List<SyncHistoryEntry>();
         var plugin = Plugin.Instance;
         if (plugin is null)
         {
-            return;
+            return added;
         }
 
         lock (Plugin.ConfigurationLock)
@@ -431,7 +480,13 @@ public class SyncQueueManager : IDisposable
             record.Slope = result?.Slope;
             record.Intercept = result?.Intercept;
 
-            AddHistory(plugin, itemId, status, result);
+            foreach (var written in results ?? new[] { result })
+            {
+                if (AddHistory(plugin, itemId, status, written) is { } entry)
+                {
+                    added.Add(entry);
+                }
+            }
 
             if (deferSave)
             {
@@ -442,6 +497,8 @@ public class SyncQueueManager : IDisposable
                 plugin.SaveConfiguration();
             }
         }
+
+        return added;
     }
 
     /// <summary>
@@ -496,6 +553,42 @@ public class SyncQueueManager : IDisposable
         }
     }
 
+    /// <summary>
+    /// Puts a shift by hand in the history, so it can be undone from the dashboard like a sync.
+    /// Left out when it went over the subtitle with no backup, there's nothing to undo then.
+    /// </summary>
+    /// <param name="itemId">The item.</param>
+    /// <param name="inputPath">The subtitle that was shifted.</param>
+    /// <param name="shifted">What the shift wrote.</param>
+    /// <param name="offsetMs">How far it was moved, positive is later.</param>
+    public static void RecordShift(Guid itemId, string inputPath, ShiftResult shifted, int offsetMs)
+    {
+        var plugin = Plugin.Instance;
+        var wroteNewFile = shifted.BackupPath is null && !string.Equals(shifted.OutputPath, inputPath, StringComparison.Ordinal);
+        if (plugin is null || (shifted.BackupPath is null && !wroteNewFile))
+        {
+            return;
+        }
+
+        lock (Plugin.ConfigurationLock)
+        {
+            SyncHistoryService.Append(plugin.Configuration, new SyncHistoryEntry
+            {
+                ItemId = itemId,
+                Status = MovieSyncStatus.Synced,
+                OutputPath = shifted.OutputPath,
+
+                // no InputPath: undoing a shift must not make a synced original count as unsynced
+                BackupPath = shifted.BackupPath,
+                WroteNewFile = wroteNewFile,
+                OutputWriteUtc = WriteTimeOf(shifted.OutputPath),
+                Detail = "Shifted " + Seconds(offsetMs) + " by hand."
+            });
+
+            plugin.SaveConfiguration();
+        }
+    }
+
     /// <inheritdoc />
     public void Dispose()
     {
@@ -523,7 +616,8 @@ public class SyncQueueManager : IDisposable
         IReadOnlyList<BaseItem> items,
         string? jobName = null,
         string? unitName = null,
-        string? referenceKey = null)
+        string? referenceKey = null,
+        Guid? startedBy = null)
     {
         if (items.Count == 0)
         {
@@ -538,6 +632,7 @@ public class SyncQueueManager : IDisposable
             }
 
             StartFreshJobLocked(jobName, unitName, referenceKey);
+            _startedBy = startedBy;
 
             foreach (var item in items)
             {
@@ -571,6 +666,8 @@ public class SyncQueueManager : IDisposable
     {
         try
         {
+            BulkRun? finished = null;
+
             while (true)
             {
                 Guid itemId;
@@ -579,6 +676,7 @@ public class SyncQueueManager : IDisposable
                     if (_pending.Count == 0)
                     {
                         _workerRunning = false;
+                        finished = TakeFinishedRunLocked();
                         break;
                     }
 
@@ -595,6 +693,7 @@ public class SyncQueueManager : IDisposable
 
             await CloseBatchSessionAsync().ConfigureAwait(false);
             Plugin.Instance?.FlushDeferredSave();
+            Report(finished);
         }
         catch (Exception ex)
         {
@@ -657,6 +756,7 @@ public class SyncQueueManager : IDisposable
             // letting this out would kill the worker with the item still marked running
             _logger.LogError(ex, "Syncing item {ItemId} failed unexpectedly", itemId);
             SetItemStatus(itemId, QueueItemStatus.Failed);
+            Count(itemId, MovieSyncStatus.Failed);
 
             try
             {
@@ -693,6 +793,7 @@ public class SyncQueueManager : IDisposable
         _jobName = jobName;
         _unitName = unitName ?? "item";
         _referenceKey = referenceKey;
+        _startedBy = null;
 
         if (_jobCancellation.IsCancellationRequested)
         {
@@ -701,6 +802,57 @@ public class SyncQueueManager : IDisposable
         }
 
         _cancelRequested = false;
+
+        _runOpen = true;
+        _startedUtc = DateTime.UtcNow;
+        _counted.Clear();
+        _runFiles = new List<SyncHistoryEntry>();
+    }
+
+    // The job's summary once the queue has gone idle, null while there's more to come. One
+    // item on its own (a new episode, a webhook call) isn't a bulk run.
+    private BulkRun? TakeFinishedRunLocked()
+    {
+        if (!_runOpen || !IsIdleLocked())
+        {
+            return null;
+        }
+
+        _runOpen = false;
+
+        if (_items.Count < 2)
+        {
+            return null;
+        }
+
+        return new BulkRun
+        {
+            Name = _jobName ?? "Bulk sync",
+            StartedUtc = _startedUtc,
+            FinishedUtc = DateTime.UtcNow,
+            Synced = _counted.Values.Count(s => s == MovieSyncStatus.Synced),
+            Unsure = _counted.Values.Count(s => s == MovieSyncStatus.Pending),
+            Failed = _counted.Values.Count(s => s == MovieSyncStatus.Failed),
+            Skipped = _items.Count - _counted.Count,
+            Stopped = _cancelRequested,
+            Files = _runFiles
+        };
+    }
+
+    private void Report(BulkRun? run)
+    {
+        if (run is null)
+        {
+            return;
+        }
+
+        // nothing written, nothing to undo
+        if (run.Files.Count > 0)
+        {
+            _historyService.SaveRun(run);
+        }
+
+        _ = Task.Run(() => _notifier.NotifyAsync(run));
     }
 
     private void AddRowLocked(BaseItem item)
@@ -745,6 +897,22 @@ public class SyncQueueManager : IDisposable
         return status is QueueItemStatus.Done or QueueItemStatus.Failed or QueueItemStatus.Cancelled;
     }
 
+    // Pending is what an unsure item counts as, null takes the item back out of the count.
+    private void Count(Guid itemId, MovieSyncStatus? outcome)
+    {
+        lock (_lock)
+        {
+            if (outcome is { } counted)
+            {
+                _counted[itemId] = counted;
+            }
+            else
+            {
+                _counted.Remove(itemId);
+            }
+        }
+    }
+
     private void SetItemStatus(Guid itemId, QueueItemStatus status)
     {
         lock (_lock)
@@ -754,11 +922,17 @@ public class SyncQueueManager : IDisposable
     }
 
     // Saves the record, marks the row and says whether it counts as a success.
-    private bool Finish(Guid itemId, MovieSyncStatus status, string? message, SyncResult? result = null, List<string>? syncedPaths = null)
+    private bool Finish(Guid itemId, MovieSyncStatus status, string? message, List<SyncResult>? results = null, List<string>? syncedPaths = null, bool unsure = false)
     {
-        SaveRecord(itemId, status, message, result, syncedPaths, deferSave: true);
+        var written = SaveRecord(itemId, status, message, results?.LastOrDefault(), syncedPaths, deferSave: true, results);
+        lock (_lock)
+        {
+            _runFiles.AddRange(written);
+        }
 
         var failed = status == MovieSyncStatus.Failed;
+        Count(itemId, failed || status == MovieSyncStatus.Synced ? status : unsure ? MovieSyncStatus.Pending : (MovieSyncStatus?)null);
+
         SetItemStatus(itemId, failed ? QueueItemStatus.Failed : QueueItemStatus.Done);
         return !failed;
     }
@@ -837,7 +1011,7 @@ public class SyncQueueManager : IDisposable
         string? lastError = null;
         string? lastSkip = null;
         var doubted = false; // skipped because the engine was unsure, not because it was already right
-        SyncResult? lastResult = null;
+        var results = new List<SyncResult>();
         var syncedPaths = new List<string>();
         var converted = 0;
 
@@ -883,13 +1057,15 @@ public class SyncQueueManager : IDisposable
             var result = await _runner
                 .RunAsync(engine, referencePath, workPath, mode, penalty, batch: _batch, cancellationToken: cancellationToken)
                 .ConfigureAwait(false);
-            lastResult = result;
+            results.Add(result);
 
             // only when an admin allowed it for unattended runs, each unsure subtitle leaves 2-3 extra files
             if (result.Success && _multiEngine.ShouldBuild(result, unattended: true))
             {
                 await _multiEngine.BuildAsync(item, referencePath, workPath, result, cancellationToken).ConfigureAwait(false);
             }
+
+            _multiEngine.AddForReview(item, engine, workPath, result);
 
             if (!result.Success)
             {
@@ -925,7 +1101,7 @@ public class SyncQueueManager : IDisposable
 
         if (lastError is not null)
         {
-            return Finish(itemId, MovieSyncStatus.Failed, lastError, lastResult, syncedPaths);
+            return Finish(itemId, MovieSyncStatus.Failed, lastError, results, syncedPaths);
         }
 
         if (action == AutomationAction.Convert)
@@ -941,10 +1117,10 @@ public class SyncQueueManager : IDisposable
         // Stays pending with the reason, unless every subtitle was simply already right.
         if (lastSkip is not null)
         {
-            return Finish(itemId, doubted ? MovieSyncStatus.Pending : MovieSyncStatus.Synced, lastSkip, lastResult, syncedPaths);
+            return Finish(itemId, doubted ? MovieSyncStatus.Pending : MovieSyncStatus.Synced, lastSkip, results, syncedPaths, doubted);
         }
 
-        return Finish(itemId, MovieSyncStatus.Synced, null, lastResult, syncedPaths);
+        return Finish(itemId, MovieSyncStatus.Synced, null, results, syncedPaths);
     }
 
     // Writes the subtitle in the configured conversion format. Returns the path to carry
@@ -1094,7 +1270,7 @@ public class SyncQueueManager : IDisposable
         }
     }
 
-    private static MovieSyncRecord? FindRecord(Guid itemId)
+    internal static MovieSyncRecord? FindRecord(Guid itemId)
     {
         var plugin = Plugin.Instance;
         if (plugin is null)
@@ -1110,14 +1286,14 @@ public class SyncQueueManager : IDisposable
 
     // One entry per file we actually wrote, so it can be undone. Skips and failures wrote
     // nothing and get no entry.
-    private static void AddHistory(Plugin plugin, Guid itemId, MovieSyncStatus status, SyncResult? result)
+    private static SyncHistoryEntry? AddHistory(Plugin plugin, Guid itemId, MovieSyncStatus status, SyncResult? result)
     {
         if (result is null || !result.Success || result.Skipped || string.IsNullOrEmpty(result.OutputPath))
         {
-            return;
+            return null;
         }
 
-        SyncHistoryService.Append(plugin.Configuration, new SyncHistoryEntry
+        var entry = new SyncHistoryEntry
         {
             ItemId = itemId,
             Status = status,
@@ -1132,40 +1308,108 @@ public class SyncQueueManager : IDisposable
                 && (result.ReplacedExtractedCopy
                     || !string.Equals(result.OutputPath, result.InputPath, StringComparison.Ordinal)),
 
+            OutputWriteUtc = WriteTimeOf(result.OutputPath),
+
             // keep it short, a paragraph here pushed the name off the row
-            Detail = DescribeForHistory(result)
-        });
+            Detail = DescribeForHistory(result),
+            Unsure = result.Unconfirmed
+        };
+
+        SyncHistoryService.Append(plugin.Configuration, entry);
+        return entry;
     }
 
-    private static string DescribeForHistory(SyncResult result)
+    // Read on the dashboard by people who never see the engine, so plain words, not its output
+    internal static string DescribeForHistory(SyncResult result)
     {
-        var parts = new List<string>();
+        var moved = DescribeMove(result);
+
+        return result.Unconfirmed
+            ? moved + ". Written beside the original for you to check."
+            : moved + ".";
+    }
+
+    // "Moved 4.2 s earlier", the same words in the history and under Review
+    internal static string DescribeMove(SyncResult result)
+    {
+        string moved;
 
         // a split file's one offset_ms only covers one part, 2.3.0 says where each went
         if (result.PartOffsetsMs is { Count: > 1 } split)
         {
-            parts.Add("moved " + string.Join(" then ", split.Select(o => o + "ms")));
+            moved = $"Moved in {split.Count} parts, from {Seconds(split[0])} to {Seconds(split[split.Count - 1])}";
         }
         else if (result.OffsetMs is not null and not 0)
         {
-            parts.Add($"moved {result.OffsetMs}ms");
+            moved = "Moved " + Seconds(result.OffsetMs.Value);
         }
-
-        if (result.Slope.HasValue)
+        else
         {
-            parts.Add($"stretched {result.Slope.Value * 100:0.###}%");
+            moved = result.Slope.HasValue ? "Stretched to fit" : "Lined up";
         }
 
-        if (result.Verdict is not null)
+        if (string.Equals(result.Verdict, "nothing", StringComparison.Ordinal))
         {
-            parts.Add(result.Verdict);
+            moved = "No match in the audio";
         }
 
-        if (result.Unconfirmed)
+        return moved;
+    }
+
+    // History written before the plain words, "moved -8707ms, stretched -4.096%, unsure, written beside the original to check"
+    internal static string? ReadableDetail(string? detail)
+    {
+        if (detail is null)
         {
-            parts.Add("written beside the original to check");
+            return null;
         }
 
-        return parts.Count == 0 ? "synced" : string.Join(", ", parts);
+        var result = new SyncResult();
+
+        foreach (var part in detail.Split(", "))
+        {
+            var moved = OldMoveRegex().Match(part);
+
+            if (moved.Success)
+            {
+                var offsets = moved.Groups["ms"].Captures.Select(c => int.Parse(c.Value, CultureInfo.InvariantCulture)).ToArray();
+                result.OffsetMs = offsets[0];
+                result.PartOffsetsMs = offsets.Length > 1 ? offsets : null;
+            }
+            else if (part.StartsWith("stretched ", StringComparison.Ordinal))
+            {
+                // only whether it was stretched shows up in the plain words
+                result.Slope = 1;
+            }
+            else if (part is "solid" or "unsure" or "nothing")
+            {
+                result.Verdict = part;
+            }
+            else if (part == "written beside the original to check")
+            {
+                result.Unconfirmed = true;
+            }
+            else if (part != "synced")
+            {
+                return detail;
+            }
+        }
+
+        return DescribeForHistory(result);
+    }
+
+    [GeneratedRegex(@"^moved (?<ms>-?\d+)ms( then (?<ms>-?\d+)ms)*$")]
+    private static partial Regex OldMoveRegex();
+
+    // "4.2 s later", "8:54 earlier", positive means the subtitles come later
+    internal static string Seconds(int ms)
+    {
+        var size = Math.Abs(ms);
+        var tenths = (size + 50) / 100;
+        var whole = (size + 500) / 1000;
+        var text = tenths >= 600 ? string.Create(CultureInfo.InvariantCulture, $"{whole / 60}:{whole % 60:00}")
+            : size > 0 && tenths == 0 ? "under 0.1 s"
+            : (tenths / 10.0).ToString("0.0", CultureInfo.InvariantCulture) + " s";
+        return ms < 0 ? text + " earlier" : text + " later";
     }
 }

@@ -15,7 +15,7 @@ using Microsoft.Extensions.Logging;
 namespace Jellyfin.Plugin.Lapse.Services;
 
 /// <summary>
-/// Turns a Radarr/Sonarr import webhook into a sync.
+/// Turns a Radarr/Sonarr import webhook, or a path Bazarr posts, into a sync.
 ///
 /// The awkward bit is timing: they fire as soon as the import is done, but Jellyfin won't
 /// know about the file until its own scan, maybe minutes later. So we wait for the item to
@@ -107,10 +107,13 @@ public class ArrWebhookService
     /// Waits for the imported files to show up in the library, then queues them. Runs
     /// detached from the request so anything that goes wrong is logged here.
     /// </summary>
-    public async Task SyncWhenScannedAsync(IReadOnlyList<string> paths, CancellationToken cancellationToken = default)
+    /// <param name="paths">The video files.</param>
+    /// <param name="alreadyScanned">True when the files have been in the library a while, as with Bazarr.</param>
+    /// <param name="cancellationToken">Cancels the wait.</param>
+    public async Task SyncWhenScannedAsync(IReadOnlyList<string> paths, bool alreadyScanned = false, CancellationToken cancellationToken = default)
     {
         // a bit of slack, jellyfin's file watcher can beat the webhook
-        var since = DateTime.UtcNow.AddMinutes(-30);
+        DateTime? since = alreadyScanned ? null : DateTime.UtcNow.AddMinutes(-30);
 
         try
         {
@@ -120,7 +123,7 @@ public class ArrWebhookService
 
                 if (item is null)
                 {
-                    _logger.LogInformation("Radarr/Sonarr reported {Path}, but Jellyfin still hasn't scanned it in. Leaving it for the scheduled sync.", path);
+                    _logger.LogInformation("The webhook reported {Path}, but Jellyfin still hasn't scanned it in. Leaving it for the scheduled sync.", path);
                 }
                 else if (!_libraryService.IsEligible(item))
                 {
@@ -128,7 +131,7 @@ public class ArrWebhookService
                 }
                 else
                 {
-                    _logger.LogInformation("Syncing {Item}, imported by Radarr/Sonarr", item.Name);
+                    _logger.LogInformation("Syncing {Item}, reported by the webhook", item.Name);
                     _queueManager.EnqueueItem(item);
                 }
             }
@@ -138,7 +141,7 @@ public class ArrWebhookService
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Could not queue the files Radarr/Sonarr reported");
+            _logger.LogError(ex, "Could not queue the files the webhook reported");
         }
     }
 
@@ -184,13 +187,16 @@ public class ArrWebhookService
         }
     }
 
-    private static bool LooksLikeVideo(string path)
+    /// <summary>
+    /// Says whether a path ends in a video extension.
+    /// </summary>
+    public static bool LooksLikeVideo(string path)
     {
         var extension = Path.GetExtension(path);
         return Array.Exists(VideoExtensions, known => string.Equals(known, extension, StringComparison.OrdinalIgnoreCase));
     }
 
-    private async Task<BaseItem?> WaitForItemAsync(string path, DateTime since, CancellationToken cancellationToken)
+    private async Task<BaseItem?> WaitForItemAsync(string path, DateTime? since, CancellationToken cancellationToken)
     {
         if (Find(path, since) is { } item)
         {

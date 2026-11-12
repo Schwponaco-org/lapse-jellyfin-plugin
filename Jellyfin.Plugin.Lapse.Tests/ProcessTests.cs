@@ -97,6 +97,23 @@ public class ProcessTests
     }
 
     [Fact]
+    public async Task AnEngineRunsBelowNormalPriority()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        // field 19 of /proc/<pid>/stat is the nice value, read once the runner has set it
+        var result = await ProcessRunner.RunAsync("/bin/sh", new[] { "-c", "sleep 0.3; cut -d' ' -f19 /proc/$$/stat" }, null, CancellationToken.None, lowPriority: true);
+        Assert.Equal("10", result.Stdout.Trim());
+
+        using var finished = Process.Start("/bin/true")!;
+        await finished.WaitForExitAsync();
+        ProcessRunner.LowerPriority(finished);
+    }
+
+    [Fact]
     public async Task CancellingIsACancellationNotATimeout()
     {
         if (OperatingSystem.IsWindows())

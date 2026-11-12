@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using Jellyfin.Plugin.Lapse.Data;
 using Jellyfin.Plugin.Lapse.Engines;
+using Jellyfin.Plugin.Lapse.Services;
 using MediaBrowser.Model.Plugins;
 
 namespace Jellyfin.Plugin.Lapse.Configuration;
@@ -296,6 +297,12 @@ public class PluginConfiguration : BasePluginConfiguration
     public bool SkipSyncedInUnattendedRuns { get; set; } = true;
 
     /// <summary>
+    /// Gets or sets a value indicating whether a new subtitle file on an item that's already in
+    /// the library gets it synced, in libraries with auto-sync on.
+    /// </summary>
+    public bool AutoSyncNewSubtitles { get; set; } = true;
+
+    /// <summary>
     /// Gets or sets who besides admins may work on subtitles.
     /// </summary>
     public SubtitleAccessMode SubtitleAccess { get; set; } = SubtitleAccessMode.AdminsOnly;
@@ -377,6 +384,16 @@ public class PluginConfiguration : BasePluginConfiguration
     /// Gets or sets the shared secret in the webhook URL. The endpoint is anonymous so this is the only guard.
     /// </summary>
     public string? ArrWebhookToken { get; set; }
+
+    /// <summary>
+    /// Gets or sets the ntfy topic URL told when a bulk run finishes. Null is off.
+    /// </summary>
+    public string? NtfyUrl { get; set; }
+
+    /// <summary>
+    /// Gets or sets the Discord webhook told when a bulk run finishes. Null is off.
+    /// </summary>
+    public string? DiscordWebhookUrl { get; set; }
 
     // Scheduled extraction (experimental): write chosen embedded tracks out as files.
 
@@ -606,6 +623,26 @@ public class PluginConfiguration : BasePluginConfiguration
         }
 
         ClearBadAlassEncodings();
+
+        // answers from 2.1 read "moved it -4230ms, LAPSE called this unsure"
+        foreach (var set in PendingCandidates)
+        {
+            foreach (var candidate in set.Candidates)
+            {
+                if (candidate.Detail is { } detail
+                    && (detail.StartsWith("moved it ", StringComparison.Ordinal)
+                        || detail.StartsWith("left the timing alone", StringComparison.Ordinal)
+                        || detail.StartsWith("stretched it ", StringComparison.Ordinal)))
+                {
+                    candidate.Detail = SyncQueueManager.DescribeMove(new SyncResult
+                    {
+                        OffsetMs = candidate.OffsetMs,
+                        Slope = candidate.Slope,
+                        Verdict = candidate.Verdict
+                    }) + ".";
+                }
+            }
+        }
     }
 
     // An old version defaulted alass' encoding args to "auto", which alass 2.0 panics on.

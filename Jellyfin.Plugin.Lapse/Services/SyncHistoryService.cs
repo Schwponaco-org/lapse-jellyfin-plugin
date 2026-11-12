@@ -3,27 +3,42 @@
 // Licensed under GPL v3 - see LICENSE for details
 
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
+using System.Text.Json;
 using Jellyfin.Plugin.Lapse.Data;
+using MediaBrowser.Common.Configuration;
 using Microsoft.Extensions.Logging;
 
 namespace Jellyfin.Plugin.Lapse.Services;
 
 /// <summary>
 /// Undoes syncs. If it replaced a subtitle, copy the .bak back. If it wrote a new file
-/// next to the original (the default), just delete that file.
+/// next to the original (the default), just delete that file. A whole bulk run can be
+/// undone at once too.
 /// </summary>
 public class SyncHistoryService
 {
+    private readonly string _runsPath;
     private readonly ILogger<SyncHistoryService> _logger;
+    private readonly object _runsLock = new();
 
     /// <summary>
     /// Initializes a new instance of the <see cref="SyncHistoryService"/> class.
     /// </summary>
-    public SyncHistoryService(ILogger<SyncHistoryService> logger)
+    public SyncHistoryService(IApplicationPaths applicationPaths, ILogger<SyncHistoryService> logger)
     {
+        // A run lists every file it wrote, thousands for a library, so not in the config
+        // that gets rewritten on every save.
+        _runsPath = Path.Combine(applicationPaths.DataPath, "lapse", "runs.json");
         _logger = logger;
     }
+
+    /// <summary>
+    /// Gets how many finished runs are kept for undo.
+    /// </summary>
+    public static int MaxRuns => 5;
 
     /// <summary>
     /// Says whether an entry can still be undone (its backup or output file is still there).
@@ -51,7 +66,83 @@ public class SyncHistoryService
         // the queue adds to these lists from its own thread
         lock (Plugin.ConfigurationLock)
         {
-            return RevertLocked(id);
+            var entry = Plugin.Instance!.Configuration.History.Find(h => h.Id == id);
+            if (entry is null)
+            {
+                return null;
+            }
+
+            var outcome = RevertLocked(entry);
+            if (entry.Reverted)
+            {
+                Plugin.Instance.SaveConfiguration();
+            }
+
+            return outcome;
+        }
+    }
+
+    /// <summary>
+    /// Keeps a finished run so it can be undone in one go. Only the last <see cref="MaxRuns"/> stay.
+    /// </summary>
+    public void SaveRun(BulkRun run)
+    {
+        lock (_runsLock)
+        {
+            var runs = LoadRuns();
+            runs.Add(run);
+            WriteRuns(runs.TakeLast(MaxRuns).ToList());
+        }
+    }
+
+    /// <summary>
+    /// Gets the kept runs, oldest first.
+    /// </summary>
+    public List<BulkRun> GetRuns()
+    {
+        lock (_runsLock)
+        {
+            return LoadRuns();
+        }
+    }
+
+    /// <summary>
+    /// Puts back every file a run wrote, carrying on past any that can't be. A file written
+    /// since the run (a later sync, Bazarr, a hand edit) is left alone, its own Undo is still there.
+    /// </summary>
+    /// <returns>Each file and what happened to it, or null if there's no such run.</returns>
+    public List<(SyncHistoryEntry File, string Outcome)>? UndoRun(Guid id)
+    {
+        lock (_runsLock)
+        {
+            var runs = LoadRuns();
+            var run = runs.Find(r => r.Id == id);
+            if (run is null)
+            {
+                return null;
+            }
+
+            var outcomes = new List<(SyncHistoryEntry File, string Outcome)>();
+
+            foreach (var file in run.Files)
+            {
+                lock (Plugin.ConfigurationLock)
+                {
+                    // the history's own entry knows about single undos and later runs, while it's still there
+                    var entry = Plugin.Instance!.Configuration.History.Find(h => h.Id == file.Id) ?? file;
+
+                    var outcome = !entry.Reverted && !entry.Superseded && ChangedSince(entry)
+                        ? "It has been written since the run, so it was left alone."
+                        : RevertLocked(entry);
+
+                    file.Reverted = entry.Reverted;
+                    outcomes.Add((file, outcome));
+                }
+            }
+
+            Plugin.Instance!.SaveConfiguration();
+            WriteRuns(runs);
+            return outcomes;
         }
     }
 
@@ -88,16 +179,8 @@ public class SyncHistoryService
         return !string.IsNullOrEmpty(a) && string.Equals(a, b, StringComparison.Ordinal);
     }
 
-    private string? RevertLocked(Guid id)
+    private string RevertLocked(SyncHistoryEntry entry)
     {
-        var config = Plugin.Instance!.Configuration;
-        var entry = config.History.Find(h => h.Id == id);
-
-        if (entry is null)
-        {
-            return null;
-        }
-
         if (!CanRevert(entry))
         {
             return entry.Reverted ? "That one has already been put back."
@@ -112,6 +195,7 @@ public class SyncHistoryService
             if (entry.WroteNewFile)
             {
                 File.Delete(entry.OutputPath!);
+                MultiEngineSyncService.Forget(entry.OutputPath!);
                 _logger.LogInformation("Reverted a sync by removing {Path}", entry.OutputPath);
             }
             else
@@ -122,6 +206,7 @@ public class SyncHistoryService
 
                 File.Copy(entry.BackupPath!, original, overwrite: true);
                 File.Delete(entry.BackupPath!);
+                SubtitleFileLock.NoteWritten(original);
 
                 if (!string.Equals(original, entry.OutputPath, StringComparison.Ordinal)
                     && File.Exists(entry.OutputPath!))
@@ -135,16 +220,52 @@ public class SyncHistoryService
 
             entry.Reverted = true;
             ForgetSyncedSubtitle(entry);
-            Plugin.Instance!.SaveConfiguration();
 
             return entry.WroteNewFile
                 ? $"Deleted {Path.GetFileName(entry.OutputPath)}."
-                : $"Put {Path.GetFileName(restored)} back the way it was before that run.";
+                : $"Put {Path.GetFileName(restored)} back the way it was.";
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             _logger.LogWarning(ex, "Could not revert the sync of {Path}", entry.OutputPath);
             return "Could not put it back: " + ex.Message;
+        }
+    }
+
+    // A file the run added that's gone anyway isn't a change, Revert says there's nothing left.
+    private static bool ChangedSince(SyncHistoryEntry entry)
+    {
+        return entry.OutputWriteUtc is { } written
+            && (File.Exists(entry.OutputPath)
+                ? Math.Abs((File.GetLastWriteTimeUtc(entry.OutputPath) - written).TotalSeconds) >= 1
+                : !entry.WroteNewFile);
+    }
+
+    private List<BulkRun> LoadRuns()
+    {
+        try
+        {
+            return File.Exists(_runsPath)
+                ? JsonSerializer.Deserialize<List<BulkRun>>(File.ReadAllText(_runsPath)) ?? new List<BulkRun>()
+                : new List<BulkRun>();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            _logger.LogWarning(ex, "Could not read the bulk runs from {Path}", _runsPath);
+            return new List<BulkRun>();
+        }
+    }
+
+    private void WriteRuns(List<BulkRun> runs)
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(_runsPath)!);
+            File.WriteAllText(_runsPath, JsonSerializer.Serialize(runs));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _logger.LogWarning(ex, "Could not save the bulk runs to {Path}", _runsPath);
         }
     }
 

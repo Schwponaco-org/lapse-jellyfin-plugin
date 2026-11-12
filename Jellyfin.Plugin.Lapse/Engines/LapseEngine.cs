@@ -240,6 +240,8 @@ public partial class LapseEngine : IEngine
                 + "you keep media that isn't in a Jellyfin library. Setup and settings are in the repo.",
             LinuxAmd64 = Archive("lapse-linux-amd64.tar.gz", EnginePackaging.TarGz),
             LinuxArm64 = Archive("lapse-linux-arm64.tar.gz", EnginePackaging.TarGz),
+            LinuxMuslAmd64 = Archive("lapse-linux-musl-amd64.tar.gz", EnginePackaging.TarGz),
+            LinuxMuslArm64 = Archive("lapse-linux-musl-arm64.tar.gz", EnginePackaging.TarGz),
             MacAmd64 = Archive("lapse-macos-x86_64.tar.gz", EnginePackaging.TarGz),
             MacArm64 = Archive("lapse-macos-arm64.tar.gz", EnginePackaging.TarGz),
             WindowsAmd64 = Archive("lapse-windows-x64.zip", EnginePackaging.Zip),
@@ -264,12 +266,12 @@ public partial class LapseEngine : IEngine
         descriptor.Modes.Add(new EngineModeOption(
             SyncMode.Standard,
             "Single offset",
-            "Moves the whole file by one amount. For subtitles that are simply early or late."));
+            "Moves the whole file by one amount, up to 15 minutes either way. For subtitles that are simply early or late."));
         descriptor.Modes.Add(new EngineModeOption(
             SyncMode.Split,
             "Split",
             "Gives different parts of the file different timing. For discs cut around ad breaks, or a film joined from two rips. "
-            + "When the video has chapters, LAPSE takes them as likely places for a cut."));
+            + "When the video has chapters, LAPSE takes them as likely places for a cut. A part can sit further out than the 15 minutes a single offset reaches."));
         descriptor.Modes.Add(new EngineModeOption(
             SyncMode.Ols,
             "Framerate fix",
@@ -498,9 +500,14 @@ public partial class LapseEngine : IEngine
             }
 
             // 2.3.0 says where each part went, the single offset_ms only covers one of them
-            if (parts is > 1 && ReadOffsets(root) is { Count: > 1 } offsets)
+            if (parts is > 1 && ReadNumbers(root, "offsets") is { Count: > 1 } offsets)
             {
                 result.PartOffsetsMs = offsets;
+            }
+
+            if (parts is > 1 && ReadNumbers(root, "splits") is { Count: > 0 } splits)
+            {
+                result.PartStarts = splits;
             }
 
             var ignored = ReadDouble(root, "ignored_cues");
@@ -563,23 +570,23 @@ public partial class LapseEngine : IEngine
         return string.Join(", ", parts);
     }
 
-    private static List<int>? ReadOffsets(JsonElement root)
+    private static List<int>? ReadNumbers(JsonElement root, string name)
     {
-        if (!root.TryGetProperty("offsets", out var element) || element.ValueKind != JsonValueKind.Array)
+        if (!root.TryGetProperty(name, out var element) || element.ValueKind != JsonValueKind.Array)
         {
             return null;
         }
 
-        var offsets = new List<int>();
+        var numbers = new List<int>();
         foreach (var value in element.EnumerateArray())
         {
             if (value.ValueKind == JsonValueKind.Number)
             {
-                offsets.Add((int)Math.Round(value.GetDouble()));
+                numbers.Add((int)Math.Round(value.GetDouble()));
             }
         }
 
-        return offsets;
+        return numbers;
     }
 
     private static string? ReadString(JsonElement root, string name)

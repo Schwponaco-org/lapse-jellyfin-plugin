@@ -65,9 +65,21 @@ public class SyncHistoryEntry
     public bool WroteNewFile { get; set; }
 
     /// <summary>
+    /// Gets or sets the written file's time once the run was done with it, so undoing a whole
+    /// run can tell a file somebody has written since. Null on old entries.
+    /// </summary>
+    public DateTime? OutputWriteUtc { get; set; }
+
+    /// <summary>
     /// Gets or sets a short line about what the engine did.
     /// </summary>
     public string? Detail { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether LAPSE was unsure, so the result went beside the
+    /// original for somebody to check. False on entries from before this was kept.
+    /// </summary>
+    public bool Unsure { get; set; }
 
     /// <summary>
     /// Gets or sets a value indicating whether this has already been undone.

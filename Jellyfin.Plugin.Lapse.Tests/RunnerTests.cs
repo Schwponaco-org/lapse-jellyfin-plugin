@@ -30,8 +30,18 @@ public class RunnerTests
             if [ -f "$0.usage" ]; then cat "$0.usage" >&2; exit 255; fi
             echo "Usage: lapse <video_or_subtitle> [subtitle] [auto|ols|nosplit|split] [penalty] [--output <path>] [--no-backup] [--no-sidecar] [--no-embedded] [--full-scan] [--no-cache] [--force] [--json] [--quiet] [--dry-run] [--strict] [--confidence N] [--audio-track N] [--sub-track N] [--fps N] [--snap [ms]] [--encoding NAME] [--from video] [--min-shift ms] [--whisper model]" >&2
             exit 255 ;;
+          --shift)
+            out=""
+            prev=""
+            for a in "$@"; do
+              [ "$prev" = "--output" ] && out="$a"
+              prev="$a"
+            done
+            cp "$prev" "$out"
+            echo '{"mode":"shift","reference":"none","offset_ms":'"$2"',"cues":2,"written":true}' ;;
           *)
             echo "env LAPSE_WHISPER_CLI=$LAPSE_WHISPER_CLI" >> "$0.calls"
+            echo "env LAPSE_CACHE=$LAPSE_CACHE" >> "$0.calls"
             out=""
             prev=""
             for a in "$@"; do
@@ -244,6 +254,28 @@ public class RunnerTests
         Assert.Contains("env LAPSE_WHISPER_CLI=" + cli, Calls(engine), StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task LapseCachesInJellyfinsCacheFolder()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var (runner, folder, engine) = NewRunner("{\"mode\":\"auto/shifted\",\"reference\":\"vad\",\"offset_ms\":900,\"ratio\":1,\"verdict\":\"solid\",\"parts\":1,\"written\":true,\"output\":\"x\",\"splits\":[],\"offsets\":[900]}");
+        var (video, subtitle) = Film(folder);
+
+        await WithSettings(engine, () => runner.RunAsync(new LapseEngine(), video, subtitle, SyncMode.Auto, 6, OutputMode.SidecarOnly));
+        Assert.Contains("env LAPSE_CACHE=" + Path.Combine(TestHost.ApplicationPaths.CachePath, "lapse"), Calls(engine), StringComparison.Ordinal);
+
+        Directory.CreateDirectory(Path.Combine(runner.CacheFolder, "ab"));
+        File.WriteAllBytes(Path.Combine(runner.CacheFolder, "ab", "film.spans"), new byte[1000]);
+        Assert.Equal(1000, runner.GetCacheSize());
+
+        runner.ClearCache();
+        Assert.Equal(0, runner.GetCacheSize());
+    }
+
     internal static (EngineRunner Runner, string Folder, string Engine) NewRunner(string reply, string? usage = null)
     {
         var folder = TestHost.NewFolder();
@@ -283,7 +315,7 @@ public class RunnerTests
     }
 
     // Points LAPSE at the fake, turns the skip on and sets any parameters, then puts it all back.
-    internal static async Task<SyncResult> WithSettings(string engine, Func<Task<SyncResult>> run, params (string Key, string? Value)[] parameters)
+    internal static async Task<T> WithSettings<T>(string engine, Func<Task<T>> run, params (string Key, string? Value)[] parameters)
     {
         var config = TestHost.Plugin.Configuration;
         var settings = config.GetEngineSettings("lapse");

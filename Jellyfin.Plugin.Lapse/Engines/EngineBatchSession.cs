@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -45,6 +46,7 @@ public sealed class EngineBatchSession : IDisposable
     private Process? _process;
     private string? _binaryPath;
     private (DateTime WriteTimeUtc, long Length) _binaryStamp;
+    private string? _environment;
     private long _lastStderrTicks;
     private bool _disposed;
 
@@ -219,19 +221,6 @@ public sealed class EngineBatchSession : IDisposable
         var info = new FileInfo(binaryPath);
         var stamp = (info.LastWriteTimeUtc, info.Exists ? info.Length : -1);
 
-        if (_process is not null)
-        {
-            if (!_process.HasExited
-                && string.Equals(_binaryPath, binaryPath, StringComparison.Ordinal)
-                && stamp == _binaryStamp)
-            {
-                return _process;
-            }
-
-            // gone, or updated underneath us (rename swap, the old process would keep the old build)
-            Stop();
-        }
-
         var startInfo = new ProcessStartInfo
         {
             FileName = binaryPath,
@@ -246,6 +235,23 @@ public sealed class EngineBatchSession : IDisposable
         ProcessOutput.ReadAsUtf8(startInfo);
         startInfo.ArgumentList.Add("--batch");
         prepare(startInfo);
+
+        // a job line can't carry environment variables, a changed one (the whisper path) needs a new process
+        var environment = string.Join('\n', startInfo.Environment.OrderBy(v => v.Key, StringComparer.Ordinal).Select(v => v.Key + "=" + v.Value));
+
+        if (_process is not null)
+        {
+            if (!_process.HasExited
+                && string.Equals(_binaryPath, binaryPath, StringComparison.Ordinal)
+                && stamp == _binaryStamp
+                && string.Equals(_environment, environment, StringComparison.Ordinal))
+            {
+                return _process;
+            }
+
+            // gone, updated underneath us (rename swap, the old process would keep the old build) or set up differently
+            Stop();
+        }
 
         var process = new Process { StartInfo = startInfo };
         process.ErrorDataReceived += OnStderr;
@@ -262,11 +268,13 @@ public sealed class EngineBatchSession : IDisposable
             return null;
         }
 
+        ProcessRunner.LowerPriority(process);
         process.BeginErrorReadLine();
 
         _process = process;
         _binaryPath = binaryPath;
         _binaryStamp = stamp;
+        _environment = environment;
 
         _logger.LogInformation("Started LAPSE in batch mode, it stays loaded for the rest of this job");
         return process;

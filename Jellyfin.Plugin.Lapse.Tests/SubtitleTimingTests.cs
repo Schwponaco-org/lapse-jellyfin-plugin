@@ -4,6 +4,7 @@
 
 using System.Text;
 using Jellyfin.Plugin.Lapse.Data;
+using Jellyfin.Plugin.Lapse.Engines;
 using Jellyfin.Plugin.Lapse.Services;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
@@ -50,8 +51,7 @@ public class SubtitleTimingTests
         var cp1251 = System.Text.Encoding.GetEncoding(1251);
         await File.WriteAllBytesAsync(path, cp1251.GetBytes(text));
 
-        var shifter = new SubtitleShifter();
-        var result = await shifter.ShiftAsync(path, -1.0, OutputMode.SidecarOnly);
+        var result = await NewShifter().ShiftAsync(path, -1.0, OutputMode.SidecarOnly);
 
         var bytes = await File.ReadAllBytesAsync(result.OutputPath);
         Assert.Equal(cp1251.GetBytes(text.Replace("00:00:05,000", "00:00:04,000").Replace("00:00:06,000", "00:00:05,000").Replace("00:00:07,000", "00:00:06,000").Replace("00:00:08,500", "00:00:07,500")), bytes);
@@ -65,7 +65,7 @@ public class SubtitleTimingTests
         var path = Path.Combine(folder, "Film.en.srt");
         await File.WriteAllTextAsync(path, "1\n00:00:05,000 --> 00:00:06,000\nHi\n", new UTF8Encoding(true));
 
-        var result = await new SubtitleShifter().ShiftAsync(path, 0.5, OutputMode.OverwriteNoBackup);
+        var result = await NewShifter().ShiftAsync(path, 0.5, OutputMode.OverwriteNoBackup);
         var bytes = await File.ReadAllBytesAsync(result.OutputPath);
 
         Assert.Equal(new byte[] { 0xEF, 0xBB, 0xBF }, bytes[..3]);
@@ -79,7 +79,7 @@ public class SubtitleTimingTests
         var path = Path.Combine(folder, "Film.en.vtt");
         await File.WriteAllTextAsync(path, "WEBVTT\n\n00:01.000 --> 00:04.000\nOne <00:02.000>two <00:03.000>three\n");
 
-        var result = await new SubtitleShifter().ShiftAsync(path, 2.0, OutputMode.SidecarOnly);
+        var result = await NewShifter().ShiftAsync(path, 2.0, OutputMode.SidecarOnly);
 
         Assert.Equal(
             "WEBVTT\n\n00:03.000 --> 00:06.000\nOne <00:04.000>two <00:05.000>three\n",
@@ -93,9 +93,49 @@ public class SubtitleTimingTests
         var path = Path.Combine(folder, "Film.en.ass");
         await File.WriteAllTextAsync(path, "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\nDialogue: 0,0:00:01.00,0:00:02.00,Default,,0,0,0,,At 0:00:09.00 we leave\n");
 
-        var result = await new SubtitleShifter().ShiftAsync(path, 1.004, OutputMode.SidecarOnly);
+        var result = await NewShifter().ShiftAsync(path, 1.004, OutputMode.SidecarOnly);
 
         Assert.Contains("Dialogue: 0,0:00:02.00,0:00:03.00,Default,,0,0,0,,At 0:00:09.00 we leave", await File.ReadAllTextAsync(result.OutputPath), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ShiftHandsVobSubToLapseAndCopiesThePictures()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var (runner, folder, engine) = RunnerTests.NewRunner(string.Empty, "Usage: lapse <video_or_subtitle> [subtitle] [--output <path>] [--no-backup] [--json]\n       lapse --shift <ms> <subtitle>");
+        var idx = Path.Combine(folder, "Film.en.idx");
+        await File.WriteAllTextAsync(idx, "timestamp: 00:00:01:000, filepos: 000000000\n");
+        await File.WriteAllTextAsync(Path.Combine(folder, "Film.en.sub"), "pictures");
+
+        var result = await RunnerTests.WithSettings(engine, () => new SubtitleShifter(new EngineRegistry(), runner).ShiftAsync(idx, 1.5, OutputMode.SidecarOnly));
+
+        Assert.Equal(Path.Combine(folder, "Film.en.shifted.idx"), result.OutputPath);
+        Assert.Equal(4, result.Shifted);
+        Assert.True(File.Exists(Path.Combine(folder, "Film.en.shifted.sub")));
+        Assert.Contains("--shift 1500 --json --no-backup --output " + result.OutputPath + " " + idx, await File.ReadAllTextAsync(engine + ".calls"), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ShiftAsksForANewerLapseWhenItCannotShift()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var (runner, folder, engine) = RunnerTests.NewRunner(string.Empty);
+        var sup = Path.Combine(folder, "Film.en.sup");
+        await File.WriteAllBytesAsync(sup, new byte[] { 0x50, 0x47 });
+
+        var error = await Assert.ThrowsAsync<NotSupportedException>(
+            () => RunnerTests.WithSettings(engine, () => new SubtitleShifter(new EngineRegistry(), runner).ShiftAsync(sup, 1.5, OutputMode.SidecarOnly)));
+
+        Assert.Contains("LAPSE 2.5.0", error.Message, StringComparison.Ordinal);
+        Assert.False(File.Exists(Path.Combine(folder, "Film.en.shifted.sup")));
     }
 
     [Fact]
@@ -129,6 +169,36 @@ public class SubtitleTimingTests
     }
 
     [Fact]
+    public async Task SpotChecksAreTheFirstLineEachSplitAndOneNearTheEnd()
+    {
+        var folder = TestHost.NewFolder();
+        var path = Path.Combine(folder, "Film.en.shifted.srt");
+        var cues = Enumerable.Range(0, 20).Select(i => $"{i + 1}\n00:{i:00}:05,000 --> 00:{i:00}:06,000\nLine {i}\n");
+        await File.WriteAllTextAsync(path, string.Join("\n", cues));
+
+        var times = await SubtitleShifter.ReadSpotChecksAsync(path, new[] { 7, 12, 15 });
+
+        // two splits at most, and 90% in is cue 18
+        Assert.Equal(new[] { 5.0, 425.0, 725.0, 1085.0 }, times.ConvertAll(t => t.TotalSeconds));
+    }
+
+    [Fact]
+    public async Task SpotChecksReadAssDialogueAndSkipWhatIsGone()
+    {
+        var folder = TestHost.NewFolder();
+        var path = Path.Combine(folder, "Film.en.ass");
+        await File.WriteAllTextAsync(
+            path,
+            "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+            + "Dialogue: 0,0:00:01.50,0:00:03.00,Default,,0,0,0,,One\n"
+            + "Comment: 0,0:00:02.00,0:00:03.00,Default,,0,0,0,,Not shown\n"
+            + "Dialogue: 0,0:01:00.00,0:01:02.00,Default,,0,0,0,,Two\n");
+
+        Assert.Equal(new[] { 1.5, 60.0 }, (await SubtitleShifter.ReadSpotChecksAsync(path, new[] { 1, 9 })).ConvertAll(t => t.TotalSeconds));
+        Assert.Empty(await SubtitleShifter.ReadSpotChecksAsync(Path.Combine(folder, "gone.srt"), Array.Empty<int>()));
+    }
+
+    [Fact]
     public void LegacyCodePageIsDetectedAndKept()
     {
         System.Text.Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
@@ -138,5 +208,77 @@ public class SubtitleTimingTests
 
         Assert.Contains("مرحبا", text, StringComparison.Ordinal);
         Assert.Equal(1256, encoding.CodePage);
+    }
+
+    private static string Cues(string lines)
+    {
+        return string.Join("\n", lines.Split('\n').Select((line, i) => $"{i + 1}\n00:00:{i + 1:00},000 --> 00:00:{i + 1:00},500\n{line}\n"));
+    }
+
+    [Theory]
+    [InlineData(936, 54936, "你好，我是来自北京的医生。\n这件事情我们明天再谈吧。\n你怎么会在这里？我以为你已经走了。\n请相信我，我不会伤害任何人。\n别担心，一切都会好起来的。\n我们必须在天亮之前离开这个地方。")]
+    [InlineData(950, 950, "你好，我是來自台北的醫生。\n這件事情我們明天再談吧。\n你怎麼會在這裡？我以為你已經走了。\n請相信我，我不會傷害任何人。\n別擔心，一切都會好起來的。\n我們必須在天亮之前離開這個地方。")]
+    [InlineData(932, 932, "こんにちは、私は東京から来た医者です。\nこのことは明日また話しましょう。\nどうしてここにいるの？もう帰ったと思っていた。\n信じてください。誰も傷つけたりしません。\n心配しないで、すべてうまくいくから。\n夜が明ける前にここを出なければならない。")]
+    [InlineData(949, 949, "안녕하세요, 저는 서울에서 온 의사입니다.\n이 일은 내일 다시 이야기합시다.\n어떻게 여기 있어요? 벌써 떠난 줄 알았어요.\n저를 믿어 주세요. 아무도 해치지 않을 겁니다.\n걱정하지 마세요, 다 잘될 거예요.\n날이 밝기 전에 여기를 떠나야 해요.")]
+    public void CjkCodePageIsDetectedAndKept(int source, int expected, string lines)
+    {
+        System.Text.Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+        var srt = Cues(lines);
+
+        var (text, encoding) = SubtitleEncoding.DecodeWithEncoding(System.Text.Encoding.GetEncoding(source).GetBytes(srt));
+
+        Assert.Equal(srt, text);
+        Assert.Equal(expected, encoding.CodePage);
+    }
+
+    [Theory]
+    [InlineData(1251, "Привет, как дела?\nЯ давно тебя не видел.\nЭто очень важно, ты должен меня выслушать.\nГде ты был всю ночь?")]
+    [InlineData(1251, "Привет")]
+    [InlineData(1256, "مرحبا، كيف حالك؟\nهذا مهم جدا، يجب أن تسمعني.")]
+    [InlineData(874, "สวัสดีครับ สบายดีไหม ไม่เจอกันนานเลย\nผมไม่รู้ว่าจะทำอย่างไรต่อไป\nขอบคุณมากครับ")]
+    public void OtherCodePagesAreStillDetected(int source, string lines)
+    {
+        System.Text.Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+
+        var (text, encoding) = SubtitleEncoding.DecodeWithEncoding(System.Text.Encoding.GetEncoding(source).GetBytes(Cues(lines)));
+
+        Assert.Equal(source, encoding.CodePage);
+        Assert.Equal(Cues(lines), text);
+    }
+
+    [Theory]
+    [InlineData("é")]
+    [InlineData("naïve")]
+    [InlineData("Il était naïve.\nSeñor, ¿dónde está la niña?\nIch möchte Ihnen danken, Frau Müller.\nÇa va très bien, merci.")]
+    [InlineData("Dobrý den, jak se máte?\nGdzie jest moja żona?")]
+    [InlineData("Merhaba, nasılsın?\nBütün gece neredeydin?")]
+    public void LatinTextIsNotReadAsCjk(string lines)
+    {
+        System.Text.Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+        var cjk = new[] { 932, 949, 950, 54936 };
+
+        foreach (var source in new[] { 1250, 1252, 1254 })
+        {
+            var (_, encoding) = SubtitleEncoding.DecodeWithEncoding(System.Text.Encoding.GetEncoding(source).GetBytes(Cues(lines)));
+
+            Assert.DoesNotContain(encoding.CodePage, cjk);
+        }
+    }
+
+    [Fact]
+    public void CjkNamesInAsciiCuesAreStillRead()
+    {
+        System.Text.Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+        var srt = Cues("Hello, Mr. Tanaka.\nHow are you today?\nI'm fine, thank you.\nこんにちは、田中さん。\nSee you tomorrow.\nGood night.");
+
+        var (text, encoding) = SubtitleEncoding.DecodeWithEncoding(System.Text.Encoding.GetEncoding(932).GetBytes(srt));
+
+        Assert.Equal(srt, text);
+        Assert.Equal(932, encoding.CodePage);
+    }
+
+    private static SubtitleShifter NewShifter()
+    {
+        return new SubtitleShifter(new EngineRegistry(), RunnerTests.NewRunner(string.Empty).Runner);
     }
 }

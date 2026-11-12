@@ -165,6 +165,7 @@ public partial class LapseController
             }
         }
 
+        _multiEngine.AddForReview(item, engine, subtitlePath, result);
         SaveSyncRecord(request.ItemId, result, subtitlePath);
         return result;
     }
@@ -308,6 +309,11 @@ public partial class LapseController
                     .RunAsync(engine, referencePath, subtitlePath, mode, penalty, request.OutputMode, batch: batch, cancellationToken: cancellationToken)
                     .ConfigureAwait(false);
 
+            if (subtitlePath is not null)
+            {
+                _multiEngine.AddForReview(item, engine, subtitlePath, syncResult);
+            }
+
             if (syncResult.CountsAsSynced)
             {
                 result.SucceededCount++;
@@ -340,7 +346,14 @@ public partial class LapseController
             : doubted > 0 ? $"LAPSE wasn't sure about {doubted} of {total} subtitles, so those weren't counted as synced"
             : null;
 
-        SyncQueueManager.SaveRecord(request.ItemId, status, detail, result.Results.LastOrDefault()?.Result, writtenPaths);
+        // one history entry per file written, so each can be undone
+        SyncQueueManager.SaveRecord(
+            request.ItemId,
+            status,
+            detail,
+            result.Results.LastOrDefault()?.Result,
+            writtenPaths,
+            results: result.Results.Select(o => o.Result));
 
         return result;
     }
@@ -376,12 +389,12 @@ public partial class LapseController
             return denied;
         }
 
-        return _queueManager.GetSnapshot(includeItems);
+        return _queueManager.GetSnapshot(includeItems, QueueViewer());
     }
 
     /// <summary>
-    /// Stops the running job. Anyone who can start one from the context menu can stop it,
-    /// a series sync started by mistake shouldn't need an admin.
+    /// Stops the running job. Anyone who can start one from the context menu can stop their
+    /// own, a series sync started by mistake shouldn't need an admin. Other jobs are for admins.
     /// </summary>
     [HttpPost("Lapse/Queue/Cancel")]
     public ActionResult CancelQueue()
@@ -391,11 +404,17 @@ public partial class LapseController
             return denied;
         }
 
-        var dropped = _queueManager.Cancel();
+        var dropped = _queueManager.Cancel(QueueViewer());
 
         return dropped is null
             ? Conflict("There is no sync job running")
             : Ok(new { Dropped = dropped.Value });
+    }
+
+    // null for an admin, who sees every job. Anyone else only their own.
+    private Guid? QueueViewer()
+    {
+        return User.IsInRole(AdministratorRole) ? null : GetCallingUser()?.Id ?? Guid.Empty;
     }
 
     /// <summary>
@@ -453,7 +472,7 @@ public partial class LapseController
 
         var referenceKey = Blank(request.ReferenceKey);
 
-        return _queueManager.EnqueueItems(episodes, item.Name ?? "Series", "episode", referenceKey)
+        return _queueManager.EnqueueItems(episodes, item.Name ?? "Series", "episode", referenceKey, QueueViewer())
             ? Accepted(new { Queued = episodes.Count })
             : Conflict("A sync job is already running");
     }
@@ -561,7 +580,7 @@ public partial class LapseController
 
         // no library item to check against here, but at least make sure a typo can't
         // turn this into "overwrite that random file"
-        if (!SubtitleFormats.IsSubtitle(request.ReferencePath) || !SubtitleFormats.IsSubtitle(request.InputPath))
+        if (!SubtitleFormats.IsPickedSubtitle(request.ReferencePath) || !SubtitleFormats.IsPickedSubtitle(request.InputPath))
         {
             return BadRequest("Both paths need to be subtitle files");
         }
@@ -583,7 +602,7 @@ public partial class LapseController
 
         if (outputPath is not null)
         {
-            if (!SubtitleFormats.IsSubtitle(outputPath))
+            if (!SubtitleFormats.IsPickedSubtitle(outputPath))
             {
                 return BadRequest("The output file needs a subtitle extension");
             }

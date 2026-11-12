@@ -224,6 +224,7 @@ public partial class LapseController
                 .RunAsync(engine, item.Path, path, EngineRunner.ResolveDefaultMode(engine), EngineRunner.ResolvePenalty(engine, null))
                 .ConfigureAwait(false);
 
+            _multiEngine.AddForReview(item, engine, path, sync);
             SaveSyncRecord(item.Id, sync, path);
         }
 
@@ -333,16 +334,16 @@ public partial class LapseController
             return BadRequest("An item id is required");
         }
 
+        var item = GetVisibleItem(request.ItemId);
+        if (item is null)
+        {
+            return NotFound("Item not found");
+        }
+
         var path = request.Path;
 
         if (string.IsNullOrWhiteSpace(path))
         {
-            var item = GetVisibleItem(request.ItemId);
-            if (item is null)
-            {
-                return NotFound("Item not found");
-            }
-
             path = PlayingSubtitlePath(FindOwnSession(item.Id), item.GetMediaStreams());
 
             if (string.IsNullOrWhiteSpace(path))
@@ -378,6 +379,11 @@ public partial class LapseController
         if (request is null || request.ItemId.Equals(default))
         {
             return BadRequest("An item id is required");
+        }
+
+        if (GetVisibleItem(request.ItemId) is null)
+        {
+            return NotFound("Item not found");
         }
 
         return _multiEngine.Discard(request.ItemId, request.OriginalPath);

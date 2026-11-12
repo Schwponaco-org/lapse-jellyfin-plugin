@@ -148,6 +148,7 @@ public partial class LapseController
 
             // still synced after a nudge, don't let the newer write time make it look replaced
             SyncQueueManager.TouchSyncedSubtitle(request.ItemId, shifted.OutputPath);
+            SyncQueueManager.RecordShift(item.Id, path, shifted, (int)Math.Round(request.ResolveOffsetSeconds() * 1000));
             return shifted;
         }
         catch (Exception ex) when (ex is NotSupportedException or IOException)
@@ -408,6 +409,7 @@ public partial class LapseController
                     .ConfigureAwait(false);
 
                 result.SyncedAfter = true;
+                _multiEngine.AddForReview(item, engine, destination, result.Sync);
                 SaveSyncRecord(request.ItemId, result.Sync, destination);
             }
 
@@ -501,6 +503,7 @@ public partial class LapseController
 
             result.Sync = sync;
             result.ConvertedFrom = sync.ConvertedFrom;
+            _multiEngine.AddForReview(item, engine, path, sync);
             SaveSyncRecord(request.ItemId, sync, path);
 
             if (!sync.Success)

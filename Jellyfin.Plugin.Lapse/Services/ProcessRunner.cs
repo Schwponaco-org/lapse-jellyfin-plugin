@@ -33,7 +33,8 @@ public static class ProcessRunner
         IEnumerable<string> arguments,
         TimeSpan? timeout,
         CancellationToken cancellationToken,
-        Action<ProcessStartInfo>? prepare = null)
+        Action<ProcessStartInfo>? prepare = null,
+        bool lowPriority = false)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -55,6 +56,11 @@ public static class ProcessRunner
 
         using var process = new Process { StartInfo = startInfo };
         process.Start();
+
+        if (lowPriority)
+        {
+            LowerPriority(process);
+        }
 
         // these finish when the pipes close, which killing the process does too
         var stdoutTask = process.StandardOutput.ReadToEndAsync(CancellationToken.None);
@@ -99,6 +105,23 @@ public static class ProcessRunner
         catch (Exception ex) when (ex is InvalidOperationException or NotSupportedException or System.ComponentModel.Win32Exception)
         {
             // finished on its own between the check and the kill
+        }
+    }
+
+    /// <summary>
+    /// Puts a process below normal priority (nice 10 on Linux and macOS), so a long sync gives
+    /// way to Jellyfin's transcodes. Threads it starts after this inherit it. Never throws, at
+    /// normal priority it still does its job.
+    /// </summary>
+    public static void LowerPriority(Process process)
+    {
+        try
+        {
+            process.PriorityClass = ProcessPriorityClass.BelowNormal;
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            // already finished, or the system said no
         }
     }
 

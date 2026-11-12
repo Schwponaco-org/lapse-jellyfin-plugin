@@ -120,8 +120,11 @@ public partial class LapseController
                 Name = item is null ? "(removed from the library)" : SyncQueueManager.DescribeItem(item),
                 Status = entry.Status,
                 WhenUtc = entry.WhenUtc,
-                Detail = entry.Detail,
+                Detail = SyncQueueManager.ReadableDetail(entry.Detail),
                 OutputPath = entry.OutputPath,
+
+                // older entries only said so in the detail line
+                Unsure = entry.Unsure || (entry.Detail?.EndsWith("written beside the original to check", StringComparison.Ordinal) ?? false),
                 Reverted = entry.Reverted,
                 Superseded = entry.Superseded,
                 CanRevert = SyncHistoryService.CanRevert(entry)
@@ -140,6 +143,46 @@ public partial class LapseController
     {
         var outcome = _historyService.Revert(id);
         return outcome is null ? NotFound("No history entry with that id") : Ok(new { Outcome = outcome });
+    }
+
+    /// <summary>
+    /// Gets the last few bulk runs that wrote something, newest first.
+    /// </summary>
+    [HttpGet("Lapse/Runs")]
+    [Authorize(Policy = Policies.RequiresElevation)]
+    public ActionResult<object> GetRuns()
+    {
+        return _historyService.GetRuns().AsEnumerable().Reverse().Select(run => new
+        {
+            run.Id,
+            run.Name,
+            run.FinishedUtc,
+            run.Synced,
+            run.Unsure,
+            run.Failed,
+            run.Skipped,
+            Files = run.Files.Count,
+            Undone = run.Files.Count(f => f.Reverted)
+        }).ToList();
+    }
+
+    /// <summary>
+    /// Undoes every file a bulk run wrote and says how each went.
+    /// </summary>
+    [HttpPost("Lapse/Runs/{id}/Undo")]
+    [Authorize(Policy = Policies.RequiresElevation)]
+    public ActionResult UndoRun([FromRoute] Guid id)
+    {
+        // a running job could be writing the same files
+        if (_queueManager.GetSnapshot().Running)
+        {
+            return Conflict("A sync job is running. Let it finish or stop it, then undo the run.");
+        }
+
+        var outcomes = _historyService.UndoRun(id);
+        return outcomes is null
+            ? NotFound("No run with that id")
+            : Ok(outcomes.Select(o => new { o.File.OutputPath, o.File.Reverted, o.Outcome }));
     }
 
     // Worked out from which files are actually synced, not from a flag on the record. A flag
@@ -173,7 +216,14 @@ public partial class LapseController
             return NotFound("Item not found");
         }
 
-        return _subtitleLocator.GetExternalSubtitles(item);
+        var subtitles = _subtitleLocator.GetExternalSubtitles(item);
+        var record = SyncQueueManager.FindRecord(item.Id);
+        foreach (var subtitle in subtitles)
+        {
+            subtitle.Synced = record is not null && SyncQueueManager.IsStillSynced(record, subtitle.Path);
+        }
+
+        return subtitles;
     }
 
     /// <summary>

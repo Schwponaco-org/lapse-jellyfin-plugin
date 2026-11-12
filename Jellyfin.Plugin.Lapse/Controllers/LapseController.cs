@@ -65,6 +65,7 @@ public partial class LapseController : ControllerBase
     private readonly ISessionManager _sessionManager;
     private readonly EmbeddedSubtitleExtractionService _extraction;
     private readonly ITaskManager _taskManager;
+    private readonly SubtitleLanguages _languages;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="LapseController"/> class.
@@ -94,7 +95,8 @@ public partial class LapseController : ControllerBase
         MultiEngineSyncService multiEngine,
         ISessionManager sessionManager,
         EmbeddedSubtitleExtractionService extraction,
-        ITaskManager taskManager)
+        ITaskManager taskManager,
+        SubtitleLanguages languages)
     {
         _libraryManager = libraryManager;
         _userManager = userManager;
@@ -121,6 +123,7 @@ public partial class LapseController : ControllerBase
         _sessionManager = sessionManager;
         _extraction = extraction;
         _taskManager = taskManager;
+        _languages = languages;
     }
 
     /// <summary>

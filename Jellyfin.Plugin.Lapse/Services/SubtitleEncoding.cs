@@ -15,10 +15,11 @@ namespace Jellyfin.Plugin.Lapse.Services;
 /// Reads subtitle files without assuming UTF-8.
 ///
 /// Lots of subs aren't (Arabic is usually 1256, Russian 1251, Greek 1253, old Western
-/// ones 1252). Reading those as UTF-8 silently turns letters into question marks, and the
-/// next write makes it permanent. So: BOM if there is one, UTF-8 if the bytes are valid
-/// UTF-8, otherwise guess the legacy code page that makes most sense. New files go out as
-/// UTF-8 without BOM, files edited in place keep their encoding (<see cref="ReadDocumentAsync"/>).
+/// ones 1252, and Chinese, Japanese and Korean have their own). Reading those as UTF-8
+/// silently turns letters into question marks, and the next write makes it permanent.
+/// So: BOM if there is one, UTF-8 if the bytes are valid UTF-8, otherwise
+/// guess the legacy code page that makes most sense. New files go out as UTF-8 without BOM,
+/// files edited in place keep their encoding (<see cref="ReadDocumentAsync"/>).
 /// </summary>
 public static class SubtitleEncoding
 {
@@ -32,7 +33,11 @@ public static class SubtitleEncoding
         (874, '฀', '๿'),  // Thai
         (1254, 'À', 'ſ'), // Turkish
         (1250, 'À', 'ſ'), // Central European
-        (1252, 'À', 'ÿ')  // Western European
+        (1252, 'À', 'ÿ'), // Western European
+        (932, '぀', '鿿'), // Japanese (Shift_JIS), kana and kanji
+        (949, '가', '힣'), // Korean
+        (54936, '一', '鿿'), // Chinese, GB18030 covers GBK
+        (950, '一', '鿿')  // Traditional Chinese (Big5)
     };
 
     private static int _providerRegistered;
@@ -210,9 +215,9 @@ public static class SubtitleEncoding
 
         foreach (var c in text)
         {
-            if (c < 0x80)
+            if (c < 0x80 || (c >= '　' && c <= '〿') || (c >= '！' && c <= '｠'))
             {
-                // ASCII is the same in all of these, tells us nothing
+                // ASCII is the same in all of these, and so is CJK punctuation, tells us nothing
                 continue;
             }
 
