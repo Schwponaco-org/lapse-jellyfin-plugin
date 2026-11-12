@@ -50,7 +50,7 @@
     // Offer "sync even when unsure" right where the skip happened, it's the only way to get a doubtful result written.
     function confirmForceRetry(message, engineId, view, retry) {
         if (!engineId) {
-            Dashboard.alert(message + '\n\n' + FORCE_HINT);
+            tell('Left the original alone', message + ' ' + FORCE_HINT);
             return;
         }
 
@@ -72,7 +72,7 @@
                 retry();
             }
         }).catch(function (err) {
-            Dashboard.alert('Could not turn it on: ' + err.message);
+            tell('Could not turn it on', err.message);
         });
     }
 
@@ -663,12 +663,12 @@
                 button.disabled = true;
                 lapsePost('Lapse/History/' + button.getAttribute('data-id') + '/Revert')
                     .then(function (result) {
-                        Dashboard.alert((result && result.Outcome) || 'Put back.');
+                        tell('Undo', (result && result.Outcome) || 'Put back.');
                         return refreshItemList(view).then(function () { return refreshOverview(view); });
                     })
                     .catch(function (err) {
                         button.disabled = false;
-                        Dashboard.alert('Could not undo that: ' + err.message);
+                        tell('Could not undo that', err.message);
                     });
             });
         });
@@ -1155,7 +1155,7 @@
                     lapsePost('Lapse/Engines/' + id + '/Default').then(function () {
                         return refreshEngines(view).then(function () { return refreshOverview(view); });
                     }).catch(function (err) {
-                        Dashboard.alert('Could not set the default engine: ' + err.message);
+                        tell('Could not set the default engine', err.message);
                     });
                 });
             }
@@ -1209,7 +1209,7 @@
                             return refreshEngines(view).then(function () { return refreshOverview(view); });
                         }).catch(function (err) {
                             Dashboard.hideLoadingMsg();
-                            Dashboard.alert('Could not remove that engine: ' + err.message);
+                            tell('Could not remove that engine', err.message);
                             return refreshEngines(view);
                         });
                     });
@@ -1230,7 +1230,7 @@
             return refreshEngines(view).then(function () { return refreshOverview(view); });
         }).catch(function (err) {
             Dashboard.hideLoadingMsg();
-            Dashboard.alert('Could not install that engine: ' + err.message);
+            tell('Could not install that engine', err.message);
             return refreshEngines(view);
         });
     }
@@ -1241,11 +1241,11 @@
 
         lapsePost('Lapse/Engines/' + id + '/Update').then(function (result) {
             Dashboard.hideLoadingMsg();
-            Dashboard.alert(id + ': ' + ((result && result.Outcome) || 'done'));
+            tell(engineName(id), (result && result.Outcome) || 'Updated.');
             return refreshEngines(view).then(function () { return refreshOverview(view); });
         }).catch(function (err) {
             Dashboard.hideLoadingMsg();
-            Dashboard.alert('Could not update that engine: ' + err.message);
+            tell('Could not update that engine', err.message);
             return refreshEngines(view);
         });
     }
@@ -1267,11 +1267,11 @@
                 return s.EngineId + ': up to date (' + s.LatestVersion + ')';
             });
 
-            Dashboard.alert(lines.join('\n'));
+            tell('Engine updates', lines.join('\n'));
             return refreshEngines(view);
         }).catch(function (err) {
             Dashboard.hideLoadingMsg();
-            Dashboard.alert('Could not check for updates: ' + err.message);
+            tell('Could not check for updates', err.message);
         });
     }
 
@@ -1322,7 +1322,7 @@
         lapseDelete('Lapse/Engines/Cache').then(function () {
             return refreshEngineCache(view);
         }).catch(function (err) {
-            Dashboard.alert('Could not clear the cache: ' + err.message);
+            tell('Could not clear the cache', err.message);
         });
     }
 
@@ -1494,7 +1494,7 @@
             });
         }).catch(function (err) {
             Dashboard.hideLoadingMsg();
-            Dashboard.alert('Could not save the library settings: ' + err.message);
+            tell('Could not save the library settings', err.message);
         });
     }
 
@@ -1550,7 +1550,7 @@
                     refreshQueue(view);
                 }).catch(function (err) {
                     Dashboard.hideLoadingMsg();
-                    Dashboard.alert('Could not start the sync: ' + err.message);
+                    tell('Could not start the sync', err.message);
                 });
             });
 
@@ -1569,7 +1569,7 @@
             Dashboard.hideLoadingMsg();
 
             if (!series || series.length === 0) {
-                Dashboard.alert('No series found in that library.');
+                tell('Sync a season', 'There are no series in that library yet.');
                 return;
             }
 
@@ -1608,7 +1608,7 @@
                     syncButton.disabled = false;
                 }).catch(function (err) {
                     seasonSelect.innerHTML = '<option value="">Could not load seasons</option>';
-                    Dashboard.alert('Could not load seasons: ' + err.message);
+                    tell('Could not load seasons', err.message);
                 });
             }
 
@@ -1631,12 +1631,12 @@
                     refreshQueue(view);
                 }).catch(function (err) {
                     Dashboard.hideLoadingMsg();
-                    Dashboard.alert('Could not start the sync: ' + err.message);
+                    tell('Could not start the sync', err.message);
                 });
             });
         }).catch(function (err) {
             Dashboard.hideLoadingMsg();
-            Dashboard.alert('Could not load the series list: ' + err.message);
+            tell('Could not load the series list', err.message);
         });
     }
 
@@ -1853,7 +1853,7 @@
         lapsePost('Lapse/Skip', { ItemId: itemId, Skip: skip }).then(function () {
             return Promise.all([refreshItemList(view), refreshOverview(view)]);
         }).catch(function (err) {
-            Dashboard.alert('Could not change that: ' + err.message);
+            tell('Could not change that', err.message);
         });
     }
 
@@ -1864,9 +1864,8 @@
                     // Nothing came off, so this item is covered by a rule on its series or
                     // its folder and the row will still be greyed out.
                     if (result && result.Removed === 0) {
-                        Dashboard.alert('This one is not on the list itself - it is ' +
-                            'covered by a rule on its series or its folder. Take that ' +
-                            'rule off under Settings, Ignore list.');
+                        tell('Still ignored', 'This item is covered by a rule on its series or its folder. ' +
+                            'Remove that rule under Settings, Ignore list.');
                     }
                 })
             : lapsePost('Lapse/Ignore', { ItemId: itemId });
@@ -1874,7 +1873,7 @@
         request.then(function () {
             return Promise.all([refreshItemList(view), refreshIgnoreRules(view), refreshOverview(view)]);
         }).catch(function (err) {
-            Dashboard.alert('Could not change the ignore list: ' + err.message);
+            tell('Could not change the ignore list', err.message);
         });
     }
 
@@ -1896,7 +1895,7 @@
                     return;
                 }
 
-                Dashboard.alert('No external subtitle found for ' + name + '.');
+                tell(name, 'There is no subtitle file to sync. Add one, or turn on fetching from OpenSubtitles under Experimental.');
                 return;
             }
 
@@ -1907,7 +1906,7 @@
 
             openSubtitlePickerDialog(view, itemId, name, subtitles);
         }).catch(function (err) {
-            Dashboard.alert('Could not check subtitles for ' + name + ': ' + err.message);
+            tell(name, 'Could not read its subtitles. ' + err.message);
         });
     }
 
@@ -1922,9 +1921,10 @@
             });
             refreshItemList(view);
             refreshOverview(view);
+            refreshReview(view);
         }).catch(function (err) {
             Dashboard.hideLoadingMsg();
-            Dashboard.alert('Sync failed for ' + name + ': ' + err.message);
+            tell(name, 'The sync failed. ' + err.message);
         });
     }
 
@@ -1974,12 +1974,18 @@
         Dashboard.dialogHelper.close(dlg);
     }
 
+    // A toast is gone before anything longer than "Saved" has been read, so results stay up until
+    // closed. Jellyfin reads the message as HTML, hence the escaping.
+    function tell(title, message) {
+        Dashboard.alert({ title: title, message: escapeHtml(message).replace(/\n/g, '<br>') });
+    }
+
     // Jellyfin's confirm, with the action named on the button instead of OK. Resolves true or false.
     function confirmAction(title, text, confirmText, destructive) {
         return new Promise(function (resolve) {
             Dashboard.confirm({
                 title: title,
-                text: text,
+                text: escapeHtml(text),
                 confirmText: confirmText,
                 primary: destructive === false ? null : 'delete'
             }, title, resolve);
@@ -2003,25 +2009,26 @@
         });
     }
 
+    // "8.7 s later", "250 ms earlier", the same way the history puts it
+    function distance(ms) {
+        var size = Math.abs(ms);
+        var text = size < 1000 ? size + ' ms' : (size / 1000).toFixed(size < 10000 ? 1 : 0) + ' s';
+        return text + (ms < 0 ? ' earlier' : ' later');
+    }
+
     function describeResult(result) {
         var parts = [];
         var split = result.PartOffsetsMs && result.PartOffsetsMs.length > 1 ? result.PartOffsetsMs : null;
 
         // LAPSE 2.3.0 says where each part went, older builds give one number for the lot
         if (split) {
-            parts.push('split into ' + split.length + ' parts, moved ' + split.map(function (o) {
-                return o + 'ms';
-            }).join(' then '));
+            parts.push('moved in ' + split.length + ' parts, ' + split.map(distance).join(' then '));
         } else if (result.OffsetMs != null && result.OffsetMs !== 0) {
-            parts.push('offset ' + result.OffsetMs + 'ms');
+            parts.push('moved ' + distance(result.OffsetMs));
         }
 
         if (result.Slope != null) {
-            parts.push('stretched by ' + (result.Slope * 100).toFixed(3) + '%');
-        }
-
-        if (!split && result.Mode === 'Split' && result.Penalty != null) {
-            parts.push('split into ' + result.Penalty + ' parts');
+            parts.push('stretched to fit');
         }
 
         if (result.Snapped) {
@@ -2029,7 +2036,7 @@
         }
 
         if (result.Reference === 'vad+whisper') {
-            parts.push('checked with whisper');
+            parts.push('checked against the words with whisper');
         }
 
         if (parts.length === 0 && result.EngineOutput) {
@@ -2037,75 +2044,62 @@
             parts.push(result.EngineOutput);
         }
 
-        if (result.Verdict) {
-            parts.push(result.Verdict);
-        } else if (result.Confidence != null) {
-            parts.push('confidence ' + Math.round(result.Confidence * 100) + '%');
-        }
-
-        return parts.join(', ') || 'done';
+        return parts.join(', ') || 'lined up';
     }
 
-    // "moved it 20ms", or for a split file every part, which LAPSE 2.3.0 reports
-    function wouldHaveMoved(result) {
-        var parts = result.PartOffsetsMs && result.PartOffsetsMs.length > 1 ? result.PartOffsetsMs : null;
-        return parts
-            ? 'moved its parts ' + parts.map(function (o) { return o + 'ms'; }).join(', ')
-            : 'moved it ' + (result.OffsetMs || 0) + 'ms';
+    function capitalize(text) {
+        return text.charAt(0).toUpperCase() + text.slice(1);
     }
 
     function showSyncResultAlert(name, result, view, retry) {
         if (!result.Success) {
-            Dashboard.alert(name + ': sync failed - ' + result.Error);
+            tell(name, 'The sync failed. ' + result.Error);
             return;
         }
 
         if (result.AlreadyInSync) {
-            Dashboard.alert(name + ': already in sync, so the file was left exactly as it was.\n\n' +
-                'The engine would have ' + wouldHaveMoved(result) + ', which is inside the ' +
-                'tolerance set under File output.');
+            tell(name, 'Already in sync, so the file was left as it was. LAPSE would have ' + describeResult(result) +
+                ', which is inside the tolerance under File output.');
             return;
         }
 
         if (result.CandidateCount > 0) {
-            Dashboard.alert(name + ': LAPSE was not sure, so the other engines had a go too. ' + result.CandidateCount +
-                ' answers are waiting as extra subtitle tracks. Play the item, try them, and keep the one that lines up.');
+            tell(name, 'LAPSE was not sure, so the other engines had a go too. Their ' + result.CandidateCount +
+                ' answers are waiting under Multi engine sync. Nothing was overwritten.');
             return;
         }
 
         if (result.Forced && (result.Skipped || result.Unconfirmed)) {
-            Dashboard.alert(name + ': this subtitle has too few lines for LAPSE to check its answer, so the original was left alone' +
-                (result.Unconfirmed && result.OutputPath ? ' and the forced guess was written to ' + result.OutputPath : '') +
-                '.\n\nA short track like this is best lined up against the full subtitle, with Sync Subtitles to Reference.');
+            tell(name, 'This subtitle has too few lines for LAPSE to check its answer, so the original was left alone.' +
+                (result.Unconfirmed ? ' Its guess is waiting in Review.' : '') +
+                ' A short track like this is best synced to the full subtitle with Sync to reference.');
             return;
         }
 
         // "nothing" means the subtitle doesn't belong to this video at all. Forcing it
         // through would only write a wrong subtitle, so that offer isn't made for it.
         if (result.Verdict === 'nothing' && (result.Skipped || result.Unconfirmed)) {
-            Dashboard.alert(name + ': LAPSE could not match this subtitle to the audio at all (' + describeResult(result) + ').\n\n' +
-                'That nearly always means it was made for a different release or a different film. The original was left alone' +
-                (result.Unconfirmed && result.OutputPath ? ', and its guess was written to ' + result.OutputPath : '') + '.');
+            tell(name, 'LAPSE could not match this subtitle to the audio, which nearly always means it was made for ' +
+                'a different release. The original was left alone.' +
+                (result.Unconfirmed ? ' Its guess is waiting in Review.' : ''));
             return;
         }
 
         if (result.Skipped) {
             confirmForceRetry(
-                name + ': left the original alone (' + describeResult(result) + ').\n\n' +
-                'The engine was not confident enough, and File output is set to keep the original ' +
-                'when that happens.',
+                name + ': LAPSE ' + describeResult(result) + ' but was not sure, and File output is set to keep the original then.',
                 result.EngineId, view, retry);
             return;
         }
 
-        var engine = findEngine(result.EngineId);
-        var engineLabel = engine ? engine.DisplayName : (result.EngineId || 'engine');
-        var written = result.OutputPath ? ('\nWrote ' + result.OutputPath) : '';
-        var doubt = result.LowConfidence
-            ? '\n\nThe engine wasn\'t sure about this one, so it went to a sidecar rather than over the original.'
-            : '';
+        if (result.Unconfirmed || result.LowConfidence) {
+            tell(name, capitalize(describeResult(result)) + ', but LAPSE was not sure, so the original was left alone ' +
+                'and the result written beside it. It is waiting in Review.');
+            return;
+        }
 
-        Dashboard.alert(name + ': synced with ' + engineLabel + ' (' + describeResult(result) + ')' + written + doubt);
+        tell(name, 'Synced: ' + describeResult(result) + '.' +
+            (result.OutputPath ? ' Written to ' + fileNameOf(result.OutputPath) + '.' : ''));
     }
 
     // --- advanced sync dialog ---
@@ -2114,7 +2108,7 @@
         lapseGet('Lapse/Items/' + itemId + '/Subtitles').then(function (subtitles) {
             showAdvancedDialog(view, itemId, name, subtitles);
         }).catch(function (err) {
-            Dashboard.alert('Could not open advanced sync for ' + name + ': ' + err.message);
+            tell(name, 'Could not read its subtitles. ' + err.message);
         });
     }
 
@@ -2217,17 +2211,17 @@
 
                 lapsePost('Lapse/SyncFromCopy', request).then(function (result) {
                     Dashboard.hideLoadingMsg();
-                    Dashboard.alert(name + ': ' + (!result.Success
-                        ? 'could not move it - ' + result.Error
+                    tell(name, !result.Success
+                        ? 'Could not move it. ' + result.Error
                         : result.Skipped
-                            ? 'LAPSE could not line the two copies up well enough (' + describeResult(result) + '), so nothing was written.'
+                            ? 'LAPSE could not line the two copies up well enough, so nothing was written. Check that both really are the same film.'
                             : result.Unconfirmed
-                                ? 'LAPSE was not sure (' + describeResult(result) + '). It was written as ' + fileNameOf(result.OutputPath || '') + ' for you to check.'
-                                : 'moved across as ' + fileNameOf(result.OutputPath || '') + ', ' + describeResult(result) + '.'));
+                                ? 'LAPSE was not sure, so it was written as ' + fileNameOf(result.OutputPath || '') + ' and is waiting in Review.'
+                                : 'Moved across as ' + fileNameOf(result.OutputPath || '') + '.');
                     return Promise.all([refreshItemList(view), refreshOverview(view)]);
                 }).catch(function (err) {
                     Dashboard.hideLoadingMsg();
-                    Dashboard.alert('Could not move it: ' + err.message);
+                    tell('Could not move it', err.message);
                 });
             });
         }).catch(function () {
@@ -2238,7 +2232,7 @@
     function showAdvancedDialog(view, itemId, name, subtitles) {
         var startEngine = defaultEngine();
         if (!startEngine) {
-            Dashboard.alert('No engines are available.');
+            tell(name, 'No engine is installed. Install one under Settings, Engines.');
             return;
         }
 
@@ -2456,7 +2450,7 @@
                 var targetPath = overlay.querySelector('#lapseAdvReferenceTarget').value;
 
                 if (targetPath && targetPath === referencePath) {
-                    Dashboard.alert('That is the reference itself. Pick another subtitle, or sync every other one.');
+                    tell('Sync to reference', 'That is the reference itself. Pick another subtitle, or sync every other one.');
                     return;
                 }
 
@@ -2476,7 +2470,7 @@
                     refreshOverview(view);
                 }).catch(function (err) {
                     Dashboard.hideLoadingMsg();
-                    Dashboard.alert('Could not sync the other subtitles: ' + err.message);
+                    tell('Could not sync the other subtitles', err.message);
                 });
             });
         }
@@ -2493,7 +2487,7 @@
             translateButton.addEventListener('click', function () {
                 var target = (overlay.querySelector('#lapseAdvTargetLang').value || '').trim();
                 if (!target) {
-                    Dashboard.alert('Enter the language code to translate into first, e.g. es for Spanish.');
+                    tell('Translate', 'Enter the language to translate into first, for example es for Spanish.');
                     return;
                 }
 
@@ -2511,7 +2505,7 @@
                     showTranslationAlert(name, result);
                 }).catch(function (err) {
                     Dashboard.hideLoadingMsg();
-                    Dashboard.alert('Translation failed: ' + err.message);
+                    tell('Translation failed', err.message);
                 });
             });
         }
@@ -2521,7 +2515,7 @@
             nudgeButton.addEventListener('click', function () {
                 var offset = parseFloat(overlay.querySelector('#lapseAdvNudge').value);
                 if (!offset) {
-                    Dashboard.alert('Enter how many seconds to move the subtitle first.');
+                    tell('Shift by hand', 'Enter how many seconds to move the subtitle first.');
                     return;
                 }
 
@@ -2532,10 +2526,12 @@
                     OffsetSeconds: offset
                 }).then(function (result) {
                     Dashboard.hideLoadingMsg();
-                    Dashboard.alert('Moved ' + result.Shifted + ' timestamps by ' + offset + 's.\nWrote ' + result.OutputPath);
+                    tell(name, 'Shifted ' + distance(Math.round(offset * 1000)) + '. Written to ' + fileNameOf(result.OutputPath) +
+                        ', and it can be undone from Recent activity.');
+                    refreshOverview(view);
                 }).catch(function (err) {
                     Dashboard.hideLoadingMsg();
-                    Dashboard.alert('Could not shift the subtitle: ' + err.message);
+                    tell('Could not shift the subtitle', err.message);
                 });
             });
         }
@@ -2547,20 +2543,18 @@
             return outcome.DisplayName + ': ' + (r.Success ? describeResult(r) : ('failed - ' + r.Error));
         });
 
-        Dashboard.alert(name + ': ' + result.SucceededCount + ' of ' + result.Results.length +
+        tell(name, result.SucceededCount + ' of ' + result.Results.length +
             ' subtitles synced to the reference.\n\n' + lines.join('\n'));
     }
 
     function showTranslationAlert(name, result) {
         if (!result.Success) {
-            Dashboard.alert('Translation failed: ' + result.Error);
+            tell(name, 'The translation failed. ' + result.Error);
             return;
         }
 
-        Dashboard.alert(name + ': translated ' + result.TranslatedCount + ' of ' + result.LineCount +
-            ' lines with ' + result.Provider + '.\n' +
-            'Average confidence ' + result.AverageConfidence + '%, ' + result.LowConfidenceCount + ' below the threshold.\n' +
-            'Wrote ' + result.OutputPath);
+        tell(name, 'Translated ' + result.TranslatedCount + ' of ' + result.LineCount + ' lines with ' + result.Provider +
+            ', ' + result.LowConfidenceCount + ' of them below the confidence threshold. Written to ' + fileNameOf(result.OutputPath) + '.');
     }
 
     // --- bulk sync + folders ---
@@ -2583,7 +2577,7 @@
             startQueuePolling(view);
             refreshQueue(view);
         }).catch(function (err) {
-            Dashboard.alert('Could not start sync: ' + err.message);
+            tell('Could not start sync', err.message);
         });
     }
 
@@ -2639,11 +2633,11 @@
                 lines.push('...and ' + (left.length - 20) + ' more.');
             }
 
-            Dashboard.alert(lines.join('\n'));
+            tell('Undo run', lines.join('\n'));
             return Promise.all([refreshRuns(view), refreshItemList(view), refreshOverview(view)]);
         }).catch(function (err) {
             button.disabled = false;
-            Dashboard.alert('Could not undo that run: ' + err.message);
+            tell('Could not undo that run', err.message);
         });
     }
 
@@ -2658,7 +2652,7 @@
         lapsePost('Lapse/Skip', { ItemId: option.value, Skip: !isSkipped }).then(function () {
             return Promise.all([refreshFolders(view), refreshItemList(view)]);
         }).catch(function (err) {
-            Dashboard.alert('Could not change that: ' + err.message);
+            tell('Could not change that', err.message);
         });
     }
 
@@ -2700,7 +2694,7 @@
                 lapseDelete('Lapse/Ignore?' + query).then(function () {
                     return Promise.all([refreshIgnoreRules(view), refreshItemList(view), refreshOverview(view)]);
                 }).catch(function (err) {
-                    Dashboard.alert('Could not remove that rule: ' + err.message);
+                    tell('Could not remove that rule', err.message);
                 });
             });
         });
@@ -2785,7 +2779,7 @@
                 }).then(function () {
                     searchForIgnore(view);
                 }).catch(function (err) {
-                    Dashboard.alert('Could not add that: ' + err.message);
+                    tell('Could not add that', err.message);
                 });
             });
         });
@@ -2887,7 +2881,7 @@
         var inputPath = view.querySelector('#lapseInputSubPath').value;
 
         if (!referencePath || !inputPath) {
-            Dashboard.alert('Pick both a reference and an input subtitle first.');
+            tell('Subtitle to subtitle', 'Pick both a reference and an input subtitle first.');
             return;
         }
 
@@ -2896,7 +2890,7 @@
         if (view.querySelector('#lapseSubToSubNewFile').checked) {
             var outputPath = (view.querySelector('#lapseSubToSubOutput').value || '').trim();
             if (!outputPath) {
-                Dashboard.alert('Give the new subtitle file a name, or untick the box to overwrite the input.');
+                tell('Subtitle to subtitle', 'Give the new subtitle file a name, or untick the box to overwrite the input.');
                 return;
             }
 
@@ -2912,11 +2906,10 @@
         lapsePost('Lapse/SyncSubtitles', body).then(function (result) {
             Dashboard.hideLoadingMsg();
             if (!result.Success) {
-                Dashboard.alert('Sync failed: ' + result.Error);
+                tell('Subtitle to subtitle', 'The sync failed. ' + result.Error);
             } else if (result.AlreadyInSync) {
-                Dashboard.alert('Already in sync, so the input was left exactly as it was. The engine ' +
-                    'would have ' + wouldHaveMoved(result) + ', which is inside the tolerance ' +
-                    'set under File output.');
+                tell('Subtitle to subtitle', 'Already in sync, so the input was left as it was. LAPSE would have ' +
+                    describeResult(result) + ', which is inside the tolerance under File output.');
             } else if (result.Skipped) {
                 confirmForceRetry(
                     'Left the input alone (' + describeResult(result) + '), which is under the confidence threshold.',
@@ -2924,14 +2917,14 @@
                         attemptSubToSubSync(view, body);
                     });
             } else if (result.Unconfirmed) {
-                Dashboard.alert('LAPSE was not sure about this one (' + describeResult(result) + '), so it is not ' +
-                    'counted as synced. Wrote ' + result.OutputPath + ' for you to check, without touching any file already there.');
+                tell('Subtitle to subtitle', capitalize(describeResult(result)) + ', but LAPSE was not sure. ' +
+                    'Written to ' + result.OutputPath + ' for you to check, without touching any file already there.');
             } else {
-                Dashboard.alert('Synced! (' + describeResult(result) + ')\nWrote ' + result.OutputPath);
+                tell('Subtitle to subtitle', 'Synced: ' + describeResult(result) + '. Written to ' + result.OutputPath + '.');
             }
         }).catch(function (err) {
             Dashboard.hideLoadingMsg();
-            Dashboard.alert('Sync failed: ' + err.message);
+            tell('Sync failed', err.message);
         });
     }
 
@@ -3434,7 +3427,7 @@
             });
         }).catch(function (err) {
             Dashboard.hideLoadingMsg();
-            Dashboard.alert('Could not start the extraction: ' + err.message);
+            tell('Could not start the extraction', err.message);
         });
     }
 
@@ -3730,10 +3723,10 @@
                     ItemId: button.getAttribute('data-item'),
                     OriginalPath: button.getAttribute('data-original')
                 }).then(function (decision) {
-                    Dashboard.alert(decision.Message || 'Removed.');
+                    tell('Multi engine sync', decision.Message || 'Removed.');
                     refreshMultiEngine(view);
                 }).catch(function (err) {
-                    Dashboard.alert('Could not remove them: ' + err.message);
+                    tell('Could not remove them', err.message);
                 });
             });
         });
@@ -3820,7 +3813,7 @@
             button.addEventListener('click', function () {
                 playAt(button.getAttribute('data-item'), Number(button.getAttribute('data-stream')), Number(button.getAttribute('data-seconds')))
                     .catch(function (err) {
-                        Dashboard.alert('Could not start the player: ' + ((err && err.message) || 'the server said no'));
+                        tell('Could not start the player', (err && err.message) || 'The server said no.');
                     });
             });
         });
@@ -3847,9 +3840,9 @@
     // Reloads either way: when another browser got there first the server says so, and the list should catch up.
     function decideReview(view, path, body) {
         lapsePost(path, body).then(function (decision) {
-            Dashboard.alert(decision.Message || 'Done.');
+            tell('Review', decision.Message || 'Done.');
         }).catch(function (err) {
-            Dashboard.alert(err.message);
+            tell('Review', err.message);
         }).then(function () {
             return refreshReview(view);
         });
@@ -4060,7 +4053,7 @@
             });
         }).catch(function (err) {
             Dashboard.hideLoadingMsg();
-            Dashboard.alert('Could not save: ' + err.message);
+            tell('Could not save', err.message);
         });
     }
 
@@ -4140,9 +4133,8 @@
             // every panel fed from the failed call looking like a broken button.
             Dashboard.hideLoadingMsg();
             console.error('LAPSE: could not load the dashboard', err);
-            Dashboard.alert('Some of the dashboard could not be loaded: ' +
-                ((err && err.message) || 'the server did not answer') +
-                '. Reload the page, and check the Jellyfin log if it keeps happening.');
+            tell('Some of LAPSE could not be loaded', ((err && err.message) || 'The server did not answer.') +
+                ' Reload the page, and check the Jellyfin log if it keeps happening.');
         });
     }
 
@@ -4174,7 +4166,7 @@
                 refreshQueue(view);
             }).catch(function (err) {
                 button.disabled = false;
-                Dashboard.alert('Could not stop the job: ' + err.message);
+                tell('Could not stop the job', err.message);
             });
         });
         // A filter-like toggle sitting above the list, so it saves itself rather than
@@ -4185,7 +4177,7 @@
             }).then(function () {
                 return Promise.all([refreshItemList(view), refreshOverview(view)]);
             }).catch(function (err) {
-                Dashboard.alert('Could not save: ' + err.message);
+                tell('Could not save', err.message);
             });
         });
         wireItemListActions(view);
@@ -4218,7 +4210,7 @@
         view.querySelector('#lapseAutoUpdateEngines').addEventListener('change', function () {
             var enabled = view.querySelector('#lapseAutoUpdateEngines').checked;
             lapsePost('Lapse/Engines/AutoUpdate?enabled=' + enabled).catch(function (err) {
-                Dashboard.alert('Could not change auto-update: ' + err.message);
+                tell('Could not change auto-update', err.message);
             });
         });
         view.querySelector('#btnSaveLibraries').addEventListener('click', function () {
@@ -4353,7 +4345,7 @@
 
                 renderWebhookUrl(view);
             }).catch(function (err) {
-                Dashboard.alert('Could not make a new URL: ' + err.message);
+                tell('Could not make a new URL', err.message);
             });
         });
         view.querySelector('#btnRunExtract').addEventListener('click', function () {
@@ -4379,7 +4371,7 @@
         view.querySelector('#btnAddIgnorePath').addEventListener('click', function () {
             var path = (view.querySelector('#lapseIgnorePath').value || '').trim();
             if (!path) {
-                Dashboard.alert('Pick or type a path first.');
+                tell('Ignore list', 'Pick or type a path first.');
                 return;
             }
 
@@ -4387,7 +4379,7 @@
                 view.querySelector('#lapseIgnorePath').value = '';
                 return Promise.all([refreshIgnoreRules(view), refreshItemList(view), refreshOverview(view)]);
             }).catch(function (err) {
-                Dashboard.alert('Could not add that path: ' + err.message);
+                tell('Could not add that path', err.message);
             });
         });
 
