@@ -69,6 +69,18 @@ public class EngineTests
     }
 
     [Fact]
+    public void AMuslSystemGetsTheMuslBuild()
+    {
+        var lapse = new LapseEngine().Descriptor;
+        var alass = new AlassEngine().Descriptor;
+
+        Assert.EndsWith("/lapse-linux-musl-arm64.tar.gz", lapse.GetLinuxDownload(arm: true, musl: true)!.Url, StringComparison.Ordinal);
+        Assert.EndsWith("/lapse-linux-musl-amd64.tar.gz", lapse.GetLinuxDownload(arm: false, musl: true)!.Url, StringComparison.Ordinal);
+        Assert.EndsWith("/lapse-linux-amd64.tar.gz", lapse.GetLinuxDownload(arm: false, musl: false)!.Url, StringComparison.Ordinal);
+        Assert.Same(alass.LinuxAmd64, alass.GetLinuxDownload(arm: false, musl: true));
+    }
+
+    [Fact]
     public void RecognisesItsOwnSidecars()
     {
         var all = new[] { "/m/Film.en.srt", "/m/Film.en.shifted.srt", "/m/Film.da.shifted.srt", "/m/Old.sub", "/m/Old.shifted.srt" };

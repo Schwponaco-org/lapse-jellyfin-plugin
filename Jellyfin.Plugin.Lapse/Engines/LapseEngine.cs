@@ -240,6 +240,8 @@ public partial class LapseEngine : IEngine
                 + "you keep media that isn't in a Jellyfin library. Setup and settings are in the repo.",
             LinuxAmd64 = Archive("lapse-linux-amd64.tar.gz", EnginePackaging.TarGz),
             LinuxArm64 = Archive("lapse-linux-arm64.tar.gz", EnginePackaging.TarGz),
+            LinuxMuslAmd64 = Archive("lapse-linux-musl-amd64.tar.gz", EnginePackaging.TarGz),
+            LinuxMuslArm64 = Archive("lapse-linux-musl-arm64.tar.gz", EnginePackaging.TarGz),
             MacAmd64 = Archive("lapse-macos-x86_64.tar.gz", EnginePackaging.TarGz),
             MacArm64 = Archive("lapse-macos-arm64.tar.gz", EnginePackaging.TarGz),
             WindowsAmd64 = Archive("lapse-windows-x64.zip", EnginePackaging.Zip),
