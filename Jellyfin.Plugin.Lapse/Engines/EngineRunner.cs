@@ -442,7 +442,7 @@ public class EngineRunner
                     // No time limit, a long film just takes a while and the Stop button is the
                     // way out. Cancelling kills the engine and the ffmpeg it started.
                     var process = await ProcessRunner
-                        .RunAsync(enginePath, arguments, null, cancellationToken, si => PrepareEnvironment(si, ffmpegDirectory, environment))
+                        .RunAsync(enginePath, arguments, null, cancellationToken, si => PrepareEnvironment(si, ffmpegDirectory, environment), lowPriority: true)
                         .ConfigureAwait(false);
 
                     output = (process.Stdout, process.Stderr, process.ExitCode);
