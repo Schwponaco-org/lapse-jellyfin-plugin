@@ -780,10 +780,13 @@
         button.addEventListener('click', function (e) {
             e.stopPropagation();
 
-            // Close before onClick: some of these open an overlay that closes on Escape, and the sheet's
-            // close would land on that instead.
+            // The sheet closes through the client's history, and a dialog opened before that has
+            // finished is closed with it, so onClick waits until the sheet has gone.
+            var sheet = button.closest('.actionSheet');
             closeActionSheet(button);
-            onClick(e);
+            whenGone(sheet, function () {
+                onClick(e);
+            });
         });
         return button;
     }
@@ -796,6 +799,19 @@
         if (sheet && document.body.contains(sheet)) {
             sheet.dispatchEvent(new CustomEvent('_close', { bubbles: false, cancelable: false }));
         }
+    }
+
+    function whenGone(element, then) {
+        var started = Date.now();
+
+        (function check() {
+            if (!element || !document.body.contains(element) || Date.now() - started > 1000) {
+                // and one more frame for the history step that follows the removal
+                setTimeout(then, 50);
+            } else {
+                requestAnimationFrame(check);
+            }
+        })();
     }
 
     function addMenuButtons(sheet, context) {
