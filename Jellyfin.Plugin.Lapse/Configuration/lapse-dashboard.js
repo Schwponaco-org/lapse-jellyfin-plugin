@@ -1295,7 +1295,7 @@
             view.querySelector('#lapseEngineCacheNote').textContent =
                 'LAPSE remembers the speech it found in each film, so the next subtitle for the same film ' +
                 'takes about a second. That cache is in Jellyfin\'s cache folder and holds ' +
-                (bytes / 1048576).toFixed(1) + ' MB. Clearing it loses nothing, the next sync of each film ' +
+                (bytes < 1048576 ? Math.ceil(bytes / 1024) + ' KB' : (bytes / 1048576).toFixed(1) + ' MB') + '. Clearing it loses nothing, the next sync of each film ' +
                 'just listens to it again.';
         }).catch(function () {
             // purely informational, not worth an error message
