@@ -3,6 +3,7 @@
 // Licensed under GPL v3 - see LICENSE for details
 
 using Jellyfin.Plugin.Lapse.Services;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace Jellyfin.Plugin.Lapse.Tests;
@@ -152,5 +153,17 @@ public class SubtitleFileTests
         Assert.True(SubtitleFormats.TryNormalizeOutputFormat(".VTT", out var vtt));
         Assert.Equal("vtt", vtt);
         Assert.False(SubtitleFormats.TryNormalizeOutputFormat("sub", out _));
+    }
+
+    [Fact]
+    public void UndoingReadableLeavesFilesItDidNotWriteAlone()
+    {
+        var (video, subtitle) = RunnerTests.Film(TestHost.NewFolder());
+        var readable = new ReadableSubtitleService(null!, null!, NullLogger<ReadableSubtitleService>.Instance);
+
+        Assert.False(readable.Revert(video).Success);
+        Assert.False(readable.Revert(subtitle).Success);
+        Assert.True(File.Exists(video));
+        Assert.True(File.Exists(subtitle));
     }
 }
