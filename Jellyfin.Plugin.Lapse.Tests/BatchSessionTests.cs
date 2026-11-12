@@ -70,6 +70,25 @@ public class BatchSessionTests
     }
 
     [Fact]
+    public async Task ANewEnvironmentGetsANewProcess()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var engine = WriteFakeEngine();
+        using var session = new EngineBatchSession(NullLogger.Instance);
+
+        var first = await session.TryRunAsync(engine, new[] { "/m/a.mkv", "/m/a.srt" }, si => si.Environment["LAPSE_WHISPER_CLI"] = "/a", CancellationToken.None);
+        var same = await session.TryRunAsync(engine, new[] { "/m/a.mkv", "/m/a.srt" }, si => si.Environment["LAPSE_WHISPER_CLI"] = "/a", CancellationToken.None);
+        var changed = await session.TryRunAsync(engine, new[] { "/m/a.mkv", "/m/a.srt" }, si => si.Environment["LAPSE_WHISPER_CLI"] = "/b", CancellationToken.None);
+
+        Assert.Equal(Pid(first!.Value.Stdout), Pid(same!.Value.Stdout));
+        Assert.NotEqual(Pid(first.Value.Stdout), Pid(changed!.Value.Stdout));
+    }
+
+    [Fact]
     public async Task AFailedJobComesBackWithItsReason()
     {
         if (OperatingSystem.IsWindows())
