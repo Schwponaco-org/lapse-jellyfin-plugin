@@ -76,6 +76,12 @@ public class SyncHistoryEntry
     public string? Detail { get; set; }
 
     /// <summary>
+    /// Gets or sets a value indicating whether LAPSE was unsure, so the result went beside the
+    /// original for somebody to check. False on entries from before this was kept.
+    /// </summary>
+    public bool Unsure { get; set; }
+
+    /// <summary>
     /// Gets or sets a value indicating whether this has already been undone.
     /// </summary>
     public bool Reverted { get; set; }

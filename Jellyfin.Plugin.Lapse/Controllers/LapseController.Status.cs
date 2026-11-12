@@ -120,8 +120,11 @@ public partial class LapseController
                 Name = item is null ? "(removed from the library)" : SyncQueueManager.DescribeItem(item),
                 Status = entry.Status,
                 WhenUtc = entry.WhenUtc,
-                Detail = entry.Detail,
+                Detail = SyncQueueManager.ReadableDetail(entry.Detail),
                 OutputPath = entry.OutputPath,
+
+                // older entries only said so in the detail line
+                Unsure = entry.Unsure || (entry.Detail?.EndsWith("written beside the original to check", StringComparison.Ordinal) ?? false),
                 Reverted = entry.Reverted,
                 Superseded = entry.Superseded,
                 CanRevert = SyncHistoryService.CanRevert(entry)
@@ -213,7 +216,14 @@ public partial class LapseController
             return NotFound("Item not found");
         }
 
-        return _subtitleLocator.GetExternalSubtitles(item);
+        var subtitles = _subtitleLocator.GetExternalSubtitles(item);
+        var record = SyncQueueManager.FindRecord(item.Id);
+        foreach (var subtitle in subtitles)
+        {
+            subtitle.Synced = record is not null && SyncQueueManager.IsStillSynced(record, subtitle.Path);
+        }
+
+        return subtitles;
     }
 
     /// <summary>

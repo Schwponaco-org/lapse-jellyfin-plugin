@@ -568,17 +568,17 @@ public class MultiEngineSyncService
 
         if (result.OffsetMs is { } offset)
         {
-            parts.Add(offset == 0 ? "left the timing alone" : string.Create(CultureInfo.InvariantCulture, $"moved it {offset}ms"));
+            parts.Add(offset == 0 ? "Left the timing alone" : "Moved " + SyncQueueManager.Seconds(offset));
         }
 
-        if (result.Slope is { } slope)
+        if (result.Slope.HasValue)
         {
-            parts.Add(string.Create(CultureInfo.InvariantCulture, $"stretched it {slope * 100:0.###}%"));
+            parts.Add(parts.Count == 0 ? "Stretched to fit" : "stretched to fit");
         }
 
-        if (result.Verdict is not null)
+        if (result.Verdict is "unsure" or "nothing")
         {
-            parts.Add("LAPSE called this " + result.Verdict);
+            parts.Add(result.Verdict == "unsure" ? "LAPSE was unsure" : "LAPSE found no match in the audio");
         }
 
         var candidate = new SyncCandidate

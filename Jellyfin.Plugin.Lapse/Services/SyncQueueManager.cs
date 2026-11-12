@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.Lapse.Data;
@@ -22,7 +23,7 @@ namespace Jellyfin.Plugin.Lapse.Services;
 /// the default engine and mode against every external subtitle the item has. What it does
 /// to each subtitle (sync, convert, both) comes from <see cref="AutomationAction"/>.
 /// </summary>
-public class SyncQueueManager : IDisposable
+public partial class SyncQueueManager : IDisposable
 {
     private readonly ILibraryManager _libraryManager;
     private readonly LibraryService _libraryService;
@@ -551,6 +552,42 @@ public class SyncQueueManager : IDisposable
                 synced.FileWriteUtc = WriteTimeOf(path);
                 plugin.SaveConfiguration();
             }
+        }
+    }
+
+    /// <summary>
+    /// Puts a shift by hand in the history, so it can be undone from the dashboard like a sync.
+    /// Left out when it went over the subtitle with no backup, there's nothing to undo then.
+    /// </summary>
+    /// <param name="itemId">The item.</param>
+    /// <param name="inputPath">The subtitle that was shifted.</param>
+    /// <param name="shifted">What the shift wrote.</param>
+    /// <param name="offsetMs">How far it was moved, positive is later.</param>
+    public static void RecordShift(Guid itemId, string inputPath, ShiftResult shifted, int offsetMs)
+    {
+        var plugin = Plugin.Instance;
+        var wroteNewFile = shifted.BackupPath is null && !string.Equals(shifted.OutputPath, inputPath, StringComparison.Ordinal);
+        if (plugin is null || (shifted.BackupPath is null && !wroteNewFile))
+        {
+            return;
+        }
+
+        lock (Plugin.ConfigurationLock)
+        {
+            SyncHistoryService.Append(plugin.Configuration, new SyncHistoryEntry
+            {
+                ItemId = itemId,
+                Status = MovieSyncStatus.Synced,
+                OutputPath = shifted.OutputPath,
+
+                // no InputPath: undoing a shift must not make a synced original count as unsynced
+                BackupPath = shifted.BackupPath,
+                WroteNewFile = wroteNewFile,
+                OutputWriteUtc = WriteTimeOf(shifted.OutputPath),
+                Detail = "Shifted " + Seconds(offsetMs) + " by hand."
+            });
+
+            plugin.SaveConfiguration();
         }
     }
 
@@ -1274,42 +1311,70 @@ public class SyncQueueManager : IDisposable
             OutputWriteUtc = WriteTimeOf(result.OutputPath),
 
             // keep it short, a paragraph here pushed the name off the row
-            Detail = DescribeForHistory(result)
+            Detail = DescribeForHistory(result),
+            Unsure = result.Unconfirmed
         };
 
         SyncHistoryService.Append(plugin.Configuration, entry);
         return entry;
     }
 
-    private static string DescribeForHistory(SyncResult result)
+    // Read on the dashboard by people who never see the engine, so plain words, not its output
+    internal static string DescribeForHistory(SyncResult result)
     {
-        var parts = new List<string>();
+        string moved;
 
         // a split file's one offset_ms only covers one part, 2.3.0 says where each went
         if (result.PartOffsetsMs is { Count: > 1 } split)
         {
-            parts.Add("moved " + string.Join(" then ", split.Select(o => o + "ms")));
+            moved = $"Moved in {split.Count} parts, from {Seconds(split.Min())} to {Seconds(split.Max())}";
         }
         else if (result.OffsetMs is not null and not 0)
         {
-            parts.Add($"moved {result.OffsetMs}ms");
+            moved = "Moved " + Seconds(result.OffsetMs.Value);
         }
-
-        if (result.Slope.HasValue)
+        else
         {
-            parts.Add($"stretched {result.Slope.Value * 100:0.###}%");
+            moved = result.Slope.HasValue ? "Stretched to fit" : "Lined up";
         }
 
-        if (result.Verdict is not null)
+        if (string.Equals(result.Verdict, "nothing", StringComparison.Ordinal))
         {
-            parts.Add(result.Verdict);
+            moved = "No match in the audio";
         }
 
-        if (result.Unconfirmed)
+        return result.Unconfirmed
+            ? moved + ". Written beside the original for you to check."
+            : moved + ".";
+    }
+
+    // History written before the plain words, "moved -8707ms, nothing, written beside the original to check"
+    internal static string? ReadableDetail(string? detail)
+    {
+        var old = detail is null ? null : OldDetailRegex().Match(detail);
+        if (old is null || !old.Success)
         {
-            parts.Add("written beside the original to check");
+            return detail;
         }
 
-        return parts.Count == 0 ? "synced" : string.Join(", ", parts);
+        return DescribeForHistory(new SyncResult
+        {
+            OffsetMs = int.Parse(old.Groups["ms"].Value, CultureInfo.InvariantCulture),
+            Verdict = old.Groups["verdict"].Success ? old.Groups["verdict"].Value : null,
+            Unconfirmed = old.Groups["check"].Success
+        });
+    }
+
+    [GeneratedRegex(@"^moved (?<ms>-?\d+)ms(, (?<verdict>solid|unsure|nothing))?(?<check>, written beside the original to check)?$")]
+    private static partial Regex OldDetailRegex();
+
+    // positive means the subtitles come later
+    internal static string Seconds(int ms)
+    {
+        var size = Math.Abs(ms);
+        var text = size < 1000
+            ? size.ToString(CultureInfo.InvariantCulture) + " ms"
+            : (size / 1000.0).ToString(size < 10000 ? "0.0" : "0", CultureInfo.InvariantCulture) + " s";
+        return ms < 0 ? text + " earlier" : text + " later";
     }
 }

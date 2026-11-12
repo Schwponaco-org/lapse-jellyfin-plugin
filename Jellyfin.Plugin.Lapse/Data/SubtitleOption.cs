@@ -56,6 +56,12 @@ public class SubtitleOption
     public string? Codec { get; set; }
 
     /// <summary>
+    /// Gets or sets a value indicating whether it has been synced and not written since. Only
+    /// filled in for the item's own subtitle list.
+    /// </summary>
+    public bool Synced { get; set; }
+
+    /// <summary>
     /// Gets a value indicating whether this file's timings can be shifted by hand.
     /// </summary>
     public bool Shiftable => !IsEmbedded && Services.SubtitleFormats.IsNative(Path);

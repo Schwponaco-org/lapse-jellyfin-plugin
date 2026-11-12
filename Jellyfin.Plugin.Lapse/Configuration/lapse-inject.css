@@ -2,33 +2,6 @@
    Copyright (C) 2026 Rasmus Stisen Jensen (rs-jensen)
    Licensed under GPL v3 - see LICENSE for details */
 
-.lapseOverlay {
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, .6);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 10000;
-}
-
-.lapseDialogCard {
-    background: var(--theme-body-background, #202124);
-    color: inherit;
-    border-radius: .3em;
-    padding: 1.5em;
-    max-width: 90vw;
-    width: 20em;
-    max-height: 90vh;
-    overflow-y: auto;
-    box-shadow: 0 4px 24px rgba(0, 0, 0, .5);
-}
-
-/* The advanced dialog carries a lot more than the little confirm popups do. */
-.lapseDialogCard-wide {
-    width: 30em;
-}
-
 /* One engine's answer in the multi engine picker. The whole row is the target, since this
    gets used on a TV remote as often as with a mouse. */
 .lapseCandidateRow {
@@ -56,40 +29,26 @@
     margin: .15em 0 0;
 }
 
-.lapseDialogCard h3 {
-    margin-top: 0;
-}
-
-.lapseDialogSubhead {
-    margin: 0 0 .4em;
-    font-size: 1em;
-    opacity: .85;
-}
-
-.lapseDialogCard .fieldDescription {
-    font-size: .85em;
-    opacity: .7;
-    line-height: 1.4;
-}
-
-.lapseDialogCard .lapseDialogIntro {
-    margin-bottom: 1.2em;
-}
-
-.lapseDialogRule {
-    border: 0;
-    border-top: 1px solid rgba(255, 255, 255, .12);
-    margin: 1.4em 0 1em;
+.lapseDialogSection {
+    margin: 1.5em 0 .3em;
 }
 
 .lapseDialogButtons {
     display: flex;
+    flex-wrap: wrap;
     gap: .5em;
-    margin-top: 1em;
+    margin: 1.5em 0 1em;
 }
 
-.lapseDialogButtons button {
+.lapseDialogButtons > .emby-button {
     flex: 1;
+    justify-content: center;
+    margin: 0;
+}
+
+/* only when the client has no dialog helper of its own */
+.lapseDialogFallback {
+    background: rgba(0, 0, 0, .6);
 }
 
 /* offset input with its - and + buttons either side */
@@ -132,7 +91,7 @@
 .lapseShiftSlider {
     width: 100%;
     margin: 0;
-    accent-color: var(--accent-color, #00A4DC);
+    accent-color: #00a4dc;
 }
 
 .lapseShiftScale {
@@ -218,32 +177,14 @@
     margin: .25em 0;
 }
 
-.lapseToast .lapseToastText {
-    flex: 1;
-}
-
-.lapseToast .lapseToastButton {
-    margin: 0;
-    flex: none;
-    padding: .2em .8em;
-    font-size: .9em;
-}
-
-.lapseToast {
+.lapseProgressNotice {
     display: flex;
     align-items: center;
     gap: .8em;
-    position: fixed;
-    left: 50%;
-    bottom: 4em;
-    transform: translateX(-50%);
-    background: var(--theme-body-background, #202124);
-    color: inherit;
-    padding: .7em 1.2em;
-    border-radius: .3em;
-    box-shadow: 0 2px 12px rgba(0, 0, 0, .5);
-    z-index: 10001;
-    max-width: 80vw;
+}
+
+.lapseProgressNotice > .emby-button {
+    margin: 0;
 }
 
 /* --- our entries in Jellyfin's action sheet ---
@@ -301,12 +242,15 @@
     width: min(23em, 92vw);
     display: flex;
     flex-direction: column;
-    background: rgba(18, 18, 20, .93);
+    background: rgba(16, 16, 16, .94);
     color: #fff;
     font-size: 14px;
-    box-shadow: -8px 0 28px rgba(0, 0, 0, .45);
-    backdrop-filter: blur(6px);
-    -webkit-backdrop-filter: blur(6px);
+}
+
+.lapseTools button:focus-visible,
+.lapseTools input:focus-visible {
+    outline: 2px solid #00a4dc;
+    outline-offset: 1px;
 }
 
 .lapseToolsHead {
@@ -375,7 +319,6 @@
     font-size: .78em;
     line-height: 1.45;
     margin-top: .6em;
-    color: #8fd0ff;
     min-height: 1em;
     overflow-wrap: anywhere;
 }
@@ -398,6 +341,7 @@
 
 .lapseToolsNudge button {
     flex: 1 1 auto;
+    min-height: 2.6em;
     background: rgba(255, 255, 255, .1);
     border: 0;
     border-radius: .3em;
@@ -434,6 +378,7 @@
 
 .lapseToolsButton {
     flex: 1 1 auto;
+    min-height: 2.6em;
     background: rgba(255, 255, 255, .12);
     border: 0;
     border-radius: .3em;
@@ -536,6 +481,5 @@
         left: 0;
         width: auto;
         max-height: 62vh;
-        box-shadow: 0 -8px 28px rgba(0, 0, 0, .45);
     }
 }

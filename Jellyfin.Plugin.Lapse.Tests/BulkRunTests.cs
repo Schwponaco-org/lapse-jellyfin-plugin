@@ -63,6 +63,48 @@ public class BulkRunTests
     }
 
     [Fact]
+    public void DescribesASyncInPlainWords()
+    {
+        Assert.Equal("Moved 4.2 s earlier.", SyncQueueManager.DescribeForHistory(new SyncResult { OffsetMs = -4230 }));
+        Assert.Equal(
+            "Moved 534 s later. Written beside the original for you to check.",
+            SyncQueueManager.DescribeForHistory(new SyncResult { OffsetMs = 534080, Unconfirmed = true }));
+        Assert.Equal(
+            "No match in the audio. Written beside the original for you to check.",
+            SyncQueueManager.DescribeForHistory(new SyncResult { OffsetMs = -8707, Verdict = "nothing", Unconfirmed = true }));
+        Assert.Equal(
+            "Moved in 2 parts, from 1.5 s earlier to 300 ms later.",
+            SyncQueueManager.DescribeForHistory(new SyncResult { PartOffsetsMs = new[] { -1500, 300 } }));
+        Assert.Equal(
+            "No match in the audio. Written beside the original for you to check.",
+            SyncQueueManager.ReadableDetail("moved -8707ms, nothing, written beside the original to check"));
+        Assert.Equal("Moved 4.2 s earlier.", SyncQueueManager.ReadableDetail("moved -4230ms, solid"));
+        Assert.Equal("Wrote a readable copy in Arial", SyncQueueManager.ReadableDetail("Wrote a readable copy in Arial"));
+    }
+
+    [Fact]
+    public void KeepsAShiftByHandOnlyWhenItCanBeUndone()
+    {
+        var folder = Directory.CreateTempSubdirectory("lapse-shift-").FullName;
+        var original = Path.Combine(folder, "Film.en.srt");
+        var sidecar = Path.Combine(folder, "Film.en.shifted.srt");
+        File.WriteAllText(original, "1\n00:00:01,000 --> 00:00:02,000\nHi\n");
+        File.WriteAllText(sidecar, "1\n00:00:01,250 --> 00:00:02,250\nHi\n");
+        var history = TestHost.Plugin.Configuration.History;
+        var itemId = Guid.NewGuid();
+
+        SyncQueueManager.RecordShift(itemId, original, new ShiftResult { OutputPath = original }, 250);
+        Assert.DoesNotContain(history, h => h.ItemId == itemId);
+
+        SyncQueueManager.RecordShift(itemId, original, new ShiftResult { OutputPath = sidecar }, 250);
+        var entry = Assert.Single(history, h => h.ItemId == itemId);
+        Assert.True(entry.WroteNewFile);
+        Assert.Null(entry.InputPath);
+        Assert.Equal("Shifted 250 ms later by hand.", entry.Detail);
+        Assert.True(SyncHistoryService.CanRevert(entry));
+    }
+
+    [Fact]
     public async Task PostsToNtfyAndDiscordAndSwallowsFailures()
     {
         var config = TestHost.Plugin.Configuration;
