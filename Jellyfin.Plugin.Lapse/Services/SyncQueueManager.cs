@@ -554,6 +554,42 @@ public class SyncQueueManager : IDisposable
         }
     }
 
+    /// <summary>
+    /// Puts a shift by hand in the history, so it can be undone from the dashboard like a sync.
+    /// Left out when it went over the subtitle with no backup, there's nothing to undo then.
+    /// </summary>
+    /// <param name="itemId">The item.</param>
+    /// <param name="inputPath">The subtitle that was shifted.</param>
+    /// <param name="shifted">What the shift wrote.</param>
+    /// <param name="offsetMs">How far it was moved, positive is later.</param>
+    public static void RecordShift(Guid itemId, string inputPath, ShiftResult shifted, int offsetMs)
+    {
+        var plugin = Plugin.Instance;
+        var wroteNewFile = shifted.BackupPath is null && !string.Equals(shifted.OutputPath, inputPath, StringComparison.Ordinal);
+        if (plugin is null || (shifted.BackupPath is null && !wroteNewFile))
+        {
+            return;
+        }
+
+        lock (Plugin.ConfigurationLock)
+        {
+            SyncHistoryService.Append(plugin.Configuration, new SyncHistoryEntry
+            {
+                ItemId = itemId,
+                Status = MovieSyncStatus.Synced,
+                OutputPath = shifted.OutputPath,
+
+                // no InputPath: undoing a shift must not make a synced original count as unsynced
+                BackupPath = shifted.BackupPath,
+                WroteNewFile = wroteNewFile,
+                OutputWriteUtc = WriteTimeOf(shifted.OutputPath),
+                Detail = "Shifted " + Seconds(offsetMs) + " by hand."
+            });
+
+            plugin.SaveConfiguration();
+        }
+    }
+
     /// <inheritdoc />
     public void Dispose()
     {
@@ -1314,7 +1350,10 @@ public class SyncQueueManager : IDisposable
     // positive means the subtitles come later
     private static string Seconds(int ms)
     {
-        var text = (Math.Abs(ms) / 1000.0).ToString(Math.Abs(ms) < 10000 ? "0.0" : "0", CultureInfo.InvariantCulture) + " s";
+        var size = Math.Abs(ms);
+        var text = size < 1000
+            ? size.ToString(CultureInfo.InvariantCulture) + " ms"
+            : (size / 1000.0).ToString(size < 10000 ? "0.0" : "0", CultureInfo.InvariantCulture) + " s";
         return ms < 0 ? text + " earlier" : text + " later";
     }
 }
