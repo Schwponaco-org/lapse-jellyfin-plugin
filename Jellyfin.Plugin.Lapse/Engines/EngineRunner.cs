@@ -617,6 +617,7 @@ public class EngineRunner
             }
 
             CopyVobSubCompanion(subtitlePath, destination);
+            SubtitleFileLock.NoteWritten(destination);
 
             result.OutputPath = destination;
             result.InputPath = subtitlePath;

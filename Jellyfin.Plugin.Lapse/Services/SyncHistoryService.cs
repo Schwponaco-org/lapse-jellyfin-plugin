@@ -205,6 +205,7 @@ public class SyncHistoryService
 
                 File.Copy(entry.BackupPath!, original, overwrite: true);
                 File.Delete(entry.BackupPath!);
+                SubtitleFileLock.NoteWritten(original);
 
                 if (!string.Equals(original, entry.OutputPath, StringComparison.Ordinal)
                     && File.Exists(entry.OutputPath!))

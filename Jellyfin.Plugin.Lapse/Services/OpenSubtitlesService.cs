@@ -784,6 +784,7 @@ public partial class OpenSubtitlesService : IDisposable
         }
 
         await File.WriteAllBytesAsync(destination, bytes, cancellationToken).ConfigureAwait(false);
+        SubtitleFileLock.NoteWritten(destination);
 
         _logger.LogInformation("Fetched a {Language} subtitle from OpenSubtitles to {Path}", language, destination);
         return new SubtitleFetchResult { Path = destination };

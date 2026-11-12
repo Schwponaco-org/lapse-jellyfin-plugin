@@ -137,7 +137,7 @@ public class SubtitleLocatorTests
     }
 
     [Fact]
-    public void OnlySubtitlesWrittenSinceTheLastSyncCountAsNew()
+    public async Task OnlySubtitlesWrittenSinceTheLastSyncCountAsNew()
     {
         var folder = TestHost.NewFolder();
         var video = Touch(Path.Combine(folder, "Film.mkv"));
@@ -165,6 +165,10 @@ public class SubtitleLocatorTests
         // Then Bazarr or Jellyfin puts a different Danish one in its place.
         File.SetLastWriteTimeUtc(danish, DateTime.UtcNow.AddMinutes(1));
         Assert.Equal(new[] { danish }, AutoSyncHostedService.NewSubtitles(item, record, started));
+
+        // A shift by hand is our own write, not a new subtitle.
+        await SubtitleFileLock.WriteTextAsync(danish, "1\n00:00:02,000 --> 00:00:03,000\nHej\n");
+        Assert.Equal(new[] { english }, AutoSyncHostedService.NewSubtitles(item, null, started));
     }
 
     /// <summary>

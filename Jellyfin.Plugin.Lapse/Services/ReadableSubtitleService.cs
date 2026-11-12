@@ -243,6 +243,7 @@ public class ReadableSubtitleService
                 var original = backup[..^BackupExtension.Length];
                 File.Copy(backup, original, overwrite: true);
                 File.Delete(backup);
+                SubtitleFileLock.NoteWritten(original);
 
                 // unless the styled file IS the one we just restored (.ass overwritten in place)
                 if (!string.Equals(original, path, StringComparison.Ordinal) && File.Exists(path))

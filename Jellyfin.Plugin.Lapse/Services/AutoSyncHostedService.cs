@@ -90,7 +90,7 @@ public sealed class AutoSyncHostedService : IHostedService, IDisposable
     /// <summary>
     /// Lists the item's external subtitles that are new since <paramref name="since"/> or its
     /// last sync, whichever is later. Leaves out what LAPSE wrote: synced files, sidecars,
-    /// scratch files and extracted tracks nobody synced. Reads Jellyfin's streams, not the folder.
+    /// scratch files, extracted tracks nobody synced and anything else it wrote itself. Reads Jellyfin's streams, not the folder.
     /// </summary>
     internal static List<string> NewSubtitles(BaseItem item, MovieSyncRecord? record, DateTime since)
     {
@@ -110,6 +110,7 @@ public sealed class AutoSyncHostedService : IHostedService, IDisposable
             File.GetLastWriteTimeUtc(path) > since
             && !EngineRunner.IsSidecarOfAnother(path, paths)
             && !SubtitleExtractor.IsUntouchedExtraction(item, path, record)
+            && !SubtitleFileLock.IsOwnWrite(path)
             && (record is null || !SyncQueueManager.IsStillSynced(record, path)));
     }
 

@@ -491,6 +491,7 @@ public class MultiEngineSyncService
             if (string.Equals(Path.GetExtension(written), Path.GetExtension(target), StringComparison.OrdinalIgnoreCase))
             {
                 File.Move(written, target, overwrite: true);
+                SubtitleFileLock.NoteWritten(target);
             }
             else
             {

@@ -346,6 +346,7 @@ public partial class SubtitleShifter
         }
 
         _runner.CopyVobSubCompanion(subtitlePath, destination);
+        SubtitleFileLock.NoteWritten(destination);
 
         using var report = JsonDocument.Parse(process.Stdout);
 
