@@ -1,7 +1,7 @@
 ---
 name: "LAPSE"
 guid: "486090e1-ca92-46e1-8549-9f6bb914a1d0"
-version: "2.1.4.0"
+version: "2.2.0.0"
 targetAbi: "10.11.0.0"
 framework: "net9.0"
 overview: "Sync subtitles to audio (or subtitle to subtitle) using the LAPSE engine. Open Settings after installing to set it up."
@@ -21,14 +21,34 @@ owner: "rs-jensen"
 artifacts:
 - "Jellyfin.Plugin.Lapse.dll"
 changelog: >
-  Works with LAPSE 2.3.3.
+  Works with LAPSE 2.5.0.
 
-  LAPSE 2.3.3 stopped writing a result it isn't sure of to the path it was
-  given and puts it next to it instead. The plugin didn't know, so every unsure
-  sync failed with "didn't write anything" and left a file ending in
-  .lapse-tmp.lapse-unsure.srt beside the subtitle. Unsure results are handled
-  the way your low confidence setting says again. If you ran the new engine on
-  the old plugin, those leftover files are safe to delete.
+  When LAPSE is unsure, its answer goes to the new Review panel on the
+  dashboard. You can play the item from a few points with the answer on, then
+  keep it or discard it.
 
-  Taking embedded subtitles out of a video no longer reports a failure when the
-  new video went into place fine and only the old copy couldn't be removed.
+  Results stay on screen until you close them, and Recent activity says in
+  plain words what each sync and shift did, with Undo. A shift by hand can be
+  undone too.
+
+  A subtitle that Jellyfin or Bazarr downloads later gets synced in libraries
+  with New items ticked. Bazarr calls Lapse/Webhook/Path, the README has the
+  line for it.
+
+  A bulk, series or scheduled run can post to ntfy or Discord when it is done,
+  and a whole bulk run can be undone.
+
+  Shift works on every format LAPSE 2.5.0 reads, and .itt is a known format.
+  On Alpine and other musl systems the musl build of LAPSE is installed. The
+  engine gives way to Jellyfin's transcodes, and the Engines page shows the
+  size of its cache and can clear it.
+
+  The dashboard and dialogs look like the rest of Jellyfin, in the light theme
+  and on a phone too. The Edit subtitles dialog gets a Sync button, and Subtitle
+  tools in the player works from a keyboard or a remote.
+
+  GBK, Big5, Shift_JIS and EUC-KR subtitles are no longer read as Thai or
+  Cyrillic.
+
+  Undoing readable subtitles could delete another file named after the video.
+  It now only deletes the copies it wrote.
