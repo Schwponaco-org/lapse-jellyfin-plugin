@@ -18,6 +18,7 @@
     var currentDiagnostics = null;
     var currentFontStatus = null;
     var currentUsers = [];
+    var currentReview = [];
     var ignoreSearchPending = false;
     var ignoreSearchFetched = false;
 
@@ -80,17 +81,17 @@
         {
             value: 'SidecarOnly',
             label: 'Write a new file',
-            note: 'Leaves the original alone. Jellyfin picks the new file up as an extra subtitle track on its next scan. The safe choice. A track pulled out of the video is written over instead, since the original is still inside the video.'
+            note: 'The original stays as it is and the result becomes an extra subtitle track. Nothing can be lost.'
         },
         {
             value: 'SidecarWithBackup',
             label: 'Write a new file, keep a backup',
-            note: 'Same, but an earlier result at that name is kept as a .bak instead of being replaced.'
+            note: 'The same, and an earlier result under that name is kept as a .bak.'
         },
         {
             value: 'OverwriteWithBackup',
             label: 'Overwrite, keep a backup',
-            note: 'Replaces the subtitle and keeps the old one as a .bak next to it.'
+            note: 'Replaces the subtitle and keeps the old one as a .bak beside it.'
         },
         {
             value: 'OverwriteNoBackup',
@@ -104,24 +105,24 @@
             value: 'srt',
             label: '.srt',
             recommended: true,
-            note: 'Read by everything, and the timestamps are the easiest to edit by hand afterwards.'
+            note: 'Read by everything, and the easiest to edit by hand.'
         },
-        { value: 'vtt', label: '.vtt', note: 'What browsers use. Same timings as srt with a different separator.' },
-        { value: 'ass', label: '.ass', note: 'Carries positioning and styling. Converting to it does not invent styling that was not there.' },
-        { value: 'ssa', label: '.ssa', note: 'The older version of ass. Pick it only if something you use will not take ass.' }
+        { value: 'vtt', label: '.vtt', note: 'What browsers use.' },
+        { value: 'ass', label: '.ass', note: 'Carries position and style, where the original had any.' },
+        { value: 'ssa', label: '.ssa', note: 'The older form of .ass, for players that need it.' }
     ];
 
     var CONVERSION_ORIGINAL_MODES = [
         {
             value: 'keep',
-            label: 'Keep it, write the new format alongside',
+            label: 'Keep it beside the new one',
             recommended: true,
-            note: 'You end up with both files. If the conversion is not what you wanted, delete the new one and nothing was lost.'
+            note: 'Nothing is lost if the conversion is not what you wanted.'
         },
         {
             value: 'replace',
             label: 'Delete it once the new file is written',
-            note: 'Leaves one file behind instead of two. There is no undo for this.'
+            note: 'There is no undo for this.'
         }
     ];
 
@@ -130,12 +131,12 @@
             value: 'sync',
             label: 'Convert it, then sync it',
             recommended: true,
-            note: 'Converting was only ever the way to get the subtitle into a shape an engine can read, so it carries straight on and syncs.'
+            note: 'The conversion was only needed so the engine could read it.'
         },
         {
             value: 'convert',
             label: 'Just convert it',
-            note: 'Stops after the conversion and leaves the syncing to you.'
+            note: 'Stops after the conversion.'
         }
     ];
 
@@ -144,14 +145,12 @@
             value: 'off',
             label: 'Only when the engine cannot read the format',
             recommended: true,
-            note: 'LAPSE reads and writes eleven formats, so with it there is usually nothing to convert. ' +
-                'The file keeps the format it came in and you end up with one file instead of two.'
+            note: 'The file keeps the format it came in.'
         },
         {
             value: 'on',
             label: 'Always convert first',
-            note: 'Every subtitle is written out in the format above before it is synced. Useful with an engine ' +
-                'that reads fewer formats, or when you simply want srt files everywhere. The original is left where it is.'
+            note: 'For one format across the library. The original is left where it is.'
         }
     ];
 
@@ -160,17 +159,17 @@
             value: 'Sync',
             label: 'Sync them',
             recommended: true,
-            note: 'Lines the subtitles up and leaves their format alone.'
+            note: 'Leaves their format alone.'
         },
         {
             value: 'ConvertThenSync',
             label: 'Convert them, then sync them',
-            note: 'Writes each subtitle out in the conversion format first, then syncs that file.'
+            note: 'Writes each one in the format set under Conversion first.'
         },
         {
             value: 'Convert',
             label: 'Only convert them',
-            note: 'Changes the format and stops there. Nothing gets synced, so items stay marked as not synced.'
+            note: 'Nothing is synced, so items stay not synced.'
         }
     ];
 
@@ -178,44 +177,41 @@
         {
             value: 'AdminsOnly',
             label: 'Administrators only',
-            note: 'Nobody else sees a result from the sync entries in the item menu. This is how LAPSE has always behaved.'
+            note: 'Nobody else sees the LAPSE entries in an item\'s menu.'
         },
         {
             value: 'SubtitleManagers',
             label: 'Anyone allowed to manage subtitles',
-            note: 'Users with Jellyfin\'s own "subtitle management" permission, which already lets them download subtitle files into the library.'
+            note: 'Users with Jellyfin\'s own permission to manage subtitles.'
         },
         {
             value: 'SelectedUsers',
             label: 'Only the users I pick',
-            note: 'Hand it to named people, whatever other permissions they have.'
+            note: 'Pick them below.'
         },
         {
             value: 'Everyone',
             label: 'Every signed in user',
-            note: 'Anyone with an account can rewrite subtitle files in your library. Worth being sure about.'
+            note: 'Anyone with an account can rewrite subtitle files in your library.'
         }
     ];
 
     var LOW_CONFIDENCE_MODES = [
         {
             value: 'Sidecar',
-            label: 'Write it to a sidecar',
+            label: 'Write it beside the original for review',
             recommended: true,
-            note: 'Puts the doubtful result in a new file and leaves the original exactly where it is. ' +
-                'A low score usually means the subtitle is not for this video, and this is the only option ' +
-                'where being wrong about that costs nothing: you keep what you had, and you can look at the ' +
-                'result before deciding.'
+            note: 'The original stays as it is until you keep or discard the result under Review.'
         },
         {
             value: 'KeepOriginal',
-            label: 'Throw it away',
-            note: 'Discards the result and leaves the file as it was. The skip is logged.'
+            label: 'Discard it',
+            note: 'The file is left as it was.'
         },
         {
             value: 'OverwriteAnyway',
             label: 'Write it anyway',
-            note: 'Writes the result as usual, whatever the engine thought of it.'
+            note: 'Writes it the way File output says, sure or not.'
         }
     ];
 
@@ -346,11 +342,10 @@
 
     // --- sidebar navigation ---
 
-    var NAV_STORAGE_KEY = 'lapse-active-panel';
     var showPanel = null;
 
     // One panel at a time from the sidebar, Settings folds out so the first view isn't eleven config
-    // screens. Remembers the last panel, but a fresh visit lands on the dashboard.
+    // screens. On a phone the same list is a drop-down. A fresh visit lands on the overview.
     function setUpNavigation(view) {
         var items = Array.prototype.slice.call(view.querySelectorAll('.lapseNavItem'));
         if (items.length === 0) {
@@ -359,43 +354,57 @@
 
         var settingsGroup = view.querySelector('#lapseSettingsGroup');
         var settingsToggle = view.querySelector('#lapseSettingsToggle');
+        var select = view.querySelector('#lapseNavSelect');
 
-        function isInSettings(panelId) {
-            return !!settingsGroup.querySelector('[data-panel="' + panelId + '"]');
+        function label(item) {
+            return item.querySelector('.lapseNavLabel').textContent;
         }
+
+        function option(item) {
+            return '<option value="' + item.getAttribute('data-panel') + '">' + escapeHtml(label(item)) + '</option>';
+        }
+
+        select.innerHTML = items.filter(function (item) { return !settingsGroup.contains(item); }).map(option).join('') +
+            '<optgroup label="Settings">' +
+            items.filter(function (item) { return settingsGroup.contains(item); }).map(option).join('') +
+            '</optgroup>';
 
         function openSettings(open) {
             settingsGroup.classList.toggle('hide', !open);
             settingsToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
-            settingsToggle.classList.toggle('lapseNavGroup-open', open);
         }
 
         showPanel = function (panelId) {
             items.forEach(function (item) {
                 var active = item.getAttribute('data-panel') === panelId;
                 item.classList.toggle('lapseNavItem-active', active);
-                item.setAttribute('aria-current', active ? 'page' : 'false');
+
+                if (active) {
+                    item.setAttribute('aria-current', 'page');
+                } else {
+                    item.removeAttribute('aria-current');
+                }
             });
 
             view.querySelectorAll('.lapsePanel').forEach(function (panel) {
                 panel.classList.toggle('lapsePanel-active', panel.id === panelId);
             });
 
-            if (isInSettings(panelId)) {
+            if (settingsGroup.querySelector('[data-panel="' + panelId + '"]')) {
                 openSettings(true);
             }
 
-            try {
-                window.localStorage.setItem(NAV_STORAGE_KEY, panelId);
-            } catch (e) {
-                // private browsing and friends, the panel still switches
-            }
+            select.value = panelId;
         };
 
         items.forEach(function (item) {
             item.addEventListener('click', function () {
                 showPanel(item.getAttribute('data-panel'));
             });
+        });
+
+        select.addEventListener('change', function () {
+            showPanel(select.value);
         });
 
         settingsToggle.addEventListener('click', function () {
@@ -433,40 +442,36 @@
 
     // --- dashboard overview ---
 
-    // Clicking a tile filters the status list by that status, which is what anyone who
-    // just read "14 failed" wants next.
-    function statCard(count, label, cls, status) {
-        return '<button type="button" class="lapseStat ' + (cls || '') + '" data-status="' +
-            (status || '') + '">' +
-            '<div class="lapseStatValue">' + count + '</div>' +
-            '<div class="lapseStatLabel">' + escapeHtml(label) + '</div>' +
-            '</button>';
+    var STATUS_ORDER = [
+        { key: 'Synced', label: 'synced' },
+        { key: 'PartiallySynced', label: 'partly synced' },
+        { key: 'Pending', label: 'not synced' },
+        { key: 'Failed', label: 'failed' },
+        { key: 'Skipped', label: 'skipped' },
+        { key: 'Ignored', label: 'ignored' }
+    ];
+
+    // Each count is a link to the status list filtered to it, which is what anyone who just
+    // read "14 failed" wants next. Zeroes are left out.
+    function statusLinks(counts) {
+        return STATUS_ORDER.filter(function (part) {
+            return counts[part.key] > 0;
+        }).map(function (part) {
+            return '<a is="emby-linkbutton" href="#" class="button-link lapseStatusLink" data-status="' + part.key + '">' +
+                counts[part.key] + ' ' + part.label + '</a>';
+        }).join('<span aria-hidden="true"> &middot; </span>');
     }
 
     // proportions bar, anything above zero gets at least a sliver
     function progressBar(counts) {
-        var order = [
-            { key: 'Synced', cls: 'synced', label: 'Synced' },
-            { key: 'PartiallySynced', cls: 'partial', label: 'Partly synced' },
-            { key: 'Failed', cls: 'failed', label: 'Failed' },
-            { key: 'Pending', cls: 'pending', label: 'Not synced' },
-            { key: 'Skipped', cls: 'skipped', label: 'Skipped' },
-            { key: 'Ignored', cls: 'ignored', label: 'Ignored' }
-        ];
-
-        var total = order.reduce(function (sum, part) { return sum + counts[part.key]; }, 0);
+        var total = STATUS_ORDER.reduce(function (sum, part) { return sum + counts[part.key]; }, 0);
         if (total === 0) {
             return '';
         }
 
-        return '<div class="lapseProgressBar">' + order.map(function (part) {
+        return '<div class="lapseProgressBar" aria-hidden="true">' + STATUS_ORDER.map(function (part) {
             var value = counts[part.key];
-            if (value === 0) {
-                return '';
-            }
-
-            return '<span class="lapseProgressSegment lapseProgress-' + part.cls +
-                '" style="flex-grow:' + value + '" title="' + value + ' ' + part.label + '"></span>';
+            return value === 0 ? '' : '<span class="lapseProgress-' + part.key + '" style="flex-grow:' + value + '"></span>';
         }).join('') + '</div>';
     }
 
@@ -504,6 +509,33 @@
         return counts;
     }
 
+    function activityRow(entry) {
+        var actions = '';
+        var state = '';
+
+        if (entry.Unsure && !entry.Reverted && !entry.Superseded && entry.InReview) {
+            actions += '<button is="emby-button" type="button" class="raised lapseBtnGoReview"><span>Review</span></button>';
+        }
+
+        if (entry.CanRevert) {
+            actions += '<button is="emby-button" type="button" class="raised lapseBtnRevert" data-id="' + escapeHtml(entry.Id) + '">' +
+                '<span>Undo</span></button>';
+        } else if (entry.Reverted) {
+            state = 'Undone. ';
+        } else if (entry.Superseded) {
+            state = 'Replaced by a later sync. ';
+        }
+
+        return '<div class="listItem listItem-border lapseActivityRow">' +
+            '<div class="listItemBody two-line">' +
+            '<div class="listItemBodyText" title="' + escapeHtml(entry.OutputPath || '') + '">' + escapeHtml(entry.Name) + '</div>' +
+            '<div class="listItemBodyText secondary">' + escapeHtml(state + (entry.Detail || '')) + ' &middot; ' +
+            escapeHtml(timeAgo(entry.WhenUtc)) + '</div>' +
+            '</div>' +
+            (actions ? '<div class="lapseRowActions">' + actions + '</div>' : '') +
+            '</div>';
+    }
+
     function renderOverview(view) {
         var container = view.querySelector('#lapseOverview');
         var overview = currentOverview;
@@ -513,16 +545,13 @@
             return;
         }
 
-        // nothing installed: one button for LAPSE instead of a wall of zeroes
+        // nothing installed: one button for LAPSE instead of a page of zeroes
         if (!overview.AnyEngineInstalled) {
             container.innerHTML = '' +
-                '<div class="lapseEmptyState">' +
-                '  <div class="lapseEmptyTitle">Install the engine to get started</div>' +
-                '  <div class="lapseEmptyBody">LAPSE needs its alignment engine on disk before it can sync anything. ' +
-                'It is a single download and it runs on Linux, macOS and Windows.</div>' +
-                '  <button is="emby-button" type="button" class="raised button-submit lapseBigButton" id="lapseInstallLapse">' +
-                '    <span>Install LAPSE</span></button>' +
-                '  <div class="lapseEmptyFooter">Other engines are available under Settings, Engines.</div>' +
+                '<div class="verticalSection">' +
+                '  <p>LAPSE needs its sync engine before it can do anything. It is one download, for Linux, macOS and Windows.</p>' +
+                '  <button is="emby-button" type="button" class="raised button-submit" id="lapseInstallLapse"><span>Install LAPSE</span></button>' +
+                '  <div class="fieldDescription">Other engines are under Settings, Engines.</div>' +
                 '</div>';
 
             container.querySelector('#lapseInstallLapse').addEventListener('click', function (e) {
@@ -533,25 +562,16 @@
         }
 
         var engine = findEngine(overview.ActiveEngineId);
-        var engineProblem = '';
+        var engineNote = '';
 
         if (!overview.ActiveEngineReady) {
-            engineProblem = '<div class="lapseEngineError">Not installed. Install it under Settings, Engines.</div>';
+            engineNote = 'It is not installed. Install it under Settings, Engines.';
         } else if (engine && engine.RunCheckError) {
-            engineProblem = '<div class="lapseEngineError">' + escapeHtml(engine.RunCheckError) + '</div>';
+            engineNote = engine.RunCheckError;
         }
 
-        // offer the update button right here instead of sending people to Settings > Engines
+        // offer the update right here instead of sending people to Settings > Engines
         var updateAvailable = !!(engine && overview.ActiveEngineReady && !engine.RunCheckError && engine.UpdateAvailable);
-        if (updateAvailable) {
-            engineProblem = '<div class="lapseEngineVersion">' +
-                escapeHtml(engine.LatestVersion || 'A newer release') + ' is out.</div>';
-        }
-
-        var updateButton = updateAvailable
-            ? '      <button is="emby-button" type="button" class="raised button-submit lapseSmallButton" id="lapseUpdateEngine">' +
-              '<span>Update to ' + escapeHtml(engine.LatestVersion || 'the latest') + '</span></button>'
-            : '';
 
         var counts = countStatuses();
         var modeLabel = overview.ActiveEngineMode || '';
@@ -563,78 +583,60 @@
             });
         }
 
-        var covered = counts.Synced + counts.PartiallySynced;
-        var eligible = covered + counts.Pending + counts.Failed;
-        var percent = eligible === 0 ? 0 : Math.round((counts.Synced / eligible) * 100);
+        var eligible = counts.Synced + counts.PartiallySynced + counts.Pending + counts.Failed;
+        var unsure = currentReview.length;
 
-        var recent = (overview.Recent || []).length === 0
-            ? '<div class="lapseActivityEmpty">Nothing has been synced yet. ' +
-              'Press Sync on any item\'s three-dot menu, or run a bulk sync.</div>'
-            : '<div class="lapseActivityList">' + overview.Recent.map(function (entry) {
-                // undo on every row that still has a backup, no shell needed
-                var revert = entry.CanRevert
-                    ? '<button is="emby-button" type="button" class="raised lapseSmallButton lapseBtnRevert"' +
-                      ' data-id="' + escapeHtml(entry.Id) + '">Undo</button>'
-                    : entry.Reverted ? '<span class="lapseActivityUndone">undone</span>'
-                    : entry.Superseded ? '<span class="lapseActivityUndone" title="A later run wrote the same file. Undo that one instead.">replaced</span>'
-                    : '';
+        // the same answer can turn up in Review only while its file is still there
+        var waiting = {};
+        currentReview.forEach(function (set) {
+            (set.Candidates || []).forEach(function (c) {
+                waiting[c.Path] = true;
+            });
+        });
 
-                return '<div class="lapseActivityRow">' +
-                    '<span class="lapseStatusPill ' + statusPillClass(entry.Status) + '">' +
-                    escapeHtml(shortStatus(entry.Status)) + '</span>' +
-                    '<span class="lapseActivityName" title="' + escapeHtml(entry.OutputPath || '') + '">' +
-                    escapeHtml(entry.Name) + '</span>' +
-                    '<span class="lapseActivityDetail" title="' + escapeHtml(entry.Detail || '') + '">' + escapeHtml(entry.Detail || '') + '</span>' +
-                    '<span class="lapseActivityWhen">' + escapeHtml(timeAgo(entry.WhenUtc)) + '</span>' +
-                    '<span class="lapseActivityAction">' + revert + '</span>' +
-                    '</div>';
-            }).join('') + '</div>';
+        var recent = (overview.Recent || []);
+        recent.forEach(function (entry) {
+            entry.InReview = !!waiting[entry.OutputPath];
+        });
 
         container.innerHTML = '' +
-            '<div class="lapseHero">' +
-            '  <div class="lapseHeroMain">' +
-            '    <div class="lapseDial" style="--lapse-dial:' + percent + '">' +
-            '      <div class="lapseDialInner">' +
-            '        <span class="lapseDialValue">' + percent + '<small>%</small></span>' +
-            '        <span class="lapseDialLabel">in sync</span>' +
-            '      </div>' +
-            '    </div>' +
-            '    <div class="lapseHeroText">' +
-            '      <div class="lapseHeroHeadline">' + counts.Synced + ' of ' + eligible + ' items are synced</div>' +
-            '      <div class="lapseHeroSub">' + counts.Total + ' items in the libraries you have turned on. ' +
-            counts.WithoutSubtitles + ' have no subtitle to sync yet.</div>' +
+            '<div class="verticalSection">' +
+            '  <h2 class="sectionTitle">' + counts.Synced + ' of ' + eligible + ' items synced</h2>' +
             progressBar(counts) +
-            '    </div>' +
-            '  </div>' +
-            '  <div class="lapseHeroEngine">' +
-            '    <div class="lapseActiveEngineLabel">Active engine</div>' +
-            '    <div class="lapseActiveEngineName">' + escapeHtml(overview.ActiveEngineName || '') +
-            (overview.ActiveEngineVersion
-                ? '<span class="lapseVersionBadge">' + escapeHtml(overview.ActiveEngineVersion) + '</span>'
+            '  <div class="lapseStatusLinks">' + statusLinks(counts) + '</div>' +
+            (counts.WithoutSubtitles
+                ? '  <div class="fieldDescription">' + counts.WithoutSubtitles + ' of the ' + counts.Total +
+                  ' items in the turned on libraries have no subtitle file.</div>'
                 : '') +
-            '    </div>' +
-            '    <div class="lapseActiveEngineMode">' + escapeHtml(modeLabel) + ' mode</div>' +
-            engineProblem +
-            '    <div class="lapseHeroActions">' +
-            updateButton +
-            '      <button is="emby-button" type="button" class="raised' + (updateAvailable ? '' : ' button-submit') +
-            ' lapseSmallButton" id="lapseGoBulk"><span>Sync everything</span></button>' +
-            '      <button is="emby-button" type="button" class="raised lapseSmallButton" id="lapseGoEngines"><span>Change engine</span></button>' +
-            '    </div>' +
+            '  <div class="lapseButtonRow">' +
+            '    <button is="emby-button" type="button" class="raised button-submit" id="lapseGoBulk"><span>Sync everything</span></button>' +
+            (updateAvailable
+                ? '    <button is="emby-button" type="button" class="raised" id="lapseUpdateEngine"><span>Update ' +
+                  escapeHtml(engine.DisplayName) + ' to ' + escapeHtml(engine.LatestVersion || 'the latest') + '</span></button>'
+                : '') +
             '  </div>' +
+            '  <div class="fieldDescription">Using ' + escapeHtml(overview.ActiveEngineName || '') +
+            (overview.ActiveEngineVersion ? ' ' + escapeHtml(overview.ActiveEngineVersion) : '') +
+            ' in ' + escapeHtml(modeLabel) + ' mode. ' +
+            '<a is="emby-linkbutton" href="#" class="button-link" id="lapseGoEngines">Change engine</a></div>' +
+            (engineNote ? '  <div class="fieldDescription lapseProblem">' + escapeHtml(engineNote) + '</div>' : '') +
             '</div>' +
 
-            '<div class="lapseStatRow">' +
-            statCard(counts.Synced, 'Synced', 'lapseStat-synced', 'Synced') +
-            statCard(counts.PartiallySynced, 'Partly synced', 'lapseStat-partial', 'PartiallySynced') +
-            statCard(counts.Pending, 'Not synced', 'lapseStat-pending', 'Pending') +
-            statCard(counts.Failed, 'Failed', 'lapseStat-failed', 'Failed') +
-            statCard(counts.Skipped, 'Skipped', 'lapseStat-skipped', 'Skipped') +
-            statCard(counts.Ignored, 'Ignored', 'lapseStat-ignored', 'Ignored') +
-            '</div>' +
+            (unsure
+                ? '<div class="verticalSection">' +
+                  '  <h2 class="sectionTitle">Waiting for review</h2>' +
+                  '  <p>LAPSE was unsure about ' + unsure + (unsure === 1 ? ' subtitle' : ' subtitles') +
+                  ' and kept the originals. Check the results and keep or discard them.</p>' +
+                  '  <button is="emby-button" type="button" class="raised" id="lapseGoReview"><span>Review</span></button>' +
+                  '</div>'
+                : '') +
 
-            '<h3 class="lapseSubHeading">Recent activity</h3>' +
-            recent;
+            '<div class="verticalSection">' +
+            '  <h2 class="sectionTitle">Recent activity</h2>' +
+            (recent.length === 0
+                ? '  <p class="fieldDescription">Nothing yet. Every sync and shift shows up here, with a way to undo it.</p>'
+                : '  <div class="paperList">' + recent.map(activityRow).join('') + '</div>') +
+            '</div>';
 
         var updateNow = container.querySelector('#lapseUpdateEngine');
         if (updateNow) {
@@ -646,13 +648,21 @@
         container.querySelector('#lapseGoBulk').addEventListener('click', function () {
             showPanel('lapsePanelBulk');
         });
-        container.querySelector('#lapseGoEngines').addEventListener('click', function () {
+        container.querySelector('#lapseGoEngines').addEventListener('click', function (e) {
+            e.preventDefault();
             showPanel('lapsePanelEngines');
         });
 
-        container.querySelectorAll('.lapseStat').forEach(function (tile) {
-            tile.addEventListener('click', function () {
-                view.querySelector('#lapseItemStatusFilter').value = tile.getAttribute('data-status') || '';
+        container.querySelectorAll('#lapseGoReview, .lapseBtnGoReview').forEach(function (button) {
+            button.addEventListener('click', function () {
+                showPanel('lapsePanelReview');
+            });
+        });
+
+        container.querySelectorAll('.lapseStatusLink').forEach(function (link) {
+            link.addEventListener('click', function (e) {
+                e.preventDefault();
+                view.querySelector('#lapseItemStatusFilter').value = link.getAttribute('data-status');
                 renderItemList(view, allItems);
                 showPanel('lapsePanelItems');
             });
@@ -660,16 +670,20 @@
 
         container.querySelectorAll('.lapseBtnRevert').forEach(function (button) {
             button.addEventListener('click', function () {
-                button.disabled = true;
-                lapsePost('Lapse/History/' + button.getAttribute('data-id') + '/Revert')
-                    .then(function (result) {
+                confirmAction('Undo this', 'The subtitle is put back the way it was before.', 'Undo').then(function (yes) {
+                    if (!yes) {
+                        return;
+                    }
+
+                    button.disabled = true;
+                    lapsePost('Lapse/History/' + button.getAttribute('data-id') + '/Revert').then(function (result) {
                         tell('Undo', (result && result.Outcome) || 'Put back.');
-                        return refreshItemList(view).then(function () { return refreshOverview(view); });
-                    })
-                    .catch(function (err) {
+                        return Promise.all([refreshOverview(view), refreshItemList(view), refreshReview(view)]);
+                    }).catch(function (err) {
                         button.disabled = false;
                         tell('Could not undo that', err.message);
                     });
+                });
             });
         });
     }
@@ -704,11 +718,8 @@
         }
 
         body.innerHTML = '' +
-            '<div class="fieldDescription lapseTightNote">' +
-            'Everything below is read from the running server, not from whatever machine the plugin ' +
-            'was built on. If the two architecture lines disagree, the server is running under ' +
-            'emulation, which is worth knowing when an engine installs but will not start.' +
-            '</div>' +
+            '<div class="fieldDescription">Read from the running server. If the two architecture lines differ, ' +
+            'it runs under emulation, which can stop an engine from starting.</div>' +
             '<div class="lapseInfoTable">' +
             rows.filter(function (r) { return r[1]; }).map(function (r) {
                 return '<div class="lapseInfoRow">' +
@@ -733,42 +744,13 @@
         return engine.RunCheckError ? 'not working' : 'installed';
     }
 
-    function engineStateClass(engine) {
-        if (!engine.Installed) {
-            return engine.DownloadSupported ? 'off' : 'blocked';
-        }
-
-        if (engine.RunCheckError) {
-            return 'broken';
-        }
-
-        return engine.UpdateAvailable ? 'stale' : 'ok';
-    }
-
-    function tierBadge(engine) {
-        var cls = 'lapseTier lapseTier-' + engine.Tier.toLowerCase();
-        return '<span class="' + cls + '">' + escapeHtml(engine.Tier) + '</span>';
-    }
-
-    function engineVersionBadge(engine) {
-        if (!engine.Installed) {
-            return '';
-        }
-
-        if (engine.InstalledVersion) {
-            return '<span class="lapseVersionBadge">' + escapeHtml(engine.InstalledVersion) + '</span>';
-        }
-
-        return '<span class="lapseVersionBadge lapseVersionBadge-unknown">version unknown</span>';
-    }
-
     // LAPSE silently falls back to a weaker voice detector when the Silero files are missing, this is the only place that says so
     function vadNotice(engine) {
         if (engine.Id !== 'lapse' || !engine.Installed || engine.VadBackend !== 'libfvad') {
             return '';
         }
 
-        return '<div class="lapseEngineNotice">Running on libfvad, the weaker fallback voice ' +
+        return '<div class="fieldDescription">Running on libfvad, the weaker fallback voice ' +
             'detector, instead of Silero. The onnxruntime library and silero_vad.onnx that ship ' +
             'in the same release archive were not found next to the binary, so audio-based sync ' +
             'will be less accurate than it should be. Reinstall to fetch them.</div>';
@@ -780,7 +762,7 @@
             return '';
         }
 
-        return '<div class="lapseEngineNotice">The whisper settings are not being used. ' +
+        return '<div class="fieldDescription">The whisper settings are not being used. ' +
             escapeHtml(engine.WhisperProblem) + ' Syncs carry on with voice detection alone until that is sorted.</div>';
     }
 
@@ -831,19 +813,21 @@
 
         // the setting is kept, the runner just leaves the flag off until the engine is updated
         var versionNote = parameter.Supported === false
-            ? '<div class="fieldDescription lapseParamNote lapseNeedsUpdate">Needs LAPSE ' +
+            ? '<div class="fieldDescription">Needs LAPSE ' +
               escapeHtml(parameter.Since || 'a newer build') + ' or newer. The installed build leaves this off until you update it.</div>'
             : '';
 
         if (parameter.Kind === 'Boolean') {
             return '' +
-                '<label class="emby-checkbox-label lapseStackedCheck">' +
+                '<div class="checkboxContainer checkboxContainer-withDescription">' +
+                '<label class="emby-checkbox-label">' +
                 '  <input type="checkbox" is="emby-checkbox" class="lapseParamInput" data-key="' + escapeHtml(parameter.Key) + '"' +
                 '   data-kind="Boolean"' + (parameter.Value === 'true' ? ' checked' : '') + ' />' +
                 '  <span>' + escapeHtml(parameter.Label) + flagNote + '</span>' +
                 '</label>' +
-                '<div class="fieldDescription lapseParamNote">' + escapeHtml(parameter.Description) + '</div>' +
-                versionNote;
+                '<div class="fieldDescription checkboxFieldDescription">' + escapeHtml(parameter.Description) + '</div>' +
+                versionNote +
+                '</div>';
         }
 
         if (parameter.Kind === 'Select') {
@@ -857,7 +841,7 @@
                         (o.Value === parameter.Value ? ' selected' : '') + '>' + escapeHtml(o.Label) + '</option>';
                 }).join('') +
                 '  </select>' +
-                '  <div class="fieldDescription lapseParamNote">' + escapeHtml(parameter.Description) + '</div>' +
+                '  <div class="fieldDescription">' + escapeHtml(parameter.Description) + '</div>' +
                 versionNote +
                 '</div>';
         }
@@ -889,7 +873,7 @@
             '<div class="inputContainer">' +
             '  <label class="inputLabel inputLabelUnfocused" for="' + id + '">' + escapeHtml(parameter.Label) + flagNote + '</label>' +
             input +
-            '  <div class="fieldDescription lapseParamNote">' + escapeHtml(parameter.Description) + '</div>' +
+            '  <div class="fieldDescription">' + escapeHtml(parameter.Description) + '</div>' +
             versionNote +
             '</div>';
     }
@@ -915,7 +899,7 @@
                 ' <code class="lapseFlag">' + (engine.Id === 'lapse' ? 'positional' : '--split-penalty') + '</code></label>' +
                 '  <input is="emby-input" type="number" class="lapseSettingPenalty" min="' + engine.MinPenalty +
                 '" max="' + engine.MaxPenalty + '" value="' + engine.Penalty + '" />' +
-                '  <div class="fieldDescription lapseParamNote">Higher means fewer splits. ' +
+                '  <div class="fieldDescription">Higher means fewer splits. ' +
                 penaltyDefault + ' is the standard value. Range ' + engine.MinPenalty + ' to ' + engine.MaxPenalty +
                 ', split mode only.' +
                 (engine.Id === 'lapse'
@@ -926,16 +910,17 @@
         }
 
         var note = engine.AdvancedNote
-            ? '<div class="lapseAdvancedNote">' + escapeHtml(engine.AdvancedNote) + '</div>'
+            ? '<div class="fieldDescription">' + escapeHtml(engine.AdvancedNote) + '</div>'
             : '';
 
         return '' +
-            '<div class="lapseEngineAdvanced hide">' +
+            '<details class="lapseDetails">' +
+            '<summary>Advanced</summary>' +
             note +
             '  <div class="selectContainer">' +
             '    <label class="selectLabel">Default sync mode</label>' +
             '    <select is="emby-select" class="emby-select-withcolor emby-select lapseSettingMode">' + modeOptions + '</select>' +
-            '    <div class="fieldDescription lapseParamNote">What happens when you press Sync from an item\'s ' +
+            '    <div class="fieldDescription">What happens when you press Sync from an item\'s ' +
             'three-dot menu, or from the sync status list.</div>' +
             '  </div>' +
             '  <div class="lapseModeNotes">' + modeNotes + '</div>' +
@@ -949,15 +934,13 @@
             '        <span class="material-icons search" aria-hidden="true"></span>' +
             '      </button>' +
             '    </div>' +
-            '    <div class="fieldDescription lapseParamNote">Leave empty to use the copy the plugin installed. ' +
+            '    <div class="fieldDescription">Leave empty to use the copy the plugin installed. ' +
             'Point this at a binary you built yourself when there is no download for this server. ' +
             'The plugin never replaces a binary behind an override.</div>' +
             '  </div>' +
-            '  <div class="lapseEngineLinks">' +
-            '    <a is="emby-linkbutton" class="button-link" href="' + escapeHtml(engine.ProjectUrl) +
+            '  <a is="emby-linkbutton" class="button-link" href="' + escapeHtml(engine.ProjectUrl) +
             '" target="_blank" rel="noopener">' + escapeHtml(engine.DisplayName) + ' on GitHub</a>' +
-            '  </div>' +
-            '</div>';
+            '</details>';
     }
 
     // one box comparing all engines' formats side by side, that's the actual question people have
@@ -978,11 +961,11 @@
 
         box.classList.remove('hide');
         box.innerHTML =
-            '<div class="lapseBoxTitle">Subtitle formats</div>' +
+
             '<div class="lapseFormatTable">' +
             withFormats.map(function (engine) {
                 return '<div class="lapseFormatName">' + escapeHtml(engine.DisplayName) +
-                    (engine.IsDefault ? ' <span class="lapseFormatInUse">in use</span>' : '') + '</div>' +
+                    (engine.IsDefault ? ' (in use)' : '') + '</div>' +
                     '<div class="lapseFormatList">' +
                     (engine.SubtitleExtensions || []).map(function (f) {
                         return '<code>' + escapeHtml(f) + '</code>';
@@ -1055,7 +1038,7 @@
 
         box.classList.remove('hide');
         box.innerHTML =
-            '<div class="lapseBoxTitle">Worth considering</div>' +
+            '<h3>Running it outside Jellyfin</h3>' +
             withNotes.map(function (engine) {
                 return '<p>' + escapeHtml(engine.DeploymentNote) +
                     ' <a is="emby-linkbutton" class="button-link" href="' + escapeHtml(engine.ProjectUrl) +
@@ -1068,80 +1051,58 @@
         var container = view.querySelector('#lapseEngineCards');
 
         container.innerHTML = allEngines.map(function (engine) {
-            var cardClasses = 'lapseEngineCard';
-            if (engine.IsDefault) {
-                cardClasses += ' lapseEngineCard-default';
-            }
-
-            if (!engine.Installed && !engine.DownloadSupported) {
-                cardClasses += ' lapseEngineCard-unavailable';
-            }
-
             var actions = '';
             if (!engine.IsDefault && engine.Installed && !engine.RunCheckError) {
-                actions += '<button is="emby-button" type="button" class="raised lapseSmallButton lapseBtnSetDefault">Use by default</button>';
+                actions += '<button is="emby-button" type="button" class="raised lapseBtnSetDefault"><span>Use this one</span></button>';
+            }
+
+            if (engine.Installed && engine.DownloadSupported && engine.UpdateAvailable) {
+                actions += '<button is="emby-button" type="button" class="raised button-submit lapseBtnUpdate"><span>Update</span></button>';
             }
 
             if (engine.DownloadSupported) {
-                actions += '<button is="emby-button" type="button" class="raised lapseSmallButton lapseBtnInstall">' +
-                    (engine.Installed ? 'Reinstall' : 'Install') + '</button>';
+                actions += '<button is="emby-button" type="button" class="raised lapseBtnInstall"><span>' +
+                    (engine.Installed ? 'Reinstall' : 'Install') + '</span></button>';
             }
-
-            if (engine.Installed && engine.DownloadSupported) {
-                actions += '<button is="emby-button" type="button" class="raised lapseSmallButton lapseBtnUpdate' +
-                    (engine.UpdateAvailable ? ' button-submit' : '') + '">' +
-                    (engine.UpdateAvailable ? 'Update' : 'Check + update') + '</button>';
-            }
-
-            actions += '<button is="emby-button" type="button" class="raised lapseSmallButton lapseBtnAdvanced">Advanced</button>';
 
             // Only offered for a copy the plugin put there. A binary behind a path
             // override isn't the plugin's to delete, and the server refuses anyway.
             if (engine.Installed && !engine.PathOverride) {
-                actions += '<button is="emby-button" type="button" class="raised lapseSmallButton lapseBtnUninstall">Uninstall</button>';
+                actions += '<button is="emby-button" type="button" class="raised lapseBtnUninstall"><span>Uninstall</span></button>';
             }
 
             var problem = '';
             if (!engine.DownloadSupported && !engine.Installed) {
-                problem = '<div class="lapseEngineNotice">' + escapeHtml(engine.NoDownloadReason || '') +
+                problem = '<div class="fieldDescription">' + escapeHtml(engine.NoDownloadReason || '') +
                     (engine.BuildGuideUrl
                         ? ' <a is="emby-linkbutton" class="button-link" href="' + escapeHtml(engine.BuildGuideUrl) +
                           '" target="_blank" rel="noopener">Build instructions</a>'
                         : '') +
                     '</div>';
             } else if (engine.RunCheckError) {
-                problem = '<div class="lapseEngineError">' + escapeHtml(engine.RunCheckError) + '</div>';
+                problem = '<div class="fieldDescription lapseProblem">' + escapeHtml(engine.RunCheckError) + '</div>';
             }
 
-            // Only LAPSE carries a "why" link, and it is the one claim on this page that
-            // needs backing up. The other two say what they are with a badge and nothing else.
+            // Only LAPSE carries a "why" link, the one claim on this page that needs backing up
             var whyLink = engine.WhyUrl
-                ? '<div class="lapseWhyLink"><a is="emby-linkbutton" class="button-link" href="' +
-                  escapeHtml(engine.WhyUrl) + '" target="_blank" rel="noopener">' +
-                  escapeHtml(engine.WhyLabel || 'Read more on GitHub') + '</a></div>'
+                ? ' <a is="emby-linkbutton" class="button-link" href="' + escapeHtml(engine.WhyUrl) + '" target="_blank" rel="noopener">' +
+                  escapeHtml(engine.WhyLabel || 'Read more on GitHub') + '</a>'
                 : '';
 
-            var updateNote = engineUpdateNote(engine);
+            var state = capitalize(engineUpdateNote(engine) || engineStateText(engine)) + '.' +
+                (engine.Installed && !engine.InstalledVersion ? ' The installed copy does not say which version it is.' : '');
 
-            // no prose on purpose, just which engine, whether it works and what version. Details are in Advanced.
             return '' +
-                '<div class="' + cardClasses + '" data-id="' + escapeHtml(engine.Id) + '">' +
-                '  <div class="lapseEngineCardTop">' +
-                '    <span class="lapseEngineName" title="' + escapeHtml(discoveredFlagsTooltip(engine)) + '">' +
-                escapeHtml(engine.DisplayName) + '</span>' +
-                engineVersionBadge(engine) +
-                tierBadge(engine) +
-                '  </div>' +
-                '  <div class="lapseEngineStatusLine">' +
-                '    <span class="lapseEngineDot lapseEngineDot-' + engineStateClass(engine) + '"></span>' +
-                '    <span>' + escapeHtml(updateNote || engineStateText(engine)) + '</span>' +
-                '  </div>' +
-                whyLink +
+                '<div class="verticalSection lapseEngineCard" data-id="' + escapeHtml(engine.Id) + '">' +
+                '  <h3 class="sectionTitle" title="' + escapeHtml(discoveredFlagsTooltip(engine)) + '">' +
+                escapeHtml(engine.DisplayName) + (engine.InstalledVersion ? ' ' + escapeHtml(engine.InstalledVersion) : '') +
+                (engine.IsDefault ? ' (in use)' : '') + '</h3>' +
+                '  <div class="fieldDescription">' + escapeHtml(state) + ' ' + escapeHtml(engine.Tier) + '.' + whyLink + '</div>' +
                 problem +
                 vadNotice(engine) +
                 whisperNotice(engine) +
                 forceControl(engine) +
-                '  <div class="lapseEngineActions">' + actions + '</div>' +
+                (actions ? '  <div class="lapseButtonRow">' + actions + '</div>' : '') +
                 engineAdvancedHtml(engine) +
                 '</div>';
         }).join('');
@@ -1173,14 +1134,6 @@
                     updateEngine(view, id, update);
                 });
             }
-
-            var advanced = card.querySelector('.lapseBtnAdvanced');
-            var advancedPanel = card.querySelector('.lapseEngineAdvanced');
-            advanced.addEventListener('click', function () {
-                var opening = advancedPanel.classList.contains('hide');
-                advancedPanel.classList.toggle('hide', !opening);
-                advanced.textContent = opening ? 'Hide advanced' : 'Advanced';
-            });
 
             card.querySelector('.lapseBtnBrowsePath').addEventListener('click', function () {
                 browseForPath(card.querySelector('.lapseSettingPath'), true, 'Select the engine binary');
@@ -1300,10 +1253,8 @@
     function refreshEngineCache(view) {
         return lapseGet('Lapse/Engines/Cache').then(function (bytes) {
             view.querySelector('#lapseEngineCacheNote').textContent =
-                'LAPSE remembers the speech it found in each film, so the next subtitle for the same film ' +
-                'takes about a second. That cache is in Jellyfin\'s cache folder and holds ' +
-                (bytes < 1048576 ? Math.ceil(bytes / 1024) + ' KB' : (bytes / 1048576).toFixed(1) + ' MB') + '. Clearing it loses nothing, the next sync of each film ' +
-                'just listens to it again.';
+                'LAPSE keeps the speech it found in each film, so the next subtitle for it takes a second. The cache holds ' +
+                (bytes < 1048576 ? Math.ceil(bytes / 1024) + ' KB' : (bytes / 1048576).toFixed(1) + ' MB') + '.';
         }).catch(function () {
             // purely informational, not worth an error message
         });
@@ -1320,6 +1271,7 @@
 
     function clearEngineCacheConfirmed(view) {
         lapseDelete('Lapse/Engines/Cache').then(function () {
+            Dashboard.alert('The cache is cleared.');
             return refreshEngineCache(view);
         }).catch(function (err) {
             tell('Could not clear the cache', err.message);
@@ -1345,36 +1297,37 @@
         var container = view.querySelector('#lapseLibraryList');
 
         if (allLibraries.length === 0) {
-            container.innerHTML = '<div class="fieldDescription" style="padding:.8em;">No libraries found.</div>';
+            container.innerHTML = '<p class="fieldDescription">Jellyfin has no libraries yet.</p>';
             return;
         }
 
         container.innerHTML = allLibraries.map(function (library) {
             var frequency = library.ScheduleFrequency || 'Daily';
 
+            var name = escapeHtml(library.Name);
+
             return '' +
-                '<div class="lapseLibraryRow" data-id="' + library.ItemId + '">' +
-                '  <div class="lapseLibraryMain">' +
-                '    <label class="emby-checkbox-label lapseInlineCheck">' +
+                '<div class="listItem listItem-border lapseLibraryRow" data-id="' + escapeHtml(library.ItemId) + '">' +
+                '  <div class="listItemBody">' +
+                '    <div class="checkboxContainer"><label class="emby-checkbox-label">' +
                 '      <input type="checkbox" is="emby-checkbox" class="lapseChkLibraryEnabled"' + (library.Enabled ? ' checked' : '') + ' />' +
-                '      <span class="lapseLibraryName">' + escapeHtml(library.Name) + '</span>' +
-                '    </label>' +
-                '    <span class="lapseMuted lapseLibraryType">' + escapeHtml(library.CollectionType || 'mixed') + '</span>' +
-                '  </div>' +
-                '  <div class="lapseLibrarySchedule">' +
-                '    <label class="emby-checkbox-label lapseInlineCheck" title="Sync anything added to this library as it turns up, and a new subtitle on something already here. Nothing else already in the library is touched.">' +
-                '      <input type="checkbox" is="emby-checkbox" class="lapseChkAutoSync"' + (library.AutoSyncEnabled ? ' checked' : '') + ' />' +
-                '      <span>New items</span>' +
-                '    </label>' +
-                '    <label class="emby-checkbox-label lapseInlineCheck" title="Run over everything in this library on a timer.">' +
-                '      <input type="checkbox" is="emby-checkbox" class="lapseChkSchedule"' + (library.ScheduleEnabled ? ' checked' : '') + ' />' +
-                '      <span>Schedule</span>' +
-                '    </label>' +
-                '    <select is="emby-select" class="emby-select-withcolor emby-select lapseScheduleFrequency">' +
+                '      <span>' + name + '</span>' +
+                '    </label></div>' +
+                '    <div class="lapseLibrarySchedule">' +
+                '      <div class="checkboxContainer"><label class="emby-checkbox-label">' +
+                '        <input type="checkbox" is="emby-checkbox" class="lapseChkAutoSync"' + (library.AutoSyncEnabled ? ' checked' : '') + ' />' +
+                '        <span>New items</span>' +
+                '      </label></div>' +
+                '      <div class="checkboxContainer"><label class="emby-checkbox-label">' +
+                '        <input type="checkbox" is="emby-checkbox" class="lapseChkSchedule"' + (library.ScheduleEnabled ? ' checked' : '') + ' />' +
+                '        <span>Schedule</span>' +
+                '      </label></div>' +
+                '      <select is="emby-select" class="emby-select-withcolor emby-select lapseScheduleFrequency" aria-label="How often, ' + name + '">' +
                 frequencyOptions(frequency) + '</select>' +
-                '    <select is="emby-select" class="emby-select-withcolor emby-select lapseScheduleDay">' +
+                '      <select is="emby-select" class="emby-select-withcolor emby-select lapseScheduleDay" aria-label="Day, ' + name + '">' +
                 dayOptions(library.ScheduleDay || 'Sunday') + '</select>' +
-                '    <input is="emby-input" type="time" class="lapseScheduleTime" value="' + escapeHtml(library.ScheduleTime || '03:00') + '" />' +
+                '      <input is="emby-input" type="time" class="lapseScheduleTime" aria-label="Time, ' + name + '" value="' + escapeHtml(library.ScheduleTime || '03:00') + '" />' +
+                '    </div>' +
                 '  </div>' +
                 '</div>';
         }).join('');
@@ -1422,7 +1375,7 @@
 
                 // A row nobody can act on reads as inert, not just as a row with two
                 // greyed out boxes in it.
-                row.classList.toggle('lapseLibraryRowDisabled', !enabledCheck.checked);
+                row.querySelector('.lapseLibrarySchedule').classList.toggle('lapseDimmed', !enabledCheck.checked);
             }
 
             // turning a library off clears new-item and schedule too, so turning it back on doesn't bring them back unasked
@@ -1465,7 +1418,7 @@
         });
     }
 
-    function saveLibraries(view) {
+    function saveLibraries(view, button) {
         var payload = { Libraries: [] };
 
         view.querySelectorAll('.lapseLibraryRow').forEach(function (row) {
@@ -1482,10 +1435,12 @@
             });
         });
 
+        button.disabled = true;
         Dashboard.showLoadingMsg();
         lapsePost('Lapse/Libraries', payload).then(function () {
             Dashboard.hideLoadingMsg();
-            Dashboard.alert('Library settings saved.');
+            button.disabled = false;
+            Dashboard.alert('Settings saved.');
 
             // read them straight back rather than trusting the form: if anything didn't
             // stick, the toggles snapping back is the honest answer
@@ -1494,6 +1449,7 @@
             });
         }).catch(function (err) {
             Dashboard.hideLoadingMsg();
+            button.disabled = false;
             tell('Could not save the library settings', err.message);
         });
     }
@@ -1527,12 +1483,12 @@
 
         container.innerHTML = showLibraries.map(function (library) {
             return '' +
-                '<div class="lapseShowLibrary" data-id="' + library.ItemId + '">' +
-                '  <div class="lapseShowLibraryName">' + escapeHtml(library.Name) + '</div>' +
+                '<div class="verticalSection lapseShowLibrary" data-id="' + escapeHtml(library.ItemId) + '">' +
+                '  <h3 class="sectionTitle">' + escapeHtml(library.Name) + '</h3>' +
                 '  <div class="lapseButtonRow">' +
-                '    <button is="emby-button" type="button" class="raised lapseSmallButton lapseBtnSyncAllSeries">' +
+                '    <button is="emby-button" type="button" class="raised lapseBtnSyncAllSeries">' +
                 '      <span>Sync all series</span></button>' +
-                '    <button is="emby-button" type="button" class="raised lapseSmallButton lapseBtnSyncSeason">' +
+                '    <button is="emby-button" type="button" class="raised lapseBtnSyncSeason">' +
                 '      <span>Sync season...</span></button>' +
                 '  </div>' +
                 '</div>';
@@ -1720,29 +1676,6 @@
         }
     }
 
-    function shortStatus(status) {
-        switch (status) {
-            case 'Synced': return 'Synced';
-            case 'PartiallySynced': return 'Partly';
-            case 'Skipped': return 'Skipped';
-            case 'Ignored': return 'Ignored';
-            case 'Failed': return 'Failed';
-            default: return 'Pending';
-        }
-    }
-
-    // status is PascalCase, pill classes are lower case, map them ("partiallysynced" reads like a typo)
-    function statusPillClass(status) {
-        switch (status) {
-            case 'Synced': return 'lapseStatusPill-synced';
-            case 'PartiallySynced': return 'lapseStatusPill-partial';
-            case 'Skipped': return 'lapseStatusPill-skipped';
-            case 'Ignored': return 'lapseStatusPill-ignored';
-            case 'Failed': return 'lapseStatusPill-failed';
-            default: return 'lapseStatusPill-pending';
-        }
-    }
-
     function renderItemList(view, items) {
         var container = view.querySelector('#lapseItemList');
 
@@ -1774,11 +1707,11 @@
 
         if (shown.length === 0) {
             if (search || libraryId || status) {
-                container.innerHTML = '<div class="fieldDescription" style="padding:.8em;">Nothing matches that filter.</div>';
+                container.innerHTML = '<p class="fieldDescription">Nothing matches that filter.</p>';
             } else if (!includeAll) {
-                container.innerHTML = '<div class="fieldDescription" style="padding:.8em;">No items with an external subtitle. Turn on "Include all" to see everything.</div>';
+                container.innerHTML = '<p class="fieldDescription">No items with an external subtitle. Turn on "Include all" to see everything.</p>';
             } else {
-                container.innerHTML = '<div class="fieldDescription" style="padding:.8em;">No items found. Check that at least one library is turned on under Settings, Libraries.</div>';
+                container.innerHTML = '<p class="fieldDescription">No items found. Check that at least one library is turned on under Settings, Libraries.</p>';
             }
 
             return;
@@ -1789,37 +1722,35 @@
         var capped = shown.slice(0, 500);
 
         container.innerHTML = capped.map(function (item) {
-            var pillClass = statusPillClass(item.Status);
             var ignored = item.Status === 'Ignored';
             var skipLabel = item.Status === 'Skipped' ? 'Un-skip' : 'Skip';
             var errorLine = item.LastError
-                ? ('<div class="listItemBodyText secondary lapseItemError">' + escapeHtml(item.LastError) + '</div>')
+                ? ('<div class="listItemBodyText secondary">' + escapeHtml(item.LastError) + '</div>')
                 : '';
 
             return '' +
-                '<div class="listItem lapseItemRow' + (ignored ? ' lapseItemRow-ignored' : '') + '"' +
-                ' data-id="' + item.ItemId + '" data-name="' + escapeHtml(item.Name) + '">' +
-                '  <div class="listItemBody">' +
-                '    <div class="listItemBodyText">' + escapeHtml(item.Name) +
-                '      <span class="lapseStatusPill ' + pillClass + '">' + escapeHtml(statusLabel(item)) + '</span></div>' +
-                '    <div class="listItemBodyText secondary lapseItemMeta">' +
-                escapeHtml(item.LibraryName || 'unknown library') + ' &middot; ' + escapeHtml(item.ItemType) +
-                ' &middot; ' + item.SubtitleCount + ' subtitle' + (item.SubtitleCount === 1 ? '' : 's') + '</div>' +
+                '<div class="listItem listItem-border lapseItemRow' + (ignored ? ' lapseItemRow-ignored' : '') + '"' +
+                ' data-id="' + escapeHtml(item.ItemId) + '" data-name="' + escapeHtml(item.Name) + '">' +
+                '  <div class="listItemBody' + (errorLine ? ' three-line' : ' two-line') + '">' +
+                '    <div class="listItemBodyText">' + escapeHtml(item.Name) + '</div>' +
+                '    <div class="listItemBodyText secondary">' + escapeHtml(statusLabel(item)) + ' &middot; ' +
+                escapeHtml(item.LibraryName || 'unknown library') + ' &middot; ' +
+                item.SubtitleCount + ' subtitle' + (item.SubtitleCount === 1 ? '' : 's') + '</div>' +
                 errorLine +
                 '  </div>' +
-                '  <div class="lapseItemRowActions">' +
-                '    <button is="emby-button" type="button" class="raised lapseBtnSync">Sync</button>' +
-                '    <button is="emby-button" type="button" class="raised lapseBtnAdvanced">Advanced</button>' +
-                '    <button is="emby-button" type="button" class="raised lapseBtnSkip">' + skipLabel + '</button>' +
-                '    <button is="emby-button" type="button" class="raised lapseBtnIgnore">' +
-                (ignored ? 'Un-ignore' : 'Ignore') + '</button>' +
+                '  <div class="lapseRowActions">' +
+                '    <button is="emby-button" type="button" class="raised button-submit lapseBtnSync"><span>Sync</span></button>' +
+                '    <button is="emby-button" type="button" class="raised lapseBtnAdvanced"><span>Advanced</span></button>' +
+                '    <button is="emby-button" type="button" class="raised lapseBtnSkip"><span>' + skipLabel + '</span></button>' +
+                '    <button is="emby-button" type="button" class="raised lapseBtnIgnore"><span>' +
+                (ignored ? 'Un-ignore' : 'Ignore') + '</span></button>' +
                 '  </div>' +
                 '</div>';
         }).join('');
 
         if (shown.length > capped.length) {
-            container.innerHTML += '<div class="fieldDescription" style="padding:.8em;">' +
-                'Showing the first ' + capped.length + ' of ' + shown.length + '. Narrow it down with the search or the filters.</div>';
+            container.innerHTML += '<p class="fieldDescription">' +
+                'Showing the first ' + capped.length + ' of ' + shown.length + '. Narrow it down with the search or the filters.</p>';
         }
 
     }
@@ -2314,11 +2245,11 @@
               threshold + '</span>%</label>' +
               '  <input type="range" id="lapseAdvConfidence" min="0" max="100" value="' + threshold + '" class="lapseRange" />' +
               '</div>' +
-              '<label class="emby-checkbox-label lapseStackedCheck">' +
+              '<div class="checkboxContainer"><label class="emby-checkbox-label">' +
               '  <input id="lapseAdvMetadataHeader" type="checkbox" is="emby-checkbox"' +
               ((currentSettings && currentSettings.TranslationIncludeMetadataHeader) ? ' checked' : '') + ' />' +
-              '  <span>Add a metadata comment block at the top</span>' +
-              '</label>' +
+              '  <span>Add a comment at the top saying how it was translated</span>' +
+              '</label></div>' +
               '<div class="fieldDescription">Writes a new file next to the original. .srt has no room for the comment block.</div>' +
               '<button is="emby-button" type="button" class="raised" id="lapseAdvTranslate"><span>Translate</span></button>'
             : '';
@@ -2586,20 +2517,20 @@
             var container = view.querySelector('#lapseRuns');
 
             container.innerHTML = runs.length === 0
-                ? '<div class="lapseActivityEmpty">No bulk run has written anything yet.</div>'
-                : '<div class="lapseActivityList">' + runs.map(function (run) {
-                    var action = run.Undone >= run.Files
-                        ? '<span class="lapseActivityUndone">undone</span>'
-                        : '<button is="emby-button" type="button" class="raised lapseSmallButton lapseBtnUndoRun"' +
-                          ' data-id="' + escapeHtml(run.Id) + '">Undo run</button>';
+                ? '<p class="fieldDescription">No bulk run has written anything yet. Each run shows up here with a way to undo it.</p>'
+                : '<div class="paperList">' + runs.map(function (run) {
+                    var undone = run.Undone >= run.Files;
+                    var action = undone
+                        ? ''
+                        : '<div class="lapseRowActions"><button is="emby-button" type="button" class="raised lapseBtnUndoRun"' +
+                          ' data-id="' + escapeHtml(run.Id) + '"><span>Undo run</span></button></div>';
 
-                    return '<div class="lapseActivityRow">' +
-                        '<span class="lapseActivityName">' + escapeHtml(run.Name) + '</span>' +
-                        '<span class="lapseActivityDetail">' + run.Synced + ' synced, ' + run.Unsure + ' unsure, ' +
-                        run.Failed + ' failed, ' + run.Skipped + ' skipped. ' + run.Files + ' files written.</span>' +
-                        '<span class="lapseActivityWhen">' + escapeHtml(timeAgo(run.FinishedUtc)) + '</span>' +
-                        '<span class="lapseActivityAction">' + action + '</span>' +
-                        '</div>';
+                    return '<div class="listItem listItem-border">' +
+                        '<div class="listItemBody two-line">' +
+                        '<div class="listItemBodyText">' + escapeHtml(run.Name) + ', ' + escapeHtml(timeAgo(run.FinishedUtc)) + '</div>' +
+                        '<div class="listItemBodyText secondary">' + (undone ? 'Undone. ' : '') + run.Synced + ' synced, ' + run.Unsure + ' unsure, ' +
+                        run.Failed + ' failed, ' + run.Skipped + ' skipped, ' + run.Files + (run.Files === 1 ? ' file' : ' files') + ' written.</div>' +
+                        '</div>' + action + '</div>';
                 }).join('') + '</div>';
 
             container.querySelectorAll('.lapseBtnUndoRun').forEach(function (button) {
@@ -2665,20 +2596,20 @@
             allIgnoreRules.length === 0 ? '' : (allIgnoreRules.length + ' rules');
 
         if (allIgnoreRules.length === 0) {
-            container.innerHTML = '<div class="fieldDescription" style="padding:.8em;">Nothing is ignored.</div>';
+            container.innerHTML = '<p class="fieldDescription">Nothing is ignored.</p>';
             return;
         }
 
         container.innerHTML = allIgnoreRules.map(function (rule) {
             return '' +
-                '<div class="listItem lapseIgnoreRow" data-item="' + escapeHtml(rule.ItemId || '') +
+                '<div class="listItem listItem-border lapseIgnoreRow" data-item="' + escapeHtml(rule.ItemId || '') +
                 '" data-path="' + escapeHtml(rule.Path || '') + '">' +
-                '  <div class="listItemBody">' +
+                '  <div class="listItemBody two-line">' +
                 '    <div class="listItemBodyText">' + escapeHtml(rule.DisplayName) + '</div>' +
-                '    <div class="listItemBodyText secondary lapseItemMeta">' + escapeHtml(rule.Kind || '') + '</div>' +
+                '    <div class="listItemBodyText secondary">' + escapeHtml(rule.Kind || '') + '</div>' +
                 '  </div>' +
-                '  <div class="lapseItemRowActions">' +
-                '    <button is="emby-button" type="button" class="raised lapseBtnUnignore">Remove</button>' +
+                '  <div class="lapseRowActions">' +
+                '    <button is="emby-button" type="button" class="raised lapseBtnUnignore"><span>Remove</span></button>' +
                 '  </div>' +
                 '</div>';
         }).join('');
@@ -2730,7 +2661,7 @@
 
             ignoreSearchPending = true;
             ignoreSearchFetched = true;
-            container.innerHTML = '<div class="fieldDescription lapseTightNote">Looking through the library...</div>';
+            container.innerHTML = '<div class="fieldDescription">Looking through the library...</div>';
 
             refreshItemList(view).then(function () {
                 ignoreSearchPending = false;
@@ -2742,7 +2673,7 @@
 
                 // A failed read is worth retrying, unlike an empty one.
                 ignoreSearchFetched = false;
-                container.innerHTML = '<div class="fieldDescription lapseTightNote">Could not read the library: ' +
+                container.innerHTML = '<div class="fieldDescription">Could not read the library: ' +
                     escapeHtml(err.message || 'unknown error') + '</div>';
             });
 
@@ -2758,17 +2689,19 @@
         }).slice(0, 25);
 
         if (matches.length === 0) {
-            container.innerHTML = '<div class="fieldDescription lapseTightNote">' +
+            container.innerHTML = '<div class="fieldDescription">' +
                 'Nothing matches that. Only items in a library that is turned on under Settings, ' +
                 'Libraries can be searched here - use the path box below for anything else.</div>';
             return;
         }
 
         container.innerHTML = matches.map(function (item) {
-            return '<div class="lapseIgnoreCandidate" data-id="' + escapeHtml(item.ItemId) + '">' +
-                '<span class="lapseIgnoreCandidateName">' + escapeHtml(item.Name) + '</span>' +
-                '<span class="lapseMuted">' + escapeHtml(item.ItemType) + '</span>' +
-                '<button is="emby-button" type="button" class="raised lapseSmallButton lapseBtnIgnoreAdd">Ignore</button>' +
+            return '<div class="listItem listItem-border lapseIgnoreCandidate" data-id="' + escapeHtml(item.ItemId) + '">' +
+                '<div class="listItemBody two-line">' +
+                '<div class="listItemBodyText">' + escapeHtml(item.Name) + '</div>' +
+                '<div class="listItemBodyText secondary">' + escapeHtml(item.ItemType) + '</div>' +
+                '</div>' +
+                '<div class="lapseRowActions"><button is="emby-button" type="button" class="raised lapseBtnIgnoreAdd"><span>Ignore</span></button></div>' +
                 '</div>';
         }).join('');
 
@@ -2930,9 +2863,7 @@
 
     // --- settings: output, translation, appearance, engines ---
 
-    // `options.hideRecommended` drops the badge but keeps the default picked
-    //
-    // class on the picked row too, a radio dot is easy to miss in a list of multi-line options
+    // `options.hideRecommended` leaves the word out but keeps the default picked
     function renderRadioGroup(container, name, modes, selected, onChange, options) {
         var showRecommended = !(options && options.hideRecommended);
 
@@ -2944,39 +2875,22 @@
         }
 
         container.innerHTML = modes.map(function (mode) {
-            var active = selected === mode.value;
-
             return '' +
-                '<label class="lapseRadioRow' + (active ? ' lapseRadioRow-active' : '') + '">' +
+                '<label class="lapseRadioRow">' +
                 '  <input type="radio" name="' + name + '" value="' + escapeHtml(mode.value) + '"' +
-                (active ? ' checked' : '') + ' />' +
-                '  <span class="lapseRadioLabel">' + escapeHtml(mode.label) +
-                (mode.recommended && showRecommended
-                    ? '<span class="lapseChip lapseChip-recommended">Recommended</span>'
-                    : '') +
-                '    <span class="fieldDescription">' + escapeHtml(mode.note) + '</span>' +
+                (selected === mode.value ? ' checked' : '') + ' />' +
+                '  <span><span>' + escapeHtml(mode.label) + '</span>' +
+                '    <span class="fieldDescription">' + (mode.recommended && showRecommended ? 'Recommended. ' : '') +
+                escapeHtml(mode.note) + '</span>' +
                 '  </span>' +
                 '</label>';
         }).join('');
 
-        container.querySelectorAll('input[name="' + name + '"]').forEach(function (radio) {
-            radio.addEventListener('change', function () {
-                markActiveRadio(container, name);
-
-                if (onChange) {
-                    onChange();
-                }
+        if (onChange) {
+            container.querySelectorAll('input[name="' + name + '"]').forEach(function (radio) {
+                radio.addEventListener('change', onChange);
             });
-        });
-    }
-
-    function markActiveRadio(container, name) {
-        container.querySelectorAll('input[name="' + name + '"]').forEach(function (radio) {
-            var row = radio.closest('.lapseRadioRow');
-            if (row) {
-                row.classList.toggle('lapseRadioRow-active', radio.checked);
-            }
-        });
+        }
     }
 
     function selectedRadio(view, name, fallback) {
@@ -2997,7 +2911,7 @@
 
         var preview = mode.indexOf('Sidecar') === 0
             ? 'Movie.en.srt becomes Movie.en' + suffix + '.srt'
-            : 'Only used by the two "write a new file" modes.';
+            : 'Only used when a new file is written.';
 
         view.querySelector('#lapseSidecarPreview').textContent = preview;
         view.querySelector('#lapseOutputHint').textContent =
@@ -3010,11 +2924,11 @@
 
         var note;
         if (value >= 12) {
-            note = 'Strict. Only very clear answers count as solid, so more results end up in a sidecar.';
+            note = 'Strict: more results go to Review. LAPSE only, 8 is its own default.';
         } else if (value >= 6) {
-            note = 'The engine\'s own default is 8, which is what this ships as. Leave it there unless you have a reason.';
+            note = 'How clearly an answer has to stand out before LAPSE writes it. LAPSE only, 8 is its own default.';
         } else {
-            note = 'Loose. More results count as solid, including some the engine is only half sure about.';
+            note = 'Loose: fewer results go to Review, and some of those written are wrong. LAPSE only, 8 is its own default.';
         }
 
         view.querySelector('#lapseConfidenceSigmaNote').textContent = note;
@@ -3028,7 +2942,7 @@
         // zero still means something (only an exact 0 offset is left alone), so the slider stays visible
         row.classList.toggle('lapseDimmed', !on);
         view.querySelector('#lapseAlreadyInSyncTolerance').disabled = !on;
-        view.querySelector('#lapseAlreadyInSyncToleranceValue').textContent = value + 'ms';
+        view.querySelector('#lapseAlreadyInSyncToleranceValue').textContent = value + ' ms';
     }
 
     // No Recommended badges, the right format depends on what reads the file. srt is still pre-picked
@@ -3097,11 +3011,8 @@
         }
 
         note.classList.remove('hide');
-        note.innerHTML = '<strong>' + escapeHtml(engine.DisplayName) + '</strong> reads and writes ' +
-            escapeHtml(formats.join(', ')) + ', and writes each one back in the format it read. ' +
-            'Converting is therefore optional: the plugin only does it on its own when the engine ' +
-            'cannot read the file. It is still worth having if you use an engine that reads fewer ' +
-            'formats, or if you would rather have plain srt files across the library.';
+        note.textContent = engine.DisplayName + ' reads ' + formats.join(', ') + ' and writes each back in its own format, ' +
+            'so converting is only needed for one format across the library.';
     }
 
     function updateConversionHint(view) {
@@ -3168,13 +3079,11 @@
             var checked = allowed.some(function (id) { return sameId(id, user.Id); });
 
             return '' +
-                '<label class="emby-checkbox-label lapseStackedCheck">' +
+                '<div class="checkboxContainer"><label class="emby-checkbox-label">' +
                 '  <input type="checkbox" is="emby-checkbox" class="lapseAccessUser" data-id="' + escapeHtml(user.Id) + '"' +
                 (checked ? ' checked' : '') + ' />' +
-                '  <span>' + escapeHtml(user.Name) +
-                (user.CanManageSubtitles ? '<span class="lapseChip">can manage subtitles</span>' : '') +
-                '</span>' +
-                '</label>';
+                '  <span>' + escapeHtml(user.Name) + (user.CanManageSubtitles ? ' (can manage subtitles)' : '') + '</span>' +
+                '</label></div>';
         }).join('');
     }
 
@@ -3315,11 +3224,11 @@
             var checked = picked.some(function (id) { return sameId(id, library.ItemId); });
 
             return '' +
-                '<label class="emby-checkbox-label lapseStackedCheck">' +
+                '<div class="checkboxContainer"><label class="emby-checkbox-label">' +
                 '  <input type="checkbox" is="emby-checkbox" class="lapseExtractLibrary" data-id="' + escapeHtml(library.ItemId) + '"' +
                 (checked ? ' checked' : '') + ' />' +
                 '  <span>' + escapeHtml(library.Name) + '</span>' +
-                '</label>';
+                '</label></div>';
         }).join('');
     }
 
@@ -3508,18 +3417,12 @@
         var container = view.querySelector('#lapseProviderList');
 
         container.innerHTML = allProviders.map(function (provider) {
-            var fields = providerFieldsHtml(provider);
-
             return '' +
-                '<div class="lapseProviderCard' + (provider.Configured ? ' lapseProviderCard-on' : '') + '">' +
-                '  <div class="lapseProviderTop">' +
-                '    <span class="lapseProviderName">' + escapeHtml(provider.DisplayName) + '</span>' +
-                '    <span class="lapseChip lapseChip-tier">' + escapeHtml(tierLabel(provider.Tier)) + '</span>' +
-                '    <span class="lapseMuted lapseProviderState">' +
-                (provider.Configured ? 'active' : 'not configured') + '</span>' +
-                '  </div>' +
-                '  <div class="fieldDescription lapseTightNote">' + escapeHtml(provider.Summary) + '</div>' +
-                fields +
+                '<div class="verticalSection">' +
+                '  <h3 class="sectionTitle">' + escapeHtml(provider.DisplayName) + '</h3>' +
+                '  <div class="fieldDescription">' + escapeHtml(tierLabel(provider.Tier)) + ', ' +
+                (provider.Configured ? 'ready' : 'not set up') + '. ' + escapeHtml(provider.Summary) + '</div>' +
+                providerFieldsHtml(provider) +
                 '</div>';
         }).join('');
 
@@ -3663,17 +3566,15 @@
         // Overwriting on a low score means LAPSE has already replaced the file by the time
         // the other engines could have been asked, so there is nothing left to compare.
         if (availability.OverwriteAnywayConflict) {
-            parts.push('Your File output setting is "sync it anyway" for low confidence results, ' +
-                'which replaces the subtitle before anything could be compared. Multi engine sync ' +
-                'stays out of the way while that is set. Pick "write it to a sidecar" or "keep the ' +
-                'original" under File output to use this.');
+            parts.push('File output writes an unsure result anyway, so there is nothing left to compare. ' +
+                'Change When LAPSE is unsure under File output to use this.');
         }
 
         strip.textContent = parts.join(' ');
 
         var usable = !!availability.Available && !availability.OverwriteAnywayConflict;
         toggle.disabled = !usable;
-        toggle.parentElement.style.opacity = usable ? '' : '.55';
+
 
         // The waiting count is the number worth seeing without opening the page, since
         // every one of them is a decision somebody still has to make.
@@ -3692,41 +3593,49 @@
         var host = view.querySelector('#lapseCandidateList');
 
         if (!sets.length) {
-            host.innerHTML = '<div class="fieldDescription lapseTightNote">' +
-                'Nothing is waiting. When LAPSE is unsure about a sync, the answers show up here ' +
-                'until you keep one of them.</div>';
+            host.innerHTML = '<p class="fieldDescription">Nothing is waiting. When the other engines are asked, ' +
+                'their answers show up here until one is kept.</p>';
             return;
         }
 
         host.innerHTML = sets.map(function (set) {
-            var count = (set.Candidates || []).length;
             var rows = (set.Candidates || []).map(function (c) {
-                return '<li>' + escapeHtml(c.EngineName) + ': ' +
-                    escapeHtml(c.Detail || 'no details') +
-                    ' <span style="opacity:.6">(' + escapeHtml(fileNameOf(c.Path)) + ')</span></li>';
+                return '<div class="listItem listItem-border"><div class="listItemBody two-line">' +
+                    '<div class="listItemBodyText">' + escapeHtml(c.EngineName) + '</div>' +
+                    '<div class="listItemBodyText secondary">' + escapeHtml(fileNameOf(c.Path)) +
+                    (c.Detail ? ', ' + escapeHtml(c.Detail) : '') + '</div>' +
+                    '</div></div>';
             }).join('');
 
-            return '<div class="lapseNoteStrip">' +
-                '<strong>' + escapeHtml(set.ItemName || 'Unknown item') + '</strong><br />' +
-                escapeHtml(fileNameOf(set.OriginalPath)) + ' is still where it was. ' +
-                count + (count === 1 ? ' answer is' : ' answers are') + ' waiting:' +
-                '<ul style="margin:.5em 0 .6em 1.2em">' + rows + '</ul>' +
-                '<button is="emby-button" type="button" class="raised lapseSmallButton lapseDiscardCandidates" ' +
+            return '<div class="verticalSection">' +
+                '<h3>' + escapeHtml(set.ItemName || 'Unknown item') + '</h3>' +
+                '<div class="fieldDescription">' + escapeHtml(fileNameOf(set.OriginalPath)) +
+                ' is untouched. Keep one from the subtitle menu while it plays.</div>' +
+                '<div class="paperList">' + rows + '</div>' +
+                '<button is="emby-button" type="button" class="raised lapseDiscardCandidates" ' +
                 'data-item="' + escapeHtml(set.ItemId) + '" data-original="' + escapeHtml(set.OriginalPath) + '">' +
-                '<span>Throw these away</span></button>' +
+                '<span>Discard all</span></button>' +
                 '</div>';
         }).join('');
 
         host.querySelectorAll('.lapseDiscardCandidates').forEach(function (button) {
             button.addEventListener('click', function () {
-                lapsePost('Lapse/Candidates/Discard', {
-                    ItemId: button.getAttribute('data-item'),
-                    OriginalPath: button.getAttribute('data-original')
-                }).then(function (decision) {
-                    tell('Multi engine sync', decision.Message || 'Removed.');
-                    refreshMultiEngine(view);
-                }).catch(function (err) {
-                    tell('Could not remove them', err.message);
+                confirmAction('Discard these answers', 'Every answer file is deleted and the original stays as it is.', 'Discard').then(function (yes) {
+                    if (!yes) {
+                        return;
+                    }
+
+                    button.disabled = true;
+                    lapsePost('Lapse/Candidates/Discard', {
+                        ItemId: button.getAttribute('data-item'),
+                        OriginalPath: button.getAttribute('data-original')
+                    }).then(function (decision) {
+                        tell('Multi engine sync', decision.Message || 'Removed.');
+                        refreshMultiEngine(view);
+                    }).catch(function (err) {
+                        button.disabled = false;
+                        tell('Could not remove them', err.message);
+                    });
                 });
             });
         });
@@ -3757,10 +3666,13 @@
 
     function renderReview(view, sets) {
         var host = view.querySelector('#lapseReviewList');
+        currentReview = sets;
         view.querySelector('#lapseReviewHint').textContent = sets.length ? sets.length + ' waiting' : '';
+        renderOverview(view);
 
         if (!sets.length) {
-            host.innerHTML = '<div class="fieldDescription lapseTightNote">Nothing to review.</div>';
+            host.innerHTML = '<p class="fieldDescription">Nothing to review. When LAPSE is unsure about a sync, ' +
+                'its result is written beside the original and shows up here.</p>';
             return;
         }
 
@@ -3772,7 +3684,7 @@
             }
 
             if (set.OriginalChanged) {
-                notes.push(fileNameOf(set.OriginalPath) + ' has changed since this was synced, so keeping the answer would undo that.');
+                notes.push(fileNameOf(set.OriginalPath) + ' has changed since, so keeping this would undo that change.');
             }
 
             var rows = (set.Candidates || []).map(function (c) {
@@ -3782,30 +3694,36 @@
                     : '';
 
                 var checks = playable ? c.SpotChecks.map(function (seconds) {
-                    return '<button is="emby-button" type="button" class="raised lapseSmallButton lapseReviewPlay" ' +
-                        'data-item="' + escapeHtml(set.ItemId) + '" data-stream="' + c.StreamIndex + '" data-seconds="' + seconds + '">' +
-                        '<span>' + clockOf(seconds) + '</span></button>';
+                    return '<button is="emby-button" type="button" class="raised lapseReviewPlay" ' +
+                        'data-item="' + escapeHtml(set.ItemId) + '" data-stream="' + c.StreamIndex + '" data-seconds="' + seconds + '"' +
+                        ' aria-label="Play from ' + clockOf(seconds) + '">' +
+                        '<span class="material-icons play_arrow" aria-hidden="true"></span><span>' + clockOf(seconds) + '</span></button>';
                 }).join('') : '';
 
                 var keep = c.Exists && set.InLibrary
-                    ? '<button is="emby-button" type="button" class="raised button-submit lapseSmallButton lapseReviewKeep" ' +
-                        'data-item="' + escapeHtml(set.ItemId) + '" data-path="' + escapeHtml(c.Path) + '"><span>Looks right</span></button>'
+                    ? '<button is="emby-button" type="button" class="raised button-submit lapseReviewKeep" ' +
+                        'data-item="' + escapeHtml(set.ItemId) + '" data-path="' + escapeHtml(c.Path) + '"><span>Keep</span></button>'
                     : '';
 
-                return '<div style="margin-top:.6em">' + escapeHtml(c.EngineName) + ': ' + escapeHtml(c.Detail || 'no details') +
-                    ' <span style="opacity:.6">(' + escapeHtml(fileNameOf(c.Path)) + ')</span>' +
-                    (note ? '<div class="fieldDescription">' + escapeHtml(note) + '</div>' : '') +
-                    '<div class="lapseButtonRow" style="margin-top:.4em">' + checks + keep + '</div></div>';
+                return '<div class="listItem listItem-border">' +
+                    '<div class="listItemBody two-line">' +
+                    '<div class="listItemBodyText">' + escapeHtml(fileNameOf(c.Path)) + '</div>' +
+                    '<div class="listItemBodyText secondary">' + escapeHtml(note || c.Detail || '') + '</div>' +
+                    (checks ? '<div class="lapseButtonRow">' + checks + '</div>' : '') +
+                    '</div>' +
+                    '<div class="lapseRowActions">' + keep + '</div>' +
+                    '</div>';
             }).join('');
 
-            return '<div class="lapseNoteStrip">' +
-                '<strong>' + escapeHtml(set.ItemName || 'Unknown item') + '</strong><br />' +
-                escapeHtml(fileNameOf(set.OriginalPath)) + ' is still where it was.' +
-                (notes.length ? '<div class="fieldDescription">' + escapeHtml(notes.join(' ')) + '</div>' : '') +
-                rows +
-                '<button is="emby-button" type="button" class="raised lapseSmallButton lapseReviewWrong" ' +
+            return '<div class="verticalSection">' +
+                '<h2 class="sectionTitle">' + escapeHtml(set.ItemName || 'Unknown item') + '</h2>' +
+                '<div class="fieldDescription">' + escapeHtml(fileNameOf(set.OriginalPath)) + ' is untouched. ' +
+                'Play from each time to see whether the lines fit, then keep the result or discard it.' +
+                (notes.length ? ' ' + escapeHtml(notes.join(' ')) : '') + '</div>' +
+                '<div class="paperList">' + rows + '</div>' +
+                '<button is="emby-button" type="button" class="raised lapseReviewWrong" ' +
                 'data-item="' + escapeHtml(set.ItemId) + '" data-original="' + escapeHtml(set.OriginalPath) + '">' +
-                '<span>Wrong</span></button>' +
+                '<span>Discard</span></button>' +
                 '</div>';
         }).join('');
 
@@ -3820,7 +3738,7 @@
 
         host.querySelectorAll('.lapseReviewKeep').forEach(function (button) {
             button.addEventListener('click', function () {
-                decideReview(view, 'Lapse/Candidates/Keep', {
+                decideReview(view, button, 'Lapse/Candidates/Keep', {
                     ItemId: button.getAttribute('data-item'),
                     Path: button.getAttribute('data-path')
                 });
@@ -3829,22 +3747,27 @@
 
         host.querySelectorAll('.lapseReviewWrong').forEach(function (button) {
             button.addEventListener('click', function () {
-                decideReview(view, 'Lapse/Candidates/Discard', {
-                    ItemId: button.getAttribute('data-item'),
-                    OriginalPath: button.getAttribute('data-original')
+                confirmAction('Discard this result', 'The result is deleted and the original stays as it is.', 'Discard').then(function (yes) {
+                    if (yes) {
+                        decideReview(view, button, 'Lapse/Candidates/Discard', {
+                            ItemId: button.getAttribute('data-item'),
+                            OriginalPath: button.getAttribute('data-original')
+                        });
+                    }
                 });
             });
         });
     }
 
     // Reloads either way: when another browser got there first the server says so, and the list should catch up.
-    function decideReview(view, path, body) {
+    function decideReview(view, button, path, body) {
+        button.disabled = true;
         lapsePost(path, body).then(function (decision) {
             tell('Review', decision.Message || 'Done.');
         }).catch(function (err) {
             tell('Review', err.message);
         }).then(function () {
-            return refreshReview(view);
+            return Promise.all([refreshReview(view), refreshItemList(view)]);
         });
     }
 
@@ -4042,18 +3965,21 @@
         return payload;
     }
 
-    function saveSettings(view, message) {
+    function saveSettings(view, button) {
+        button.disabled = true;
         Dashboard.showLoadingMsg();
 
         lapsePost('Lapse/Settings', collectSettings(view)).then(function () {
             Dashboard.hideLoadingMsg();
-            Dashboard.alert(message);
+            Dashboard.alert('Settings saved.');
             return refreshSettings(view).then(function () {
                 return Promise.all([refreshEngines(view), refreshProviders(view), refreshOverview(view)]);
             });
         }).catch(function (err) {
             Dashboard.hideLoadingMsg();
             tell('Could not save', err.message);
+        }).then(function () {
+            button.disabled = false;
         });
     }
 
@@ -4204,8 +4130,8 @@
         view.querySelector('#btnClearEngineCache').addEventListener('click', function () {
             clearEngineCache(view);
         });
-        view.querySelector('#btnSaveEngines').addEventListener('click', function () {
-            saveSettings(view, 'Engine settings saved.');
+        view.querySelector('#btnSaveEngines').addEventListener('click', function (e) {
+            saveSettings(view, e.currentTarget);
         });
         view.querySelector('#lapseAutoUpdateEngines').addEventListener('change', function () {
             var enabled = view.querySelector('#lapseAutoUpdateEngines').checked;
@@ -4213,8 +4139,8 @@
                 tell('Could not change auto-update', err.message);
             });
         });
-        view.querySelector('#btnSaveLibraries').addEventListener('click', function () {
-            saveLibraries(view);
+        view.querySelector('#btnSaveLibraries').addEventListener('click', function (e) {
+            saveLibraries(view, e.currentTarget);
         });
         view.querySelector('#btnSyncLibrary').addEventListener('click', function () {
             startBulkSync(view, 'Library');
@@ -4250,8 +4176,8 @@
         view.querySelector('#btnSyncSubtitles').addEventListener('click', function () {
             syncSubtitles(view);
         });
-        view.querySelector('#btnSaveSubToSub').addEventListener('click', function () {
-            saveSettings(view, 'Saved as the default for subtitle to subtitle syncs.');
+        view.querySelector('#btnSaveSubToSub').addEventListener('click', function (e) {
+            saveSettings(view, e.currentTarget);
         });
         updateSubToSubOutput(view, false);
         view.querySelector('#lapseSidecarSuffix').addEventListener('input', function () {
@@ -4266,11 +4192,11 @@
         view.querySelector('#lapseSkipAlreadyInSync').addEventListener('change', function () {
             updateAlreadyInSyncNote(view);
         });
-        view.querySelector('#btnSaveConversion').addEventListener('click', function () {
-            saveSettings(view, 'Conversion settings saved.');
+        view.querySelector('#btnSaveConversion').addEventListener('click', function (e) {
+            saveSettings(view, e.currentTarget);
         });
-        view.querySelector('#btnSaveAutomation').addEventListener('click', function () {
-            saveSettings(view, 'Automation settings saved.');
+        view.querySelector('#btnSaveAutomation').addEventListener('click', function (e) {
+            saveSettings(view, e.currentTarget);
         });
         view.querySelector('#lapseAutoTranslateEnabled').addEventListener('change', function () {
             updateAutomationHint(view);
@@ -4278,34 +4204,34 @@
         view.querySelector('#lapseAutoTranslateLanguage').addEventListener('input', function () {
             updateAutomationHint(view);
         });
-        view.querySelector('#btnSaveAccess').addEventListener('click', function () {
-            saveSettings(view, 'Access settings saved.');
+        view.querySelector('#btnSaveAccess').addEventListener('click', function (e) {
+            saveSettings(view, e.currentTarget);
         });
-        view.querySelector('#btnSaveOutput').addEventListener('click', function () {
-            saveSettings(view, 'Output settings saved.');
+        view.querySelector('#btnSaveOutput').addEventListener('click', function (e) {
+            saveSettings(view, e.currentTarget);
         });
-        view.querySelector('#btnSaveTranslation').addEventListener('click', function () {
-            saveSettings(view, 'Translation settings saved.');
+        view.querySelector('#btnSaveTranslation').addEventListener('click', function (e) {
+            saveSettings(view, e.currentTarget);
         });
-        view.querySelector('#btnSaveLabs').addEventListener('click', function () {
-            saveSettings(view, 'Experimental settings saved.');
+        view.querySelector('#btnSaveLabs').addEventListener('click', function (e) {
+            saveSettings(view, e.currentTarget);
         });
         view.querySelector('#btnTestOpenSubtitles').addEventListener('click', function () {
             testOpenSubtitles(view);
         });
-        view.querySelector('#btnSaveMultiEngine').addEventListener('click', function () {
+        view.querySelector('#btnSaveMultiEngine').addEventListener('click', function (e) {
             // Saving reads the settings back, and drawing those redraws this panel's
             // status strip and waiting list too.
-            saveSettings(view, 'Multi engine settings saved.');
+            saveSettings(view, e.currentTarget);
         });
-        view.querySelector('#btnSaveAppearance').addEventListener('click', function () {
-            saveSettings(view, 'Subtitle appearance saved.');
+        view.querySelector('#btnSaveAppearance').addEventListener('click', function (e) {
+            saveSettings(view, e.currentTarget);
         });
         view.querySelector('#btnResetAppearance').addEventListener('click', function () {
             resetAppearance(view);
         });
-        view.querySelector('#btnSaveReadable').addEventListener('click', function () {
-            saveSettings(view, 'Readable subtitle style saved.');
+        view.querySelector('#btnSaveReadable').addEventListener('click', function (e) {
+            saveSettings(view, e.currentTarget);
         });
         view.querySelector('#btnInstallDyslexicFont').addEventListener('click', function () {
             var strip = view.querySelector('#lapseFontStatus');
