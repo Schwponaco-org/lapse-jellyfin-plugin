@@ -3772,9 +3772,14 @@
         });
     }
 
-    // Jellyfin's own "play on this device" call, which the web client already listens for.
-    // Starts a few seconds early so the line can be seen coming in.
+    // Through the web client's own player when the injected script is there, which also keeps the
+    // answer's track on, otherwise Jellyfin's "play on this device" call. Starts a few seconds early
+    // so the line can be seen coming in.
     function playAt(itemId, streamIndex, seconds) {
+        if (window.lapsePlayWithSubtitle && window.lapsePlayWithSubtitle(itemId, streamIndex, seconds)) {
+            return Promise.resolve();
+        }
+
         return ApiClient.getSessions({ deviceId: ApiClient.deviceId() }).then(function (sessions) {
             if (!sessions.length) {
                 throw new Error('this browser has no session on the server');

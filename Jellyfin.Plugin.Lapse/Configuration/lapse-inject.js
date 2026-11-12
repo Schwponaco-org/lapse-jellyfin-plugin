@@ -3726,6 +3726,55 @@
         }).join('');
     }
 
+    // --- playing a review answer ---
+
+    // Review's times play the item with the answer on. The client can still pick another track
+    // as it starts (its own memory of the last one), so the answer is put back on once it plays.
+    // Returns false when the player can't be reached, and the dashboard asks the server instead.
+    function playWithSubtitle(itemId, streamIndex, seconds) {
+        var manager = playbackManager();
+        if (!manager || typeof manager.play !== 'function' || typeof manager.setSubtitleStreamIndex !== 'function') {
+            return false;
+        }
+
+        manager.play({
+            ids: [itemId],
+            serverId: ApiClient.serverId(),
+            startPositionTicks: Math.round(Math.max(0, seconds - 3) * 10000000),
+            subtitleStreamIndex: streamIndex
+        });
+
+        // let go once it has played on the right track for two seconds, or after fifteen, so
+        // switching tracks by hand to compare isn't undone
+        var tries = 0;
+        var settled = 0;
+        var holder = setInterval(function () {
+            tries++;
+
+            try {
+                var video = document.querySelector('video');
+                if (manager.getCurrentPlayer() && video && video.currentTime > 0) {
+                    if (manager.getSubtitleStreamIndex() === streamIndex) {
+                        settled++;
+                    } else {
+                        settled = 0;
+                        manager.setSubtitleStreamIndex(streamIndex);
+                    }
+                }
+            } catch (err) {
+                log('could not hold the review track: ' + err);
+            }
+
+            if (settled >= 4 || tries >= 30) {
+                clearInterval(holder);
+            }
+        }, 500);
+
+        return true;
+    }
+
+    window.lapsePlayWithSubtitle = playWithSubtitle;
+
     // --- go ---
 
     function start() {
