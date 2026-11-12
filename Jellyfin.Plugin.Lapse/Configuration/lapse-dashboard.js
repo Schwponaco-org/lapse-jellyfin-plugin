@@ -3696,7 +3696,12 @@
                 notes.push(fileNameOf(set.OriginalPath) + ' has changed since, so keeping this would undo that change.');
             }
 
-            var rows = (set.Candidates || []).map(function (c) {
+            var candidates = set.Candidates || [];
+            var discard = '<button is="emby-button" type="button" class="raised lapseReviewWrong" ' +
+                'data-item="' + escapeHtml(set.ItemId) + '" data-original="' + escapeHtml(set.OriginalPath) + '">' +
+                '<span>' + (candidates.length > 1 ? 'Discard all' : 'Discard') + '</span></button>';
+
+            var rows = candidates.map(function (c) {
                 var playable = c.Exists && set.InLibrary && c.StreamIndex != null;
                 var note = !c.Exists ? 'The file has gone from disk.'
                     : set.InLibrary && c.StreamIndex == null ? 'Jellyfin has not picked this file up yet. Reload in a minute.'
@@ -3714,13 +3719,13 @@
                         'data-item="' + escapeHtml(set.ItemId) + '" data-path="' + escapeHtml(c.Path) + '"><span>Keep</span></button>'
                     : '';
 
-                return '<div class="listItem listItem-border">' +
+                return '<div class="listItem listItem-border lapseReviewRow">' +
                     '<div class="listItemBody two-line">' +
                     '<div class="listItemBodyText">' + escapeHtml(fileNameOf(c.Path)) + '</div>' +
                     '<div class="listItemBodyText secondary">' + escapeHtml(note || c.Detail || '') + '</div>' +
                     (checks ? '<div class="lapseButtonRow">' + checks + '</div>' : '') +
                     '</div>' +
-                    '<div class="lapseRowActions">' + keep + '</div>' +
+                    '<div class="lapseRowActions">' + keep + (candidates.length > 1 ? '' : discard) + '</div>' +
                     '</div>';
             }).join('');
 
@@ -3730,9 +3735,7 @@
                 'Play from each time to see whether the lines fit, then keep the result or discard it.' +
                 (notes.length ? ' ' + escapeHtml(notes.join(' ')) : '') + '</div>' +
                 '<div class="paperList">' + rows + '</div>' +
-                '<button is="emby-button" type="button" class="raised lapseReviewWrong" ' +
-                'data-item="' + escapeHtml(set.ItemId) + '" data-original="' + escapeHtml(set.OriginalPath) + '">' +
-                '<span>Discard</span></button>' +
+                (candidates.length > 1 ? discard : '') +
                 '</div>';
         }).join('');
 

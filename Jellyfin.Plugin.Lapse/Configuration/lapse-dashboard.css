@@ -222,12 +222,14 @@
 /* On a phone the buttons go under the text instead of squeezing it */
 @media (max-width: 50em) {
     .lapseItemRow,
-    .lapseActivityRow {
+    .lapseActivityRow,
+    .lapseReviewRow {
         flex-wrap: wrap;
     }
 
     .lapseItemRow .lapseRowActions,
-    .lapseActivityRow .lapseRowActions {
+    .lapseActivityRow .lapseRowActions,
+    .lapseReviewRow .lapseRowActions {
         margin: 0 0 .6em;
     }
 }
