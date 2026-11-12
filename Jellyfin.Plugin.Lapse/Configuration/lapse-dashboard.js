@@ -773,7 +773,7 @@
         }
 
         var parameter = (engine.Parameters || []).filter(function (p) { return p.Key === 'force'; })[0];
-        return parameter ? '<div class="lapseForceControl">' + parameterControl(parameter) + '</div>' : '';
+        return parameter ? parameterControl(parameter, engine.Id) : '';
     }
 
     function engineUpdateNote(engine) {
@@ -807,8 +807,8 @@
         return source + ': ' + engine.DiscoveredFlags.join(' ');
     }
 
-    function parameterControl(parameter) {
-        var id = 'lapseParam-' + parameter.Key;
+    function parameterControl(parameter, engineId) {
+        var id = 'lapseParam-' + engineId + '-' + parameter.Key;
         var flagNote = parameter.Flag ? ' <code class="lapseFlag">' + escapeHtml(parameter.Flag) + '</code>' : '';
 
         // the setting is kept, the runner just leaves the flag off until the engine is updated
@@ -895,9 +895,9 @@
 
             penaltyField = '' +
                 '<div class="inputContainer">' +
-                '  <label class="inputLabel inputLabelUnfocused">Split penalty' +
+                '  <label class="inputLabel inputLabelUnfocused" for="lapsePenalty-' + escapeHtml(engine.Id) + '">Split penalty' +
                 ' <code class="lapseFlag">' + (engine.Id === 'lapse' ? 'positional' : '--split-penalty') + '</code></label>' +
-                '  <input is="emby-input" type="number" class="lapseSettingPenalty" min="' + engine.MinPenalty +
+                '  <input is="emby-input" type="number" id="lapsePenalty-' + escapeHtml(engine.Id) + '" class="lapseSettingPenalty" min="' + engine.MinPenalty +
                 '" max="' + engine.MaxPenalty + '" value="' + engine.Penalty + '" />' +
                 '  <div class="fieldDescription">Higher means fewer splits. ' +
                 penaltyDefault + ' is the standard value. Range ' + engine.MinPenalty + ' to ' + engine.MaxPenalty +
@@ -918,19 +918,20 @@
             '<summary>Advanced</summary>' +
             note +
             '  <div class="selectContainer">' +
-            '    <label class="selectLabel">Default sync mode</label>' +
-            '    <select is="emby-select" class="emby-select-withcolor emby-select lapseSettingMode">' + modeOptions + '</select>' +
-            '    <div class="fieldDescription">What happens when you press Sync from an item\'s ' +
-            'three-dot menu, or from the sync status list.</div>' +
+            '    <label class="selectLabel" for="lapseMode-' + escapeHtml(engine.Id) + '">Default sync mode</label>' +
+            '    <select is="emby-select" id="lapseMode-' + escapeHtml(engine.Id) + '" class="emby-select-withcolor emby-select lapseSettingMode">' + modeOptions + '</select>' +
+            '    <div class="fieldDescription">What Sync does from an item\'s menu or the Sync status list.</div>' +
             '  </div>' +
             '  <div class="lapseModeNotes">' + modeNotes + '</div>' +
             penaltyField +
-            engine.Parameters.filter(function (p) { return p.Key !== 'force'; }).map(parameterControl).join('') +
+            engine.Parameters.filter(function (p) { return p.Key !== 'force'; }).map(function (p) {
+                return parameterControl(p, engine.Id);
+            }).join('') +
             '  <div class="inputContainer">' +
-            '    <label class="inputLabel inputLabelUnfocused">Binary path override</label>' +
+            '    <label class="inputLabel inputLabelUnfocused" for="lapsePath-' + escapeHtml(engine.Id) + '">Binary path override</label>' +
             '    <div class="lapsePathRow">' +
-            '      <input is="emby-input" type="text" class="lapseSettingPath" value="' + escapeHtml(engine.PathOverride || '') + '" />' +
-            '      <button is="paper-icon-button-light" type="button" class="lapseBtnBrowsePath" title="Browse">' +
+            '      <input is="emby-input" type="text" id="lapsePath-' + escapeHtml(engine.Id) + '" class="lapseSettingPath" value="' + escapeHtml(engine.PathOverride || '') + '" />' +
+            '      <button is="paper-icon-button-light" type="button" class="lapseBtnBrowsePath" title="Browse" aria-label="Browse for the binary">' +
             '        <span class="material-icons search" aria-hidden="true"></span>' +
             '      </button>' +
             '    </div>' +
