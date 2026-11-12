@@ -346,7 +346,14 @@ public partial class LapseController
             : doubted > 0 ? $"LAPSE wasn't sure about {doubted} of {total} subtitles, so those weren't counted as synced"
             : null;
 
-        SyncQueueManager.SaveRecord(request.ItemId, status, detail, result.Results.LastOrDefault()?.Result, writtenPaths);
+        // one history entry per file written, so each can be undone
+        SyncQueueManager.SaveRecord(
+            request.ItemId,
+            status,
+            detail,
+            result.Results.LastOrDefault()?.Result,
+            writtenPaths,
+            results: result.Results.Select(o => o.Result));
 
         return result;
     }
