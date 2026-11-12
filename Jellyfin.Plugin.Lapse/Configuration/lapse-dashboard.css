@@ -213,8 +213,10 @@
     opacity: .6;
 }
 
+/* red text is too faint on one theme or the other, so the mark goes beside it */
 .lapseProblem {
-    color: var(--jf-palette-error-light, inherit);
+    padding-left: .6em;
+    border-left: 3px solid var(--jf-palette-error-main, #c62828);
 }
 
 /* On a phone the buttons go under the text instead of squeezing it */
