@@ -1966,8 +1966,7 @@
 
         // LAPSE 2.3.0 says where each part went, older builds give one number for the lot
         if (split) {
-            parts.push('moved in ' + split.length + ' parts, from ' + distance(Math.min.apply(null, split)) +
-                ' to ' + distance(Math.max.apply(null, split)));
+            parts.push('moved in ' + split.length + ' parts, from ' + distance(split[0]) + ' to ' + distance(split[split.length - 1]));
         } else if (result.OffsetMs != null && result.OffsetMs !== 0) {
             parts.push('moved ' + distance(result.OffsetMs));
         }

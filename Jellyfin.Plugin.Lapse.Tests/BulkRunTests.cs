@@ -76,6 +76,9 @@ public class BulkRunTests
             "Moved in 2 parts, from 1.5 s earlier to 0.3 s later.",
             SyncQueueManager.DescribeForHistory(new SyncResult { PartOffsetsMs = new[] { -1500, 300 } }));
         Assert.Equal(
+            "Moved in 3 parts, from 2.6 s earlier to 5.5 s earlier.",
+            SyncQueueManager.DescribeForHistory(new SyncResult { PartOffsetsMs = new[] { -2551, -9000, -5546 } }));
+        Assert.Equal(
             "No match in the audio. Written beside the original for you to check.",
             SyncQueueManager.ReadableDetail("moved -8707ms, nothing, written beside the original to check"));
         Assert.Equal("Moved 4.2 s earlier.", SyncQueueManager.ReadableDetail("moved -4230ms, solid"));

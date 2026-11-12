@@ -1337,7 +1337,7 @@ public partial class SyncQueueManager : IDisposable
         // a split file's one offset_ms only covers one part, 2.3.0 says where each went
         if (result.PartOffsetsMs is { Count: > 1 } split)
         {
-            moved = $"Moved in {split.Count} parts, from {Seconds(split.Min())} to {Seconds(split.Max())}";
+            moved = $"Moved in {split.Count} parts, from {Seconds(split[0])} to {Seconds(split[split.Count - 1])}";
         }
         else if (result.OffsetMs is not null and not 0)
         {
