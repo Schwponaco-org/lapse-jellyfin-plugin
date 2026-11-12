@@ -367,8 +367,8 @@ public partial class SyncQueueManager : IDisposable
         {
             var tolerance = Plugin.Instance?.Configuration.AlreadyInSyncToleranceMs ?? 100;
             var moved = result.PartOffsetsMs is { Count: > 1 } split
-                ? "moved its parts " + string.Join(", ", split.Select(o => o + "ms"))
-                : $"moved it {result.OffsetMs}ms";
+                ? "moved its parts " + string.Join(", ", split.Select(Seconds))
+                : "moved it " + Seconds(result.OffsetMs ?? 0);
             return $"Already in sync (the engine would have {moved}, which is inside the "
                 + $"{tolerance}ms tolerance), so the file was left exactly as it was.";
         }
@@ -1376,13 +1376,15 @@ public partial class SyncQueueManager : IDisposable
     [GeneratedRegex(@"^moved (?<ms>-?\d+)ms(, (?<verdict>solid|unsure|nothing))?(?<check>, written beside the original to check)?$")]
     private static partial Regex OldDetailRegex();
 
-    // positive means the subtitles come later
+    // "4.2 s later", "8:54 earlier", positive means the subtitles come later
     internal static string Seconds(int ms)
     {
         var size = Math.Abs(ms);
-        var text = size < 1000
-            ? size.ToString(CultureInfo.InvariantCulture) + " ms"
-            : (size / 1000.0).ToString(size < 10000 ? "0.0" : "0", CultureInfo.InvariantCulture) + " s";
+        var tenths = (size + 50) / 100;
+        var whole = (size + 500) / 1000;
+        var text = tenths >= 600 ? string.Create(CultureInfo.InvariantCulture, $"{whole / 60}:{whole % 60:00}")
+            : size > 0 && tenths == 0 ? "under 0.1 s"
+            : (tenths / 10.0).ToString("0.0", CultureInfo.InvariantCulture) + " s";
         return ms < 0 ? text + " earlier" : text + " later";
     }
 }

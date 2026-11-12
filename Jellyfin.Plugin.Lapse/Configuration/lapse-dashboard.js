@@ -1941,10 +1941,14 @@
         });
     }
 
-    // "8.7 s later", "250 ms earlier", the same way the history puts it
+    // "8.7 s later", "1:05 earlier", the same way the history puts it
     function distance(ms) {
         var size = Math.abs(ms);
-        var text = size < 1000 ? size + ' ms' : (size / 1000).toFixed(size < 10000 ? 1 : 0) + ' s';
+        var tenths = Math.floor((size + 50) / 100);
+        var whole = Math.floor((size + 500) / 1000);
+        var text = tenths >= 600 ? Math.floor(whole / 60) + ':' + ('0' + whole % 60).slice(-2)
+            : size && !tenths ? 'under 0.1 s'
+            : (tenths / 10).toFixed(1) + ' s';
         return text + (ms < 0 ? ' earlier' : ' later');
     }
 
@@ -1962,7 +1966,8 @@
 
         // LAPSE 2.3.0 says where each part went, older builds give one number for the lot
         if (split) {
-            parts.push('moved in ' + split.length + ' parts, ' + split.map(distance).join(' then '));
+            parts.push('moved in ' + split.length + ' parts, from ' + distance(Math.min.apply(null, split)) +
+                ' to ' + distance(Math.max.apply(null, split)));
         } else if (result.OffsetMs != null && result.OffsetMs !== 0) {
             parts.push('moved ' + distance(result.OffsetMs));
         }

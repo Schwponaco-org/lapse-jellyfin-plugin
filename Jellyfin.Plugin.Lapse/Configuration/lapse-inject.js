@@ -1158,10 +1158,14 @@
         });
     }
 
-    // "8.7 s later", "250 ms earlier", the way the dashboard and its history say it
+    // "8.7 s later", "1:05 earlier", the way the dashboard and its history say it
     function distance(ms) {
         var size = Math.abs(ms);
-        var text = size < 1000 ? size + ' ms' : (size / 1000).toFixed(size < 10000 ? 1 : 0) + ' s';
+        var tenths = Math.floor((size + 50) / 100);
+        var whole = Math.floor((size + 500) / 1000);
+        var text = tenths >= 600 ? Math.floor(whole / 60) + ':' + ('0' + whole % 60).slice(-2)
+            : size && !tenths ? 'under 0.1 s'
+            : (tenths / 10).toFixed(1) + ' s';
         return text + (ms < 0 ? ' earlier' : ' later');
     }
 
@@ -1179,7 +1183,8 @@
 
         // LAPSE 2.3.0 says where each part went, older builds give one number for the lot
         if (split) {
-            parts.push('moved in ' + split.length + ' parts, ' + split.map(distance).join(' then '));
+            parts.push('moved in ' + split.length + ' parts, from ' + distance(Math.min.apply(null, split)) +
+                ' to ' + distance(Math.max.apply(null, split)));
         } else if (result.OffsetMs != null && result.OffsetMs !== 0) {
             parts.push('moved ' + distance(result.OffsetMs));
         }
@@ -1209,7 +1214,7 @@
         }
 
         if (result.AlreadyInSync) {
-            return 'Already in sync, so nothing was changed. LAPSE would have ' + describeResult(result) +
+            return 'Already in sync, so the file was left as it was. LAPSE would have ' + describeResult(result) +
                 ', which is inside the tolerance under File output.';
         }
 
@@ -1943,7 +1948,7 @@
         }
 
         var offsetMs = delayToShiftMs(panelDelay);
-        result.textContent = 'Writing ' + offsetMs + 'ms into the file...';
+        result.textContent = 'Shifting it ' + distance(offsetMs) + '...';
 
         lapsePost('Lapse/Shift', {
             ItemId: panelContext.ItemId,
@@ -3146,7 +3151,7 @@
             }
 
             closeDialog(overlay);
-            notify('Shifting by ' + offset + 'ms...', true);
+            notify('Shifting it ' + distance(offset) + '...', true);
 
             // no OutputMode here: the server falls back to the configured one, which is
             // the whole point of "output follows the configured mode"

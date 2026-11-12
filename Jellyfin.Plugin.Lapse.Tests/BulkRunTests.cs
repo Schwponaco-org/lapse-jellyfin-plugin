@@ -67,13 +67,13 @@ public class BulkRunTests
     {
         Assert.Equal("Moved 4.2 s earlier.", SyncQueueManager.DescribeForHistory(new SyncResult { OffsetMs = -4230 }));
         Assert.Equal(
-            "Moved 534 s later. Written beside the original for you to check.",
+            "Moved 8:54 later. Written beside the original for you to check.",
             SyncQueueManager.DescribeForHistory(new SyncResult { OffsetMs = 534080, Unconfirmed = true }));
         Assert.Equal(
             "No match in the audio. Written beside the original for you to check.",
             SyncQueueManager.DescribeForHistory(new SyncResult { OffsetMs = -8707, Verdict = "nothing", Unconfirmed = true }));
         Assert.Equal(
-            "Moved in 2 parts, from 1.5 s earlier to 300 ms later.",
+            "Moved in 2 parts, from 1.5 s earlier to 0.3 s later.",
             SyncQueueManager.DescribeForHistory(new SyncResult { PartOffsetsMs = new[] { -1500, 300 } }));
         Assert.Equal(
             "No match in the audio. Written beside the original for you to check.",
@@ -100,7 +100,7 @@ public class BulkRunTests
         var entry = Assert.Single(history, h => h.ItemId == itemId);
         Assert.True(entry.WroteNewFile);
         Assert.Null(entry.InputPath);
-        Assert.Equal("Shifted 250 ms later by hand.", entry.Detail);
+        Assert.Equal("Shifted 0.3 s later by hand.", entry.Detail);
         Assert.True(SyncHistoryService.CanRevert(entry));
     }
 
