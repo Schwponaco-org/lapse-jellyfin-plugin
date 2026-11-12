@@ -309,6 +309,11 @@ public partial class LapseController
                     .RunAsync(engine, referencePath, subtitlePath, mode, penalty, request.OutputMode, batch: batch, cancellationToken: cancellationToken)
                     .ConfigureAwait(false);
 
+            if (subtitlePath is not null)
+            {
+                _multiEngine.AddForReview(item, engine, subtitlePath, syncResult);
+            }
+
             if (syncResult.CountsAsSynced)
             {
                 result.SucceededCount++;

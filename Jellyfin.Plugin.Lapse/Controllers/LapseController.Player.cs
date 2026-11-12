@@ -224,6 +224,7 @@ public partial class LapseController
                 .RunAsync(engine, item.Path, path, EngineRunner.ResolveDefaultMode(engine), EngineRunner.ResolvePenalty(engine, null))
                 .ConfigureAwait(false);
 
+            _multiEngine.AddForReview(item, engine, path, sync);
             SaveSyncRecord(item.Id, sync, path);
         }
 

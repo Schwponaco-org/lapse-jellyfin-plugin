@@ -140,6 +140,8 @@ public partial class LapseController
                 cancellationToken: cancellationToken)
             .ConfigureAwait(false);
 
+        _multiEngine.AddForReview(item, engine, destination, result);
+
         // only the new file belongs to this item, the subtitle it came from is the other copy's
         SaveSyncRecord(item.Id, result, result.OutputPath is null ? Array.Empty<string>() : new[] { result.OutputPath });
 

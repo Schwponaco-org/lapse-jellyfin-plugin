@@ -216,7 +216,9 @@ public class MultiEngineSyncService
     /// </summary>
     public void AddForReview(BaseItem item, IEngine engine, string subtitlePath, SyncResult result)
     {
-        if (!result.Unconfirmed || result.Skipped || result.OutputPath is not { } written)
+        // a copy moved from another version with nothing there yet is the new file itself, not a sidecar
+        if (!result.Unconfirmed || result.Skipped || result.OutputPath is not { } written
+            || string.Equals(written, subtitlePath, StringComparison.Ordinal))
         {
             return;
         }

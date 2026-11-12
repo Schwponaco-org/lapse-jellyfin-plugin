@@ -408,6 +408,7 @@ public partial class LapseController
                     .ConfigureAwait(false);
 
                 result.SyncedAfter = true;
+                _multiEngine.AddForReview(item, engine, destination, result.Sync);
                 SaveSyncRecord(request.ItemId, result.Sync, destination);
             }
 
@@ -501,6 +502,7 @@ public partial class LapseController
 
             result.Sync = sync;
             result.ConvertedFrom = sync.ConvertedFrom;
+            _multiEngine.AddForReview(item, engine, path, sync);
             SaveSyncRecord(request.ItemId, sync, path);
 
             if (!sync.Success)
