@@ -41,6 +41,7 @@ public class RunnerTests
             echo '{"mode":"shift","reference":"none","offset_ms":'"$2"',"cues":2,"written":true}' ;;
           *)
             echo "env LAPSE_WHISPER_CLI=$LAPSE_WHISPER_CLI" >> "$0.calls"
+            echo "env LAPSE_CACHE=$LAPSE_CACHE" >> "$0.calls"
             out=""
             prev=""
             for a in "$@"; do
@@ -251,6 +252,28 @@ public class RunnerTests
         Assert.Equal("vad+whisper", result.Reference);
         Assert.Contains("--whisper " + model, Calls(engine), StringComparison.Ordinal);
         Assert.Contains("env LAPSE_WHISPER_CLI=" + cli, Calls(engine), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task LapseCachesInJellyfinsCacheFolder()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var (runner, folder, engine) = NewRunner("{\"mode\":\"auto/shifted\",\"reference\":\"vad\",\"offset_ms\":900,\"ratio\":1,\"verdict\":\"solid\",\"parts\":1,\"written\":true,\"output\":\"x\",\"splits\":[],\"offsets\":[900]}");
+        var (video, subtitle) = Film(folder);
+
+        await WithSettings(engine, () => runner.RunAsync(new LapseEngine(), video, subtitle, SyncMode.Auto, 6, OutputMode.SidecarOnly));
+        Assert.Contains("env LAPSE_CACHE=" + Path.Combine(TestHost.ApplicationPaths.CachePath, "lapse"), Calls(engine), StringComparison.Ordinal);
+
+        Directory.CreateDirectory(Path.Combine(runner.CacheFolder, "ab"));
+        File.WriteAllBytes(Path.Combine(runner.CacheFolder, "ab", "film.spans"), new byte[1000]);
+        Assert.Equal(1000, runner.GetCacheSize());
+
+        runner.ClearCache();
+        Assert.Equal(0, runner.GetCacheSize());
     }
 
     internal static (EngineRunner Runner, string Folder, string Engine) NewRunner(string reply, string? usage = null)

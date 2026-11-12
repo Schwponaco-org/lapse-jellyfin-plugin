@@ -1290,6 +1290,26 @@
         });
     }
 
+    function refreshEngineCache(view) {
+        return lapseGet('Lapse/Engines/Cache').then(function (bytes) {
+            view.querySelector('#lapseEngineCacheNote').textContent =
+                'LAPSE remembers the speech it found in each film, so the next subtitle for the same film ' +
+                'takes about a second. That cache is in Jellyfin\'s cache folder and holds ' +
+                (bytes / 1048576).toFixed(1) + ' MB. Clearing it loses nothing, the next sync of each film ' +
+                'just listens to it again.';
+        }).catch(function () {
+            // purely informational, not worth an error message
+        });
+    }
+
+    function clearEngineCache(view) {
+        lapseDelete('Lapse/Engines/Cache').then(function () {
+            return refreshEngineCache(view);
+        }).catch(function (err) {
+            Dashboard.alert('Could not clear the cache: ' + err.message);
+        });
+    }
+
     // --- libraries ---
 
     function frequencyOptions(selected) {
@@ -3889,6 +3909,7 @@
                 refreshFolders(view),
                 refreshQueue(view),
                 refreshPlatform(view),
+                refreshEngineCache(view),
                 refreshDiagnostics(view),
                 refreshExtractStatus(view)
             ]);
@@ -3967,6 +3988,9 @@
         });
         view.querySelector('#btnCheckEngineUpdates').addEventListener('click', function () {
             checkEngineUpdates(view);
+        });
+        view.querySelector('#btnClearEngineCache').addEventListener('click', function () {
+            clearEngineCache(view);
         });
         view.querySelector('#btnSaveEngines').addEventListener('click', function () {
             saveSettings(view, 'Engine settings saved.');

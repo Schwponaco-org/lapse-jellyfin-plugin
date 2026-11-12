@@ -56,6 +56,12 @@ public class EngineRunner
     public string EnginesFolder => Path.Combine(_applicationPaths.DataPath, "lapse", "engines");
 
     /// <summary>
+    /// Gets where LAPSE caches the speech it found in each film. Jellyfin's cache folder is a
+    /// volume in Docker, LAPSE's own default would be inside the container.
+    /// </summary>
+    public string CacheFolder => Path.Combine(_applicationPaths.CachePath, "lapse");
+
+    /// <summary>
     /// Gets where an engine's binary lives once we've installed it.
     /// </summary>
     public string GetInstalledPath(IEngine engine)
@@ -107,6 +113,26 @@ public class EngineRunner
     public Task<string?> CheckRunnableAsync(IEngine engine, CancellationToken cancellationToken = default)
     {
         return _probe.CheckRunnableAsync(ResolvePath(engine), cancellationToken);
+    }
+
+    /// <summary>
+    /// Gets how many bytes LAPSE's cache takes up.
+    /// </summary>
+    public long GetCacheSize()
+    {
+        var folder = new DirectoryInfo(CacheFolder);
+        return folder.Exists ? folder.EnumerateFiles("*", SearchOption.AllDirectories).Sum(f => f.Length) : 0;
+    }
+
+    /// <summary>
+    /// Empties LAPSE's cache. Nothing is lost, the next sync of each film listens to it again.
+    /// </summary>
+    public void ClearCache()
+    {
+        if (Directory.Exists(CacheFolder))
+        {
+            Directory.Delete(CacheFolder, recursive: true);
+        }
     }
 
     /// <summary>
@@ -850,11 +876,12 @@ public class EngineRunner
         File.Move(staged, shimPath, overwrite: true);
     }
 
-    private static void PrepareEnvironment(ProcessStartInfo startInfo, string? ffmpegDirectory, IReadOnlyDictionary<string, string> environment)
+    private void PrepareEnvironment(ProcessStartInfo startInfo, string? ffmpegDirectory, IReadOnlyDictionary<string, string> environment)
     {
         // ffsubsync is Python and writes to pipes in the locale encoding, we read UTF-8
         startInfo.Environment["PYTHONUTF8"] = "1";
         startInfo.Environment["PYTHONIOENCODING"] = "utf-8";
+        startInfo.Environment["LAPSE_CACHE"] = CacheFolder;
 
         foreach (var (name, value) in environment)
         {
