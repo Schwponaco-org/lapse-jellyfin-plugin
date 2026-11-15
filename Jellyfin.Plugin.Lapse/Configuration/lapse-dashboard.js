@@ -1052,65 +1052,82 @@
             }).join('');
     }
 
+    function engineCardHtml(engine, primary) {
+        var actions = '';
+        if (!engine.IsDefault && engine.Installed && !engine.RunCheckError) {
+            actions += '<button is="emby-button" type="button" class="raised lapseBtnSetDefault"><span>Use this one</span></button>';
+        }
+
+        if (engine.Installed && engine.DownloadSupported && engine.UpdateAvailable) {
+            actions += '<button is="emby-button" type="button" class="raised button-submit lapseBtnUpdate"><span>Update</span></button>';
+        }
+
+        if (engine.DownloadSupported) {
+            actions += '<button is="emby-button" type="button" class="raised lapseBtnInstall' +
+                (primary && !engine.Installed ? ' button-submit' : '') + '"><span>' +
+                (engine.Installed ? 'Reinstall' : 'Install') + '</span></button>';
+        }
+
+        // Only offered for a copy the plugin put there. A binary behind a path
+        // override isn't the plugin's to delete, and the server refuses anyway.
+        if (engine.Installed && !engine.PathOverride) {
+            actions += '<button is="emby-button" type="button" class="raised lapseBtnUninstall"><span>Uninstall</span></button>';
+        }
+
+        // the full reason is a paragraph, the card keeps one line and puts the rest in a tooltip
+        var problem = '';
+        if (!engine.DownloadSupported && !engine.Installed) {
+            problem = '<div class="fieldDescription" title="' + escapeHtml(engine.NoDownloadReason || '') + '">' +
+                'No download for this server.' +
+                (engine.BuildGuideUrl
+                    ? ' <a is="emby-linkbutton" class="button-link" href="' + escapeHtml(engine.BuildGuideUrl) +
+                      '" target="_blank" rel="noopener">Build it yourself</a>'
+                    : '') +
+                '</div>';
+        } else if (engine.RunCheckError) {
+            problem = '<div class="fieldDescription lapseProblem">' + escapeHtml(engine.RunCheckError) + '</div>';
+        }
+
+        // Only LAPSE carries a "why" link, the one claim on this page that needs backing up
+        var whyLink = engine.WhyUrl
+            ? ' <a is="emby-linkbutton" class="button-link" href="' + escapeHtml(engine.WhyUrl) + '" target="_blank" rel="noopener">' +
+              escapeHtml(engine.WhyLabel || 'Read more on GitHub') + '</a>'
+            : '';
+
+        var state = (engine.IsDefault ? 'In use. ' : '') +
+            capitalize(engineUpdateNote(engine) || engineStateText(engine)) + '.' +
+            (engine.Installed && !engine.InstalledVersion ? ' The installed copy does not say which version it is.' : '');
+
+        return '' +
+            '<div class="paperList lapseEngineCard' + (primary ? ' lapseEngineCard-primary' : '') + '" data-id="' + escapeHtml(engine.Id) + '">' +
+            '  <div class="lapseEngineHead">' +
+            '    <h3 class="sectionTitle" title="' + escapeHtml(discoveredFlagsTooltip(engine)) + '">' + escapeHtml(engine.DisplayName) +
+            (engine.InstalledVersion ? ' <span class="lapseStatOf">' + escapeHtml(engine.InstalledVersion) + '</span>' : '') + '</h3>' +
+            (primary ? '    <span class="lapseTag lapseTag-accent">Recommended</span>' : '') +
+            '  </div>' +
+            '  <div class="fieldDescription">' + escapeHtml(engine.Description) + '</div>' +
+            '  <div class="fieldDescription">' + escapeHtml(state) + whyLink + '</div>' +
+            problem +
+            vadNotice(engine) +
+            whisperNotice(engine) +
+            forceControl(engine) +
+            (actions ? '  <div class="lapseButtonRow">' + actions + '</div>' : '') +
+            engineAdvancedHtml(engine) +
+            '</div>';
+    }
+
+    // LAPSE first and largest, the others side by side under it as the alternatives they are
     function renderEngineCards(view) {
         var container = view.querySelector('#lapseEngineCards');
+        var main = allEngines.filter(function (e) { return e.Tier === 'Recommended'; });
+        var others = allEngines.filter(function (e) { return e.Tier !== 'Recommended'; });
 
-        container.innerHTML = allEngines.map(function (engine) {
-            var actions = '';
-            if (!engine.IsDefault && engine.Installed && !engine.RunCheckError) {
-                actions += '<button is="emby-button" type="button" class="raised lapseBtnSetDefault"><span>Use this one</span></button>';
-            }
-
-            if (engine.Installed && engine.DownloadSupported && engine.UpdateAvailable) {
-                actions += '<button is="emby-button" type="button" class="raised button-submit lapseBtnUpdate"><span>Update</span></button>';
-            }
-
-            if (engine.DownloadSupported) {
-                actions += '<button is="emby-button" type="button" class="raised lapseBtnInstall"><span>' +
-                    (engine.Installed ? 'Reinstall' : 'Install') + '</span></button>';
-            }
-
-            // Only offered for a copy the plugin put there. A binary behind a path
-            // override isn't the plugin's to delete, and the server refuses anyway.
-            if (engine.Installed && !engine.PathOverride) {
-                actions += '<button is="emby-button" type="button" class="raised lapseBtnUninstall"><span>Uninstall</span></button>';
-            }
-
-            var problem = '';
-            if (!engine.DownloadSupported && !engine.Installed) {
-                problem = '<div class="fieldDescription">' + escapeHtml(engine.NoDownloadReason || '') +
-                    (engine.BuildGuideUrl
-                        ? ' <a is="emby-linkbutton" class="button-link" href="' + escapeHtml(engine.BuildGuideUrl) +
-                          '" target="_blank" rel="noopener">Build instructions</a>'
-                        : '') +
-                    '</div>';
-            } else if (engine.RunCheckError) {
-                problem = '<div class="fieldDescription lapseProblem">' + escapeHtml(engine.RunCheckError) + '</div>';
-            }
-
-            // Only LAPSE carries a "why" link, the one claim on this page that needs backing up
-            var whyLink = engine.WhyUrl
-                ? ' <a is="emby-linkbutton" class="button-link" href="' + escapeHtml(engine.WhyUrl) + '" target="_blank" rel="noopener">' +
-                  escapeHtml(engine.WhyLabel || 'Read more on GitHub') + '</a>'
-                : '';
-
-            var state = capitalize(engineUpdateNote(engine) || engineStateText(engine)) + '.' +
-                (engine.Installed && !engine.InstalledVersion ? ' The installed copy does not say which version it is.' : '');
-
-            return '' +
-                '<div class="verticalSection lapseEngineCard" data-id="' + escapeHtml(engine.Id) + '">' +
-                '  <h3 class="sectionTitle" title="' + escapeHtml(discoveredFlagsTooltip(engine)) + '">' +
-                escapeHtml(engine.DisplayName) + (engine.InstalledVersion ? ' ' + escapeHtml(engine.InstalledVersion) : '') +
-                (engine.IsDefault ? ' (in use)' : '') + '</h3>' +
-                '  <div class="fieldDescription">' + escapeHtml(state) + ' ' + escapeHtml(engine.Tier) + '.' + whyLink + '</div>' +
-                problem +
-                vadNotice(engine) +
-                whisperNotice(engine) +
-                forceControl(engine) +
-                (actions ? '  <div class="lapseButtonRow">' + actions + '</div>' : '') +
-                engineAdvancedHtml(engine) +
-                '</div>';
-        }).join('');
+        container.innerHTML = main.map(function (engine) { return engineCardHtml(engine, true); }).join('') +
+            (others.length
+                ? '<h2 class="sectionTitle">Alternatives</h2>' +
+                  '<div class="fieldDescription">One engine is enough.</div>' +
+                  '<div class="lapseEngineGrid">' + others.map(function (engine) { return engineCardHtml(engine, false); }).join('') + '</div>'
+                : '');
 
         container.querySelectorAll('.lapseEngineCard').forEach(function (card) {
             var id = card.getAttribute('data-id');

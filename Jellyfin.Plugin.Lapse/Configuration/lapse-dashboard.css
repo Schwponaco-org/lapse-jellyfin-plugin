@@ -470,6 +470,54 @@
 
 /* --- engines --- */
 
+.lapseEngineCard {
+    margin: 0 0 1em;
+    padding: .9em 1.2em;
+}
+
+.lapseEngineCard-primary {
+    box-shadow: inset 0 0 0 1px var(--jf-palette-primary-main, #00a4dc);
+}
+
+.lapseEngineHead {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: .3em .8em;
+}
+
+.lapseEngineHead > .sectionTitle {
+    margin: .2em 0;
+}
+
+.lapseEngineHead .lapseStatOf {
+    font-size: .75em;
+}
+
+.lapseEngineCard-primary .lapseEngineHead > .sectionTitle {
+    font-size: 1.5em;
+}
+
+.lapseEngineCard > .fieldDescription {
+    margin: .4em 0;
+}
+
+.lapseEngineGrid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 24em), 1fr));
+    gap: 1em;
+    margin: 1em 0 2em;
+}
+
+.lapseEngineGrid > .lapseEngineCard {
+    margin: 0;
+}
+
+.lapseTag-accent {
+    border-color: var(--jf-palette-primary-main, #00a4dc);
+    color: var(--jf-palette-primary-main, #00a4dc);
+}
+
 .lapseModeNote {
     margin-bottom: .3em;
 }
