@@ -1614,38 +1614,19 @@
         return fallbackDelaySeconds;
     }
 
-    // Jellyfin debounces setSubtitleOffset by 100ms (10.11.11 and 12.0 source). Reading it back right
-    // away gives the old value, so the old check thought the call failed and fell back to the text
-    // track path, which had nothing to move. Now we only verify after the debounce, and only log.
-    var DEBOUNCE_SETTLE_MS = 150;
+    // Jellyfin debounces setSubtitleOffset by 100ms, so reading it back right after gives the old value.
+    var lastDelayChange = 0;
 
     function applyDelay(delaySeconds) {
         var manager = playbackManager();
+        lastDelayChange = Date.now();
 
+        // No enableShowingSubtitleOffset: all it does is bring up Jellyfin's own offset slider at
+        // its old value. The panel hides that slider while it is open and keeps its value right.
         if (manager && manager.getCurrentPlayer && manager.getCurrentPlayer()) {
             try {
-                // Without this the player treats the offset as something it is not
-                // currently showing and puts it back to zero on the next track change.
-                if (typeof manager.enableShowingSubtitleOffset === 'function') {
-                    manager.enableShowingSubtitleOffset();
-                }
-
                 manager.setSubtitleOffset(delayToJellyfinOffset(delaySeconds));
-
-                // diagnostic only, logged and never acted on (see above)
-                var wanted = delayToJellyfinOffset(delaySeconds);
-                setTimeout(function () {
-                    try {
-                        var confirmed = parseFloat(manager.getPlayerSubtitleOffset());
-                        if (isNaN(confirmed) || Math.abs(confirmed - wanted) >= 0.01) {
-                            log('the player did not settle on the offset it was given - got ' +
-                                confirmed + ', wanted ' + wanted);
-                        }
-                    } catch (err) {
-                        log('could not confirm the subtitle offset after the fact: ' + err);
-                    }
-                }, DEBOUNCE_SETTLE_MS);
-
+                syncNativeOffsetSlider(delaySeconds);
                 return true;
             } catch (err) {
                 log('the player refused the subtitle offset: ' + err);
@@ -1653,6 +1634,22 @@
         }
 
         return applyDelayToTextTracks(delaySeconds);
+    }
+
+    // Jellyfin's own slider only resets itself when the offset is zero, so without this it would
+    // show its old value next time and jump back to it when touched.
+    function syncNativeOffsetSlider(delaySeconds) {
+        var offset = delayToJellyfinOffset(delaySeconds);
+        var slider = document.querySelector('.subtitleSyncSlider');
+        var field = document.querySelector('.subtitleSyncTextField');
+
+        if (slider) {
+            slider.value = offset;
+        }
+
+        if (field) {
+            field.textContent = offset + 's';
+        }
     }
 
     // Fallback when the player can't be reached: moves the browser's text track cues. Does nothing
@@ -1771,7 +1768,8 @@
         }
     }
 
-    // close the panel when playback ends, otherwise it floats over whatever page comes next
+    // Close the panel when playback ends, otherwise it floats over whatever page comes next. And follow
+    // offset changes made elsewhere: a track switch from the normal menu zeroes it, so do the G/H keys.
     function watchForPlaybackEnding() {
         if (panelWatchdog) {
             clearInterval(panelWatchdog);
@@ -1780,6 +1778,14 @@
         panelWatchdog = setInterval(function () {
             if (panelIsOpen() && !document.querySelector('video')) {
                 closePlayerPanel();
+                return;
+            }
+
+            if (document.getElementById('lapseDelaySlider') && Date.now() - lastDelayChange > 1000) {
+                var live = readCurrentDelay();
+                if (Math.abs(live - panelDelay) > 0.0005) {
+                    showDelay(live);
+                }
             }
         }, 1000);
     }
@@ -1912,16 +1918,23 @@
             '</div>';
     }
 
-    function wireDelaySection() {
+    // shows a delay in the panel without applying it
+    function showDelay(seconds) {
+        // Matches Jellyfin's own native Subtitle Offset slider range, so a delay set
+        // there and read back here doesn't get clamped to something smaller.
+        panelDelay = Math.max(-30, Math.min(30, Math.round(seconds * 1000) / 1000));
+
         var slider = document.getElementById('lapseDelaySlider');
         var value = document.getElementById('lapseDelayValue');
+        if (slider) { slider.value = panelDelay; }
+        if (value) { value.textContent = formatDelay(panelDelay); }
+    }
+
+    function wireDelaySection() {
+        var slider = document.getElementById('lapseDelaySlider');
 
         function setDelay(next) {
-            // Matches Jellyfin's own native Subtitle Offset slider range, so a delay set
-            // there and read back here doesn't get clamped to something smaller.
-            panelDelay = Math.max(-30, Math.min(30, Math.round(next * 1000) / 1000));
-            slider.value = panelDelay;
-            value.textContent = formatDelay(panelDelay);
+            showDelay(next);
             applyDelay(panelDelay);
         }
 

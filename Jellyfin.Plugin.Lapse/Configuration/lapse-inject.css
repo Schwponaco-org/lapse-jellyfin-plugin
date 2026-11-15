@@ -247,6 +247,11 @@
     font-size: 14px;
 }
 
+/* Jellyfin's own subtitle offset slider does the same job, one is enough while the panel is open */
+body:has(#lapsePlayerPanel) .subtitleSyncContainer {
+    display: none !important;
+}
+
 .lapseTools button:focus-visible,
 .lapseTools input:focus-visible {
     outline: 2px solid #00a4dc;
