@@ -1802,7 +1802,7 @@
                     // its folder and the row will still be greyed out.
                     if (result && result.Removed === 0) {
                         tell('Still ignored', 'This item is covered by a rule on its series or its folder. ' +
-                            'Remove that rule under Settings, Ignore list.');
+                            'Remove that rule under Settings, Libraries and automation.');
                     }
                 })
             : lapsePost('Lapse/Ignore', { ItemId: itemId });
@@ -1832,7 +1832,7 @@
                     return;
                 }
 
-                tell(name, 'There is no subtitle file to sync. Add one, or turn on fetching from OpenSubtitles under Experimental.');
+                tell(name, 'There is no subtitle file to sync. Add one, or turn on fetching from OpenSubtitles under Settings, Integrations.');
                 return;
             }
 
@@ -2008,13 +2008,13 @@
 
         if (result.AlreadyInSync) {
             tell(name, 'Already in sync, so the file was left as it was. LAPSE would have ' + describeResult(result) +
-                ', which is inside the tolerance under File output.');
+                ', which is inside the tolerance under Settings, Files.');
             return;
         }
 
         if (result.CandidateCount > 0) {
             tell(name, 'LAPSE was not sure, so the other engines had a go too. Their ' + result.CandidateCount +
-                ' answers are waiting under Multi engine sync. Nothing was overwritten.');
+                ' answers are waiting under Settings, Engines. Nothing was overwritten.');
             return;
         }
 
@@ -2036,7 +2036,7 @@
 
         if (result.Skipped) {
             confirmForceRetry(
-                name + ': LAPSE would have ' + wouldHave(result) + ' but was not sure, and File output is set to keep the original then.',
+                name + ': LAPSE would have ' + wouldHave(result) + ' but was not sure, and Settings, Files is set to keep the original then.',
                 result.EngineId, view, retry);
             return;
         }
@@ -2857,7 +2857,7 @@
                 tell('Subtitle to subtitle', 'The sync failed. ' + result.Error);
             } else if (result.AlreadyInSync) {
                 tell('Subtitle to subtitle', 'Already in sync, so the input was left as it was. LAPSE would have ' +
-                    describeResult(result) + ', which is inside the tolerance under File output.');
+                    describeResult(result) + ', which is inside the tolerance under Settings, Files.');
             } else if (result.Skipped) {
                 confirmForceRetry(
                     'Left the input alone (' + describeResult(result) + '), which is under the confidence threshold.',
@@ -3535,8 +3535,8 @@
         // Overwriting on a low score means LAPSE has already replaced the file by the time
         // the other engines could have been asked, so there is nothing left to compare.
         if (availability.OverwriteAnywayConflict) {
-            parts.push('File output writes an unsure result anyway, so there is nothing left to compare. ' +
-                'Change When LAPSE is unsure under File output to use this.');
+            parts.push('An unsure result is written anyway, so there is nothing left to compare. ' +
+                'Change When LAPSE is unsure under Files to use this.');
         }
 
         strip.textContent = parts.join(' ');
