@@ -337,6 +337,11 @@ public class EngineInfo
     public string? NoDownloadReason { get; set; }
 
     /// <summary>
+    /// Gets or sets the one line the engine card shows when there's no download, with the full reason as its tooltip.
+    /// </summary>
+    public string? NoDownloadSummary { get; set; }
+
+    /// <summary>
     /// Gets or sets a page explaining how to build this engine from source.
     /// </summary>
     public string? BuildGuideUrl { get; set; }

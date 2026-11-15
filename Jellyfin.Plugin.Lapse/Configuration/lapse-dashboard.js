@@ -1079,7 +1079,7 @@
         var problem = '';
         if (!engine.DownloadSupported && !engine.Installed) {
             problem = '<div class="fieldDescription" title="' + escapeHtml(engine.NoDownloadReason || '') + '">' +
-                'No download for this server.' +
+                escapeHtml(engine.NoDownloadSummary || 'No download for this server.') +
                 (engine.BuildGuideUrl
                     ? ' <a is="emby-linkbutton" class="button-link" href="' + escapeHtml(engine.BuildGuideUrl) +
                       '" target="_blank" rel="noopener">Build it yourself</a>'

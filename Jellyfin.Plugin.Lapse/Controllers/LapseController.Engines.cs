@@ -74,6 +74,9 @@ public partial class LapseController
             SubtitleExtensions = installed ? runtime.GetSubtitleExtensions(descriptor.Id) : capabilities.SubtitleExtensions,
             DownloadSupported = downloadable,
             NoDownloadReason = downloadable ? null : EngineInstaller.DescribeMissingBuild(engine),
+            NoDownloadSummary = downloadable ? null : OperatingSystem.IsMacOS()
+                ? $"{descriptor.DisplayName} doesn't publish builds for macOS."
+                : "No download for this server.",
             RunCheckError = runCheckError,
             SupportsStandard = capabilities.SupportsStandard,
             SupportsAuto = capabilities.SupportsAuto,
