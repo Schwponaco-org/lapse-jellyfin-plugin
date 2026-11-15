@@ -64,10 +64,10 @@ LAPSE is the only one of the supported engines that says how sure it is. Every a
 | Verdict | What it means | What happens |
 |---|---|---|
 | solid | The answer stands well clear of everything else it tried. | Written according to [File output](#file-output). |
-| unsure | Probably right, with too little margin to touch your original. | Handled by the low confidence setting under File output. By default the answer goes into a new file next to the original for you to check. |
+| unsure | Probably right, with too little margin to touch your original. | Handled by the low confidence setting under **Settings > Files**. By default the answer goes into a new file next to the original for you to check. |
 | nothing | The audio doesn't back up any answer. This nearly always means the subtitle was made for a different release, or a different film. | The same as unsure. The message points you at finding a subtitle made for this release. |
 
-How clearly an answer has to stand out is the **Confidence threshold** under File output, Advanced. It's passed to LAPSE as `--confidence`, and 8 is LAPSE's own default: higher sends more answers to Review, lower writes more of them, a few wrongly. alass and ffsubsync say nothing about how sure they are, so their answers are always written.
+How clearly an answer has to stand out is the **Confidence threshold** under **Settings > Files**, Advanced. It's passed to LAPSE as `--confidence`, and 8 is LAPSE's own default: higher sends more answers to Review, lower writes more of them, a few wrongly. alass and ffsubsync say nothing about how sure they are, so their answers are always written.
 
 A doubtful answer doesn't count as synced, so the item stays on your list until you've dealt with it. If you know a subtitle belongs to the video and LAPSE is being too careful, turn on **Sync even when the engine is unsure** on the engine's card.
 
@@ -139,7 +139,7 @@ There's also a **Sync subtitles** task under Scheduled Tasks that syncs every li
 LAPSE can fetch subtitles from OpenSubtitles with your own account:
 
 1. Create an API consumer at [opensubtitles.com](https://www.opensubtitles.com/consumers) to get a key.
-2. Under **Settings > Experimental**, turn on fetching and enter the key, your account name and your password. Add your languages, several in order if you like: `da, en`.
+2. Under **Settings > Integrations**, turn on fetching and enter the key, your account name and your password. Add your languages, several in order if you like: `da, en`.
 3. Press **Test the connection**. It signs in and tells you how many downloads you have left today.
 
 From then on, pressing Sync on an item with no usable subtitle fetches one first, and **Find subtitles online** in the item menu and the player lets you choose one yourself. Searches go by the video file's own hash first, which finds subtitles made for that exact release, then by the IMDb or TMDb id Jellyfin has for the item, then by title. Hearing impaired and forced subtitles get `.sdh` and `.forced` in their file names so Jellyfin labels them. Each download counts against your daily OpenSubtitles allowance.
@@ -148,13 +148,13 @@ From then on, pressing Sync on an item with no usable subtitle fetches one first
 
 When LAPSE is unsure, it can ask the other engines as well. Each answer becomes its own subtitle track, named after the engine (`Movie.en.lapse.srt`, `Movie.en.alass.srt`, `Movie.en.ffsubsync.srt`), and the item is rescanned so they appear right away. Play the item, switch between them, and press **Keep this subtitle** in Subtitle tools when one lines up. The rest are deleted, and File output decides what happens to the original. **Discard all** deletes them all and leaves the original as it was.
 
-It needs LAPSE as the default engine and alass or ffsubsync installed, and you turn it on under **Settings > Multi engine sync**. It stays off for bulk runs unless you say otherwise, because every unsure subtitle leaves a few files waiting for you to watch something and decide.
+It needs LAPSE as the default engine and alass or ffsubsync installed, and you turn it on under **Settings > Engines**. It stays off for bulk runs unless you say otherwise, because every unsure subtitle leaves a few files waiting for you to watch something and decide.
 
 PGS and VobSub can't be turned into anything the other engines read, so those only ever get LAPSE's answer.
 
-## Scheduled subtitle extraction (experimental)
+## Scheduled subtitle extraction
 
-Writes the embedded subtitle tracks you want out as files next to every video in a library, every night. Say you only ever want the forced English track: this writes that one and leaves the rest. Turn it on under **Settings > Experimental**, tick the libraries, and choose:
+Writes the embedded subtitle tracks you want out as files next to every video in a library, every night. Say you only ever want the forced English track: this writes that one and leaves the rest. Turn it on under **Settings > Files**, tick the libraries, and choose:
 
 - **Languages**: `en`, `eng` and `English` all work, and a plain language includes its regional variants. Empty means every language.
 - **Which tracks**: forced and full, forced only, or full only.
@@ -200,7 +200,7 @@ The [engine repo](https://github.com/Schwponaco-org/lapse) has the details, plus
 - **The menu entries don't show up.** Check that you're an admin or have subtitle access, then hard refresh the browser once. The LAPSE dashboard shows a warning when the plugin can't reach the web client.
 - **A sync fails straight away.** Open Engines and make sure LAPSE is installed. The engine card also warns you if LAPSE has fallen back to its weaker voice detector because the Silero model or onnxruntime is missing.
 - **LAPSE says unsure or nothing about a subtitle you know is right.** Music or crowd noise under the speech can throw it. If you're sure the subtitle belongs to this release, tick **Sync even when the engine is unsure** on the engine card, or line it up against a subtitle you trust with **Sync to reference**.
-- **OpenSubtitles doesn't work.** Press **Test the connection** under Settings > Experimental. It tells you whether the key or the account is the problem.
+- **OpenSubtitles doesn't work.** Press **Test the connection** under **Settings > Integrations**. It tells you whether the key or the account is the problem.
 - **The Radarr, Sonarr or Bazarr webhook does nothing.** The webhook settings show the last call that arrived and when. Bazarr's own log shows curl's answer to its post-processing command.
 
 ## Building

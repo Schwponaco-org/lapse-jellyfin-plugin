@@ -15,6 +15,7 @@
     var allIgnoreRules = [];
     var currentSettings = null;
     var currentOverview = null;
+    var multiEngineAvailability = {};
     var currentDiagnostics = null;
     var currentFontStatus = null;
     var currentUsers = [];
@@ -104,7 +105,6 @@
         {
             value: 'srt',
             label: '.srt',
-            recommended: true,
             note: 'Read by everything, and the easiest to edit by hand.'
         },
         { value: 'vtt', label: '.vtt', note: 'What browsers use.' },
@@ -116,7 +116,6 @@
         {
             value: 'keep',
             label: 'Keep it beside the new one',
-            recommended: true,
             note: 'Nothing is lost if the conversion is not what you wanted.'
         },
         {
@@ -130,7 +129,6 @@
         {
             value: 'sync',
             label: 'Convert it, then sync it',
-            recommended: true,
             note: 'The conversion was only needed so the engine could read it.'
         },
         {
@@ -144,7 +142,6 @@
         {
             value: 'off',
             label: 'Only when the engine cannot read the format',
-            recommended: true,
             note: 'The file keeps the format it came in.'
         },
         {
@@ -158,13 +155,12 @@
         {
             value: 'Sync',
             label: 'Sync them',
-            recommended: true,
             note: 'Leaves their format alone.'
         },
         {
             value: 'ConvertThenSync',
             label: 'Convert them, then sync them',
-            note: 'Writes each one in the format set under Conversion first.'
+            note: 'Writes each one in the format set under Conversion first, on the Files tab.'
         },
         {
             value: 'Convert',
@@ -200,7 +196,6 @@
         {
             value: 'Sidecar',
             label: 'Write it beside the original for review',
-            recommended: true,
             note: 'The original stays as it is until you keep or discard the result under Review.'
         },
         {
@@ -211,7 +206,7 @@
         {
             value: 'OverwriteAnyway',
             label: 'Write it anyway',
-            note: 'Writes it the way File output says, sure or not.'
+            note: 'Writes it like a sure result.'
         }
     ];
 
@@ -340,41 +335,27 @@
         return allEngines.filter(function (e) { return e.Installed && !e.RunCheckError; });
     }
 
-    // --- sidebar navigation ---
+    // --- tab navigation ---
 
     var showPanel = null;
+    var lastSettingsPanel = 'lapsePanelLibraries';
 
-    // One panel at a time from the sidebar, Settings folds out so the first view isn't eleven config
-    // screens. On a phone the same list is a drop-down. A fresh visit lands on the overview.
+    // Tabs along the top like Jellyfin's own pages, Settings opens a second row of its sections
+    // and comes back to the one used last. A fresh visit lands on the overview.
     function setUpNavigation(view) {
-        var items = Array.prototype.slice.call(view.querySelectorAll('.lapseNavItem'));
-        if (items.length === 0) {
-            return;
-        }
+        var items = Array.prototype.slice.call(view.querySelectorAll('.lapseNavItem[data-panel]'));
+        var settingsRow = view.querySelector('#lapseSettingsGroup');
+        var settingsTab = view.querySelector('#lapseSettingsToggle');
 
-        var settingsGroup = view.querySelector('#lapseSettingsGroup');
-        var settingsToggle = view.querySelector('#lapseSettingsToggle');
-        var select = view.querySelector('#lapseNavSelect');
-
-        function label(item) {
-            return item.querySelector('.lapseNavLabel').textContent;
-        }
-
-        function option(item) {
-            return '<option value="' + item.getAttribute('data-panel') + '">' + escapeHtml(label(item)) + '</option>';
-        }
-
-        select.innerHTML = items.filter(function (item) { return !settingsGroup.contains(item); }).map(option).join('') +
-            '<optgroup label="Settings">' +
-            items.filter(function (item) { return settingsGroup.contains(item); }).map(option).join('') +
-            '</optgroup>';
-
-        function openSettings(open) {
-            settingsGroup.classList.toggle('hide', !open);
-            settingsToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+        // keep the chosen tab in view on a phone, where the row scrolls sideways
+        function reveal(item) {
+            var row = item.parentNode;
+            row.scrollLeft = item.offsetLeft - (row.clientWidth - item.offsetWidth) / 2;
         }
 
         showPanel = function (panelId) {
+            var inSettings = !!settingsRow.querySelector('[data-panel="' + panelId + '"]');
+
             items.forEach(function (item) {
                 var active = item.getAttribute('data-panel') === panelId;
                 item.classList.toggle('lapseNavItem-active', active);
@@ -386,15 +367,19 @@
                 }
             });
 
+            settingsTab.classList.toggle('lapseNavItem-active', inSettings);
+            settingsTab.setAttribute('aria-expanded', inSettings ? 'true' : 'false');
+            settingsRow.classList.toggle('hide', !inSettings);
+
+            if (inSettings) {
+                lastSettingsPanel = panelId;
+            }
+
             view.querySelectorAll('.lapsePanel').forEach(function (panel) {
                 panel.classList.toggle('lapsePanel-active', panel.id === panelId);
             });
 
-            if (settingsGroup.querySelector('[data-panel="' + panelId + '"]')) {
-                openSettings(true);
-            }
-
-            select.value = panelId;
+            view.querySelectorAll('.lapseNavItem-active').forEach(reveal);
         };
 
         items.forEach(function (item) {
@@ -403,12 +388,8 @@
             });
         });
 
-        select.addEventListener('change', function () {
-            showPanel(select.value);
-        });
-
-        settingsToggle.addEventListener('click', function () {
-            openSettings(settingsGroup.classList.contains('hide'));
+        settingsTab.addEventListener('click', function () {
+            showPanel(lastSettingsPanel);
         });
 
         showPanel('lapsePanelDashboard');
@@ -545,17 +526,24 @@
             return;
         }
 
-        // nothing installed: one button for LAPSE instead of a page of zeroes
+        // nothing installed: say what LAPSE is and offer it, instead of a page of zeroes
         if (!overview.AnyEngineInstalled) {
             container.innerHTML = '' +
-                '<div class="verticalSection">' +
-                '  <p>LAPSE needs its sync engine before it can do anything. It is one download, for Linux, macOS and Windows.</p>' +
+                '<div class="paperList lapseWelcome">' +
+                '  <h2 class="sectionTitle">Install the LAPSE engine</h2>' +
+                '  <p>LAPSE listens to the audio and moves each subtitle to match the speech. It fixes subtitles ' +
+                'that are early or late, drift out of time or were cut for another release, and it runs here on your server.</p>' +
                 '  <button is="emby-button" type="button" class="raised button-submit" id="lapseInstallLapse"><span>Install LAPSE</span></button>' +
-                '  <div class="fieldDescription">Other engines are under Settings, Engines.</div>' +
+                '  <div class="fieldDescription">One download, for Linux, macOS and Windows. ' +
+                '<a is="emby-linkbutton" href="#" class="button-link" id="lapseGoEngines">Other engines</a></div>' +
                 '</div>';
 
             container.querySelector('#lapseInstallLapse').addEventListener('click', function (e) {
                 installEngine(view, 'lapse', e.currentTarget);
+            });
+            container.querySelector('#lapseGoEngines').addEventListener('click', function (e) {
+                e.preventDefault();
+                showPanel('lapsePanelEngines');
             });
 
             return;
@@ -565,12 +553,12 @@
         var engineNote = '';
 
         if (!overview.ActiveEngineReady) {
-            engineNote = 'It is not installed. Install it under Settings, Engines.';
+            engineNote = 'It is not installed.';
         } else if (engine && engine.RunCheckError) {
             engineNote = engine.RunCheckError;
         }
 
-        // offer the update right here instead of sending people to Settings > Engines
+        // offer the update right here instead of sending people to the engine settings
         var updateAvailable = !!(engine && overview.ActiveEngineReady && !engine.RunCheckError && engine.UpdateAvailable);
 
         var counts = countStatuses();
@@ -581,6 +569,16 @@
                     modeLabel = m.Label;
                 }
             });
+        }
+
+        var engineState = engineNote
+            ? '<div class="fieldDescription lapseProblem">' + escapeHtml(engineNote) + '</div>'
+            : '<div class="fieldDescription">' + escapeHtml(modeLabel) + ' mode. ' +
+              (updateAvailable ? escapeHtml(engine.LatestVersion || 'A new release') + ' is out.' : 'Up to date.') + '</div>';
+
+        // the plugin is built around LAPSE, so say so once when another engine is in use
+        if (overview.ActiveEngineId !== 'lapse') {
+            engineState += '<div class="fieldDescription">LAPSE is the engine this plugin is built around.</div>';
         }
 
         var eligible = counts.Synced + counts.PartiallySynced + counts.Pending + counts.Failed;
@@ -600,36 +598,44 @@
         });
 
         container.innerHTML = '' +
-            '<div class="verticalSection">' +
-            '  <h2 class="sectionTitle">' + counts.Synced + ' of ' + eligible + ' items synced</h2>' +
+            '<div class="paperList lapseSummary">' +
+            '  <div class="lapseStat">' +
+            '    <div class="lapseStatLabel">Synced</div>' +
+            '    <div class="lapseStatValue">' + counts.Synced + ' <span class="lapseStatOf">of ' + eligible + ' items</span></div>' +
             progressBar(counts) +
-            '  <div class="lapseStatusLinks">' + statusLinks(counts) + '</div>' +
+            '    <div class="lapseStatusLinks">' + statusLinks(counts) + '</div>' +
             (counts.WithoutSubtitles
-                ? '  <div class="fieldDescription">' + counts.WithoutSubtitles + ' of the ' + counts.Total +
-                  ' items in the turned on libraries have no subtitle file.</div>'
-                : '') +
-            '  <div class="lapseButtonRow">' +
-            '    <button is="emby-button" type="button" class="raised button-submit" id="lapseGoBulk"><span>Sync everything</span></button>' +
-            (updateAvailable
-                ? '    <button is="emby-button" type="button" class="raised" id="lapseUpdateEngine"><span>Update ' +
-                  escapeHtml(engine.DisplayName) + ' to ' + escapeHtml(engine.LatestVersion || 'the latest') + '</span></button>'
+                ? '  <div class="fieldDescription">' + counts.WithoutSubtitles +
+                  (counts.WithoutSubtitles === 1 ? ' has' : ' have') + ' no subtitle file</div>'
                 : '') +
             '  </div>' +
-            '  <div class="fieldDescription">Using ' + escapeHtml(overview.ActiveEngineName || '') +
-            (overview.ActiveEngineVersion ? ' ' + escapeHtml(overview.ActiveEngineVersion) : '') +
-            ' in ' + escapeHtml(modeLabel) + ' mode. ' +
-            '<a is="emby-linkbutton" href="#" class="button-link" id="lapseGoEngines">Change engine</a></div>' +
-            (engineNote ? '  <div class="fieldDescription lapseProblem">' + escapeHtml(engineNote) + '</div>' : '') +
+            '  <div class="lapseStat">' +
+            '    <div class="lapseStatLabel">Waiting for review</div>' +
+            '    <div class="lapseStatValue">' + unsure + '</div>' +
+            '    <div class="fieldDescription">' + (unsure
+                ? 'LAPSE was unsure and kept the originals.'
+                : 'Results LAPSE is unsure about land here.') + '</div>' +
+            '  </div>' +
+            '  <div class="lapseStat">' +
+            '    <div class="lapseStatLabel">Engine</div>' +
+            '    <div class="lapseStatValue">' + escapeHtml(overview.ActiveEngineName || '') +
+            (overview.ActiveEngineVersion ? ' <span class="lapseStatOf">' + escapeHtml(overview.ActiveEngineVersion) + '</span>' : '') + '</div>' +
+            engineState +
+            '    <a is="emby-linkbutton" href="#" class="button-link" id="lapseGoEngines">Engine settings</a>' +
+            '  </div>' +
             '</div>' +
 
+            '<div class="lapseButtonRow lapseOverviewActions">' +
+            '  <button is="emby-button" type="button" class="raised button-submit" id="lapseGoBulk"><span>Sync everything</span></button>' +
             (unsure
-                ? '<div class="verticalSection">' +
-                  '  <h2 class="sectionTitle">Waiting for review</h2>' +
-                  '  <p>LAPSE was unsure about ' + unsure + (unsure === 1 ? ' subtitle' : ' subtitles') +
-                  ' and kept the originals. Check the results and keep or discard them.</p>' +
-                  '  <button is="emby-button" type="button" class="raised" id="lapseGoReview"><span>Review</span></button>' +
-                  '</div>'
+                ? '  <button is="emby-button" type="button" class="raised" id="lapseGoReview"><span>Review ' + unsure +
+                  (unsure === 1 ? ' result' : ' results') + '</span></button>'
                 : '') +
+            (updateAvailable
+                ? '  <button is="emby-button" type="button" class="raised" id="lapseUpdateEngine"><span>Update ' +
+                  escapeHtml(engine.DisplayName) + ' to ' + escapeHtml(engine.LatestVersion || 'the latest') + '</span></button>'
+                : '') +
+            '</div>' +
 
             '<div class="verticalSection">' +
             '  <h2 class="sectionTitle">Recent activity</h2>' +
@@ -730,7 +736,6 @@
             '</div>' +
             '<div class="lapseButtonRow">' +
             '<a is="emby-linkbutton" class="button-link" href="https://github.com/Schwponaco-org/lapse-jellyfin-plugin" target="_blank" rel="noopener">Plugin on GitHub</a>' +
-            '<a is="emby-linkbutton" class="button-link" href="https://github.com/Schwponaco-org/lapse" target="_blank" rel="noopener">Engine on GitHub</a>' +
             '</div>';
     }
 
@@ -1048,65 +1053,82 @@
             }).join('');
     }
 
+    function engineCardHtml(engine, primary) {
+        var actions = '';
+        if (!engine.IsDefault && engine.Installed && !engine.RunCheckError) {
+            actions += '<button is="emby-button" type="button" class="raised lapseBtnSetDefault"><span>Use this one</span></button>';
+        }
+
+        if (engine.Installed && engine.DownloadSupported && engine.UpdateAvailable) {
+            actions += '<button is="emby-button" type="button" class="raised button-submit lapseBtnUpdate"><span>Update</span></button>';
+        }
+
+        if (engine.DownloadSupported) {
+            actions += '<button is="emby-button" type="button" class="raised lapseBtnInstall' +
+                (primary && !engine.Installed ? ' button-submit' : '') + '"><span>' +
+                (engine.Installed ? 'Reinstall' : 'Install') + '</span></button>';
+        }
+
+        // Only offered for a copy the plugin put there. A binary behind a path
+        // override isn't the plugin's to delete, and the server refuses anyway.
+        if (engine.Installed && !engine.PathOverride) {
+            actions += '<button is="emby-button" type="button" class="raised lapseBtnUninstall"><span>Uninstall</span></button>';
+        }
+
+        // the full reason is a paragraph, the card keeps one line and puts the rest in a tooltip
+        var problem = '';
+        if (!engine.DownloadSupported && !engine.Installed) {
+            problem = '<div class="fieldDescription" title="' + escapeHtml(engine.NoDownloadReason || '') + '">' +
+                escapeHtml(engine.NoDownloadSummary || 'No download for this server.') +
+                (engine.BuildGuideUrl
+                    ? ' <a is="emby-linkbutton" class="button-link" href="' + escapeHtml(engine.BuildGuideUrl) +
+                      '" target="_blank" rel="noopener">Build it yourself</a>'
+                    : '') +
+                '</div>';
+        } else if (engine.RunCheckError) {
+            problem = '<div class="fieldDescription lapseProblem">' + escapeHtml(engine.RunCheckError) + '</div>';
+        }
+
+        // Only LAPSE carries a "why" link, the one claim on this page that needs backing up
+        var whyLink = engine.WhyUrl
+            ? ' <a is="emby-linkbutton" class="button-link" href="' + escapeHtml(engine.WhyUrl) + '" target="_blank" rel="noopener">' +
+              escapeHtml(engine.WhyLabel || 'Read more on GitHub') + '</a>'
+            : '';
+
+        var state = (engine.IsDefault && engine.Installed ? 'In use. ' : '') +
+            capitalize(engineUpdateNote(engine) || engineStateText(engine)) + '.' +
+            (engine.Installed && !engine.InstalledVersion ? ' The installed copy does not say which version it is.' : '');
+
+        return '' +
+            '<div class="paperList lapseEngineCard' + (primary ? ' lapseEngineCard-primary' : '') + '" data-id="' + escapeHtml(engine.Id) + '">' +
+            '  <div class="lapseEngineHead">' +
+            '    <h3 class="sectionTitle" title="' + escapeHtml(discoveredFlagsTooltip(engine)) + '">' + escapeHtml(engine.DisplayName) +
+            (engine.InstalledVersion ? ' <span class="lapseStatOf">' + escapeHtml(engine.InstalledVersion) + '</span>' : '') + '</h3>' +
+            (primary ? '    <span class="lapseTag lapseTag-accent">Recommended</span>' : '') +
+            '  </div>' +
+            '  <div class="fieldDescription">' + escapeHtml(engine.Description) + '</div>' +
+            '  <div class="fieldDescription">' + escapeHtml(state) + whyLink + '</div>' +
+            problem +
+            vadNotice(engine) +
+            whisperNotice(engine) +
+            forceControl(engine) +
+            (actions ? '  <div class="lapseButtonRow">' + actions + '</div>' : '') +
+            engineAdvancedHtml(engine) +
+            '</div>';
+    }
+
+    // LAPSE first and largest, the others side by side under it as the alternatives they are
     function renderEngineCards(view) {
         var container = view.querySelector('#lapseEngineCards');
+        var main = allEngines.filter(function (e) { return e.Tier === 'Recommended'; });
+        var others = allEngines.filter(function (e) { return e.Tier !== 'Recommended'; });
 
-        container.innerHTML = allEngines.map(function (engine) {
-            var actions = '';
-            if (!engine.IsDefault && engine.Installed && !engine.RunCheckError) {
-                actions += '<button is="emby-button" type="button" class="raised lapseBtnSetDefault"><span>Use this one</span></button>';
-            }
-
-            if (engine.Installed && engine.DownloadSupported && engine.UpdateAvailable) {
-                actions += '<button is="emby-button" type="button" class="raised button-submit lapseBtnUpdate"><span>Update</span></button>';
-            }
-
-            if (engine.DownloadSupported) {
-                actions += '<button is="emby-button" type="button" class="raised lapseBtnInstall"><span>' +
-                    (engine.Installed ? 'Reinstall' : 'Install') + '</span></button>';
-            }
-
-            // Only offered for a copy the plugin put there. A binary behind a path
-            // override isn't the plugin's to delete, and the server refuses anyway.
-            if (engine.Installed && !engine.PathOverride) {
-                actions += '<button is="emby-button" type="button" class="raised lapseBtnUninstall"><span>Uninstall</span></button>';
-            }
-
-            var problem = '';
-            if (!engine.DownloadSupported && !engine.Installed) {
-                problem = '<div class="fieldDescription">' + escapeHtml(engine.NoDownloadReason || '') +
-                    (engine.BuildGuideUrl
-                        ? ' <a is="emby-linkbutton" class="button-link" href="' + escapeHtml(engine.BuildGuideUrl) +
-                          '" target="_blank" rel="noopener">Build instructions</a>'
-                        : '') +
-                    '</div>';
-            } else if (engine.RunCheckError) {
-                problem = '<div class="fieldDescription lapseProblem">' + escapeHtml(engine.RunCheckError) + '</div>';
-            }
-
-            // Only LAPSE carries a "why" link, the one claim on this page that needs backing up
-            var whyLink = engine.WhyUrl
-                ? ' <a is="emby-linkbutton" class="button-link" href="' + escapeHtml(engine.WhyUrl) + '" target="_blank" rel="noopener">' +
-                  escapeHtml(engine.WhyLabel || 'Read more on GitHub') + '</a>'
-                : '';
-
-            var state = capitalize(engineUpdateNote(engine) || engineStateText(engine)) + '.' +
-                (engine.Installed && !engine.InstalledVersion ? ' The installed copy does not say which version it is.' : '');
-
-            return '' +
-                '<div class="verticalSection lapseEngineCard" data-id="' + escapeHtml(engine.Id) + '">' +
-                '  <h3 class="sectionTitle" title="' + escapeHtml(discoveredFlagsTooltip(engine)) + '">' +
-                escapeHtml(engine.DisplayName) + (engine.InstalledVersion ? ' ' + escapeHtml(engine.InstalledVersion) : '') +
-                (engine.IsDefault ? ' (in use)' : '') + '</h3>' +
-                '  <div class="fieldDescription">' + escapeHtml(state) + ' ' + escapeHtml(engine.Tier) + '.' + whyLink + '</div>' +
-                problem +
-                vadNotice(engine) +
-                whisperNotice(engine) +
-                forceControl(engine) +
-                (actions ? '  <div class="lapseButtonRow">' + actions + '</div>' : '') +
-                engineAdvancedHtml(engine) +
-                '</div>';
-        }).join('');
+        container.innerHTML = main.map(function (engine) { return engineCardHtml(engine, true); }).join('') +
+            (others.length
+                ? '<h2 class="sectionTitle">Alternatives</h2>' +
+                  '<div class="fieldDescription">One engine is enough.</div>' +
+                  '<div class="lapseEngineGrid">' + others.map(function (engine) { return engineCardHtml(engine, false); }).join('') + '</div>'
+                : '');
 
         container.querySelectorAll('.lapseEngineCard').forEach(function (card) {
             var id = card.getAttribute('data-id');
@@ -1170,9 +1192,6 @@
                 });
             }
         });
-
-        var installed = usableEngines().length;
-        view.querySelector('#lapseEnginesHint').textContent = installed + ' of ' + allEngines.length + ' installed';
     }
 
     function installEngine(view, id, button) {
@@ -1237,6 +1256,8 @@
             renderEngineDeployment(view);
             updateSubToSubEngineNote(view);
             renderConversionEngineNote(view);
+            // installing or removing an engine changes whether multi engine can be turned on
+            refreshMultiEngine(view);
             view.querySelector('#lapseAutoUpdateEngines').checked =
                 allEngines.length > 0 ? !!allEngines[0].AutoUpdate : true;
         });
@@ -1316,11 +1337,11 @@
                 '    </label></div>' +
                 '    <div class="lapseLibrarySchedule">' +
                 '      <div class="checkboxContainer"><label class="emby-checkbox-label">' +
-                '        <input type="checkbox" is="emby-checkbox" class="lapseChkAutoSync"' + (library.AutoSyncEnabled ? ' checked' : '') + ' />' +
+                '        <input type="checkbox" is="emby-checkbox" class="lapseChkAutoSync"' + (library.Enabled && library.AutoSyncEnabled ? ' checked' : '') + ' />' +
                 '        <span>New items</span>' +
                 '      </label></div>' +
                 '      <div class="checkboxContainer"><label class="emby-checkbox-label">' +
-                '        <input type="checkbox" is="emby-checkbox" class="lapseChkSchedule"' + (library.ScheduleEnabled ? ' checked' : '') + ' />' +
+                '        <input type="checkbox" is="emby-checkbox" class="lapseChkSchedule"' + (library.Enabled && library.ScheduleEnabled ? ' checked' : '') + ' />' +
                 '        <span>Schedule</span>' +
                 '      </label></div>' +
                 '      <select is="emby-select" class="emby-select-withcolor emby-select lapseScheduleFrequency" aria-label="How often, ' + name + '">' +
@@ -1392,21 +1413,6 @@
             syncRowState();
         });
 
-        var enabled = allLibraries.filter(function (l) { return l.Enabled; }).length;
-        var scheduled = allLibraries.filter(function (l) { return l.Enabled && l.ScheduleEnabled; }).length;
-        var automatic = allLibraries.filter(function (l) { return l.Enabled && l.AutoSyncEnabled; }).length;
-
-        var extra = [];
-        if (automatic) {
-            extra.push(automatic + ' on new items');
-        }
-
-        if (scheduled) {
-            extra.push(scheduled + ' scheduled');
-        }
-
-        view.querySelector('#lapseLibrariesHint').textContent =
-            enabled + ' of ' + allLibraries.length + ' on' + (extra.length ? (', ' + extra.join(', ')) : '');
     }
 
     function refreshLibraries(view) {
@@ -1438,14 +1444,18 @@
 
         button.disabled = true;
         Dashboard.showLoadingMsg();
+
+        // the automatic run settings share this tab and its Save button
         lapsePost('Lapse/Libraries', payload).then(function () {
+            return lapsePost('Lapse/Settings', collectSettings(view));
+        }).then(function () {
             Dashboard.hideLoadingMsg();
             button.disabled = false;
             Dashboard.alert('Settings saved.');
 
             // read them straight back rather than trusting the form: if anything didn't
             // stick, the toggles snapping back is the honest answer
-            return refreshLibraries(view).then(function () {
+            return Promise.all([refreshLibraries(view), refreshSettings(view)]).then(function () {
                 return Promise.all([refreshItemList(view), refreshOverview(view)]);
             });
         }).catch(function (err) {
@@ -1704,8 +1714,6 @@
             });
         }
 
-        view.querySelector('#lapseItemsHint').textContent = shown.length + ' of ' + items.length;
-
         if (shown.length === 0) {
             if (search || libraryId || status) {
                 container.innerHTML = '<p class="fieldDescription">Nothing matches that filter.</p>';
@@ -1797,7 +1805,7 @@
                     // its folder and the row will still be greyed out.
                     if (result && result.Removed === 0) {
                         tell('Still ignored', 'This item is covered by a rule on its series or its folder. ' +
-                            'Remove that rule under Settings, Ignore list.');
+                            'Remove that rule under Settings, Libraries and automation.');
                     }
                 })
             : lapsePost('Lapse/Ignore', { ItemId: itemId });
@@ -1827,7 +1835,7 @@
                     return;
                 }
 
-                tell(name, 'There is no subtitle file to sync. Add one, or turn on fetching from OpenSubtitles under Experimental.');
+                tell(name, 'There is no subtitle file to sync. Add one, or turn on fetching from OpenSubtitles under Settings, Integrations.');
                 return;
             }
 
@@ -2003,13 +2011,13 @@
 
         if (result.AlreadyInSync) {
             tell(name, 'Already in sync, so the file was left as it was. LAPSE would have ' + describeResult(result) +
-                ', which is inside the tolerance under File output.');
+                ', which is inside the tolerance under Settings, Files.');
             return;
         }
 
         if (result.CandidateCount > 0) {
             tell(name, 'LAPSE was not sure, so the other engines had a go too. Their ' + result.CandidateCount +
-                ' answers are waiting under Multi engine sync. Nothing was overwritten.');
+                ' answers are waiting under Settings, Engines. Nothing was overwritten.');
             return;
         }
 
@@ -2031,7 +2039,7 @@
 
         if (result.Skipped) {
             confirmForceRetry(
-                name + ': LAPSE would have ' + wouldHave(result) + ' but was not sure, and File output is set to keep the original then.',
+                name + ': LAPSE would have ' + wouldHave(result) + ' but was not sure, and Settings, Files is set to keep the original then.',
                 result.EngineId, view, retry);
             return;
         }
@@ -2605,9 +2613,6 @@
     function renderIgnoreList(view) {
         var container = view.querySelector('#lapseIgnoreList');
 
-        view.querySelector('#lapseIgnoreHint').textContent =
-            allIgnoreRules.length === 0 ? '' : (allIgnoreRules.length + ' rules');
-
         if (allIgnoreRules.length === 0) {
             container.innerHTML = '<p class="fieldDescription">Nothing is ignored.</p>';
             return;
@@ -2855,7 +2860,7 @@
                 tell('Subtitle to subtitle', 'The sync failed. ' + result.Error);
             } else if (result.AlreadyInSync) {
                 tell('Subtitle to subtitle', 'Already in sync, so the input was left as it was. LAPSE would have ' +
-                    describeResult(result) + ', which is inside the tolerance under File output.');
+                    describeResult(result) + ', which is inside the tolerance under Settings, Files.');
             } else if (result.Skipped) {
                 confirmForceRetry(
                     'Left the input alone (' + describeResult(result) + '), which is under the confidence threshold.',
@@ -2876,15 +2881,10 @@
 
     // --- settings: output, translation, appearance, engines ---
 
-    // `options.hideRecommended` leaves the word out but keeps the default picked
-    function renderRadioGroup(container, name, modes, selected, onChange, options) {
-        var showRecommended = !(options && options.hideRecommended);
-
-        // no match = value gone or never set, use the recommended one so a dot always shows
-        var hasSelection = modes.some(function (mode) { return mode.value === selected; });
-        if (!hasSelection) {
-            var fallback = modes.filter(function (mode) { return mode.recommended; })[0] || modes[0];
-            selected = fallback && fallback.value;
+    function renderRadioGroup(container, name, modes, selected, onChange) {
+        // no match = value gone or never set, the first one is the default so a dot always shows
+        if (!modes.some(function (mode) { return mode.value === selected; })) {
+            selected = modes[0].value;
         }
 
         container.innerHTML = modes.map(function (mode) {
@@ -2893,8 +2893,7 @@
                 '  <input type="radio" name="' + name + '" value="' + escapeHtml(mode.value) + '"' +
                 (selected === mode.value ? ' checked' : '') + ' />' +
                 '  <span><span>' + escapeHtml(mode.label) + '</span>' +
-                '    <span class="fieldDescription">' + (mode.recommended && showRecommended ? 'Recommended. ' : '') +
-                escapeHtml(mode.note) + '</span>' +
+                '    <span class="fieldDescription">' + escapeHtml(mode.note) + '</span>' +
                 '  </span>' +
                 '</label>';
         }).join('');
@@ -2927,8 +2926,6 @@
             : 'Only used when a new file is written.';
 
         view.querySelector('#lapseSidecarPreview').textContent = preview;
-        view.querySelector('#lapseOutputHint').textContent =
-            (OUTPUT_MODES.filter(function (m) { return m.value === mode; })[0] || {}).label || '';
     }
 
     function updateConfidenceNote(view) {
@@ -2969,42 +2966,36 @@
 
     function renderConversion(view) {
         var settings = currentSettings || {};
-        var plain = { hideRecommended: true };
 
         renderRadioGroup(
             view.querySelector('#lapseConversionFormats'),
             'lapseConversionFormat',
             CONVERSION_FORMATS,
             conversionFormat(settings.ConversionFormat),
-            function () { updateConversionHint(view); },
-            plain);
+            null);
 
         renderRadioGroup(
             view.querySelector('#lapseConversionOriginal'),
             'lapseConversionOriginal',
             CONVERSION_ORIGINAL_MODES,
             settings.ConversionReplaceOriginal ? 'replace' : 'keep',
-            null,
-            plain);
+            null);
 
         renderRadioGroup(
             view.querySelector('#lapseConvertBeforeSync'),
             'lapseConvertBeforeSync',
             CONVERT_BEFORE_SYNC_MODES,
             settings.ConvertBeforeSync ? 'on' : 'off',
-            null,
-            plain);
+            null);
 
         renderRadioGroup(
             view.querySelector('#lapseConversionSync'),
             'lapseConversionSync',
             CONVERSION_SYNC_MODES,
             settings.ConversionSyncAfter === false ? 'convert' : 'sync',
-            null,
-            plain);
+            null);
 
         renderConversionEngineNote(view);
-        updateConversionHint(view);
     }
 
     // Says which formats the engine in use actually reads, so "do I need to convert this"
@@ -3028,11 +3019,6 @@
             'so converting is only needed for one format across the library.';
     }
 
-    function updateConversionHint(view) {
-        view.querySelector('#lapseConversionHint').textContent =
-            '.' + selectedRadio(view, 'lapseConversionFormat', 'srt');
-    }
-
     function renderAutomation(view) {
         var settings = currentSettings || {};
 
@@ -3041,26 +3027,13 @@
             'lapseAutomationAction',
             AUTOMATION_ACTIONS,
             settings.AutomationAction || 'Sync',
-            function () { updateAutomationHint(view); },
-            { hideRecommended: true });
+            null);
 
         view.querySelector('#lapseAutoTranslateEnabled').checked = settings.AutoTranslateEnabled === true;
         view.querySelector('#lapseAutoTranslateLanguage').value = settings.AutoTranslateLanguage || '';
         view.querySelector('#lapseAutoTranslateSkipExisting').checked = settings.AutoTranslateSkipExisting !== false;
         view.querySelector('#lapseSkipSyncedInUnattendedRuns').checked = settings.SkipSyncedInUnattendedRuns !== false;
         view.querySelector('#lapseAutoSyncNewSubtitles').checked = settings.AutoSyncNewSubtitles !== false;
-
-        updateAutomationHint(view);
-    }
-
-    function updateAutomationHint(view) {
-        var action = selectedRadio(view, 'lapseAutomationAction', 'Sync');
-        var label = AUTOMATION_ACTIONS.filter(function (a) { return a.value === action; })[0];
-        var translating = view.querySelector('#lapseAutoTranslateEnabled').checked
-            && view.querySelector('#lapseAutoTranslateLanguage').value.trim();
-
-        view.querySelector('#lapseAutomationHint').textContent =
-            (label ? label.label : 'Sync them') + (translating ? ' + translate' : '');
     }
 
     function renderAccess(view) {
@@ -3102,10 +3075,7 @@
 
     function updateAccessPanel(view) {
         var mode = selectedRadio(view, 'lapseAccessMode', 'AdminsOnly');
-        var chosen = ACCESS_MODES.filter(function (m) { return m.value === mode; })[0];
-
         view.querySelector('#lapseAccessUsersContainer').classList.toggle('hide', mode !== 'SelectedUsers');
-        view.querySelector('#lapseAccessHint').textContent = chosen ? chosen.label : '';
     }
 
     function selectedAccessUserIds(view) {
@@ -3202,6 +3172,7 @@
         view.querySelector('#lapseMultiEngineTrigger').value = currentSettings.MultiEngineTrigger || 'UnsureOnly';
         view.querySelector('#lapseMultiEngineCandidateFormat').value = currentSettings.MultiEngineCandidateFormat || 'MatchOriginal';
         view.querySelector('#lapseMultiEngineInBulk').checked = !!currentSettings.MultiEngineInBulk;
+        syncMultiEngineOptions(view, false);
         refreshMultiEngine(view);
 
         renderAppearance(view);
@@ -3390,14 +3361,6 @@
 
     // --- translation providers ---
 
-    function tierLabel(tier) {
-        if (tier === 0) {
-            return 'No setup needed';
-        }
-
-        return tier === 1 ? 'Self hosted' : 'Needs an API key';
-    }
-
     // Each provider gets the fields it actually needs, right under its own name, rather
     // than a flat pile of keys and URLs that gives no clue which goes with what.
     function providerFieldsHtml(provider) {
@@ -3433,8 +3396,8 @@
             return '' +
                 '<div class="verticalSection">' +
                 '  <h3 class="sectionTitle">' + escapeHtml(provider.DisplayName) + '</h3>' +
-                '  <div class="fieldDescription">' + escapeHtml(tierLabel(provider.Tier)) + ', ' +
-                (provider.Configured ? 'ready' : 'not set up') + '. ' + escapeHtml(provider.Summary) + '</div>' +
+                '  <div class="fieldDescription">' + escapeHtml(provider.Summary) + ' ' +
+                (provider.Configured ? 'Ready.' : 'Not set up.') + '</div>' +
                 providerFieldsHtml(provider) +
                 '</div>';
         }).join('');
@@ -3456,9 +3419,6 @@
         if (currentSettings) {
             defaultSelect.value = currentSettings.DefaultTranslationProvider;
         }
-
-        var active = allProviders.filter(function (p) { return p.Configured; }).length;
-        view.querySelector('#lapseTranslationHint').textContent = active + ' of ' + allProviders.length + ' ready';
     }
 
     function setInputValue(view, selector, value) {
@@ -3564,6 +3524,7 @@
         }
 
         var availability = status.Availability || {};
+        multiEngineAvailability = availability;
         var parts = [];
 
         if (availability.Available) {
@@ -3579,8 +3540,8 @@
         // Overwriting on a low score means LAPSE has already replaced the file by the time
         // the other engines could have been asked, so there is nothing left to compare.
         if (availability.OverwriteAnywayConflict) {
-            parts.push('File output writes an unsure result anyway, so there is nothing left to compare. ' +
-                'Change When LAPSE is unsure under File output to use this.');
+            parts.push('An unsure result is written anyway, so there is nothing left to compare. ' +
+                'Change When LAPSE is unsure under Files to use this.');
         }
 
         strip.textContent = parts.join(' ');
@@ -3595,11 +3556,29 @@
         var pending = (status.Pending || []).filter(function (set) {
             return (set.Candidates || []).some(function (c) { return c.EngineId !== 'lapse'; });
         });
-        view.querySelector('#lapseMultiEngineHint').textContent = pending.length
-            ? pending.length + ' waiting'
-            : (availability.Enabled && usable ? 'on' : 'off');
-
         renderCandidateList(view, pending);
+    }
+
+    // Off means nothing is asked, so the choices under it are cleared and greyed out with it.
+    // Turning it on ticks whichever engine is installed, so it never runs with none to ask.
+    function syncMultiEngineOptions(view, justTurnedOn) {
+        var on = view.querySelector('#lapseMultiEngineEnabled').checked;
+        var alass = view.querySelector('#lapseMultiEngineUseAlass');
+        var ffsubsync = view.querySelector('#lapseMultiEngineUseFfsubsync');
+
+        if (!on) {
+            alass.checked = false;
+            ffsubsync.checked = false;
+        } else if (justTurnedOn && !alass.checked && !ffsubsync.checked) {
+            alass.checked = !!multiEngineAvailability.AlassInstalled;
+            ffsubsync.checked = !!multiEngineAvailability.FfsubsyncInstalled;
+        }
+
+        var options = view.querySelector('#lapseMultiEngineOptions');
+        options.classList.toggle('lapseDimmed', !on);
+        options.querySelectorAll('input, select').forEach(function (field) {
+            field.disabled = !on;
+        });
     }
 
     function renderCandidateList(view, sets) {
@@ -3680,7 +3659,7 @@
     function renderReview(view, sets) {
         var host = view.querySelector('#lapseReviewList');
         currentReview = sets;
-        view.querySelector('#lapseReviewHint').textContent = sets.length ? sets.length + ' waiting' : '';
+        view.querySelector('#lapseReviewHint').textContent = sets.length || '';
         renderOverview(view);
 
         if (!sets.length) {
@@ -3868,8 +3847,6 @@
         text.style.fontSize = Math.max(10, Math.round(appearance.FontSizePx * 0.5)) + 'px';
         text.style.color = appearance.TextColor;
         text.style.backgroundColor = appearance.BackgroundEnabled ? appearance.BackgroundColor : 'transparent';
-
-        view.querySelector('#lapseAppearanceHint').textContent = appearance.Enabled ? 'on' : 'off';
     }
 
     function resetAppearance(view) {
@@ -4151,6 +4128,9 @@
         view.querySelector('#btnClearEngineCache').addEventListener('click', function () {
             clearEngineCache(view);
         });
+        view.querySelector('#lapseMultiEngineEnabled').addEventListener('change', function () {
+            syncMultiEngineOptions(view, true);
+        });
         view.querySelector('#btnSaveEngines').addEventListener('click', function (e) {
             saveSettings(view, e.currentTarget);
         });
@@ -4213,37 +4193,20 @@
         view.querySelector('#lapseSkipAlreadyInSync').addEventListener('change', function () {
             updateAlreadyInSyncNote(view);
         });
-        view.querySelector('#btnSaveConversion').addEventListener('click', function (e) {
-            saveSettings(view, e.currentTarget);
-        });
-        view.querySelector('#btnSaveAutomation').addEventListener('click', function (e) {
-            saveSettings(view, e.currentTarget);
-        });
-        view.querySelector('#lapseAutoTranslateEnabled').addEventListener('change', function () {
-            updateAutomationHint(view);
-        });
-        view.querySelector('#lapseAutoTranslateLanguage').addEventListener('input', function () {
-            updateAutomationHint(view);
-        });
         view.querySelector('#btnSaveAccess').addEventListener('click', function (e) {
             saveSettings(view, e.currentTarget);
         });
-        view.querySelector('#btnSaveOutput').addEventListener('click', function (e) {
+        view.querySelector('#btnSaveFiles').addEventListener('click', function (e) {
             saveSettings(view, e.currentTarget);
         });
         view.querySelector('#btnSaveTranslation').addEventListener('click', function (e) {
             saveSettings(view, e.currentTarget);
         });
-        view.querySelector('#btnSaveLabs').addEventListener('click', function (e) {
+        view.querySelector('#btnSaveIntegrations').addEventListener('click', function (e) {
             saveSettings(view, e.currentTarget);
         });
         view.querySelector('#btnTestOpenSubtitles').addEventListener('click', function () {
             testOpenSubtitles(view);
-        });
-        view.querySelector('#btnSaveMultiEngine').addEventListener('click', function (e) {
-            // Saving reads the settings back, and drawing those redraws this panel's
-            // status strip and waiting list too.
-            saveSettings(view, e.currentTarget);
         });
         view.querySelector('#btnSaveAppearance').addEventListener('click', function (e) {
             saveSettings(view, e.currentTarget);

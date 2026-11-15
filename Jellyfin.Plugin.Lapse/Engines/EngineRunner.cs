@@ -218,7 +218,7 @@ public class EngineRunner
         if (string.Equals(sidecar, subtitlePath, StringComparison.Ordinal)
             && !(Directory.Exists(directory) && IsSidecarOfAnother(subtitlePath, Directory.EnumerateFiles(directory).Where(SubtitleFormats.IsSubtitle))))
         {
-            throw new IOException($"The sidecar suffix {suffix} would write over {Path.GetFileName(subtitlePath)} itself. Change it under File output.");
+            throw new IOException($"The sidecar suffix {suffix} would write over {Path.GetFileName(subtitlePath)} itself. Change it under Settings, Files.");
         }
 
         return sidecar;

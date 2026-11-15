@@ -603,7 +603,7 @@
             sync.setAttribute('is', 'paper-icon-button-light');
             sync.type = 'button';
             sync.className = 'listItemButton paper-icon-button-light lapseEditorSync';
-            sync.title = 'Sync';
+            sync.title = 'Sync with LAPSE';
             sync.setAttribute('aria-label', 'Sync ' + baseName(subtitle.Path));
             sync.innerHTML = '<span class="material-icons sync" aria-hidden="true"></span>';
             row.insertBefore(sync, deleteButton);
@@ -762,7 +762,8 @@
 
     // --- detect the action sheet and add our buttons to it ---
 
-    function makeMenuButton(dataId, label, icon, onClick) {
+    // note: a second line in the sheet's own secondaryText markup, used to say a lone entry is ours
+    function makeMenuButton(dataId, label, icon, onClick, note) {
         var button = document.createElement('button');
         button.setAttribute('is', 'emby-button');
         button.type = 'button';
@@ -772,6 +773,7 @@
             '<span class="actionsheetMenuItemIcon listItemIcon listItemIcon-transparent material-icons ' + icon + '" aria-hidden="true"></span>' +
             '<div class="listItemBody actionsheetListItemBody">' +
             '<div class="listItemBodyText actionSheetItemText">' + escapeHtml(label) + '</div>' +
+            (note ? '<div class="listItemBodyText secondary">' + escapeHtml(note) + '</div>' : '') +
             '</div>';
 
         // Stop the click here. Otherwise it bubbles to the sheet's own handler, which reads our data-id
@@ -824,6 +826,15 @@
 
         var isContainer = CONTAINER_TYPES.indexOf(context.type) !== -1;
         actionTitle = context.name || 'LAPSE';
+
+        // a group of entries in someone else's menu, so say whose: the sheet's own divider and a small heading
+        var divider = document.createElement('div');
+        divider.className = 'actionsheetDivider';
+        var heading = document.createElement('div');
+        heading.className = 'lapseMenuHeading';
+        heading.textContent = 'LAPSE';
+        scroller.appendChild(divider);
+        scroller.appendChild(heading);
 
         if (isContainer) {
             scroller.appendChild(makeMenuButton('lapse-sync-all', 'Sync all subtitles', 'subtitles', function () {
@@ -1614,38 +1625,19 @@
         return fallbackDelaySeconds;
     }
 
-    // Jellyfin debounces setSubtitleOffset by 100ms (10.11.11 and 12.0 source). Reading it back right
-    // away gives the old value, so the old check thought the call failed and fell back to the text
-    // track path, which had nothing to move. Now we only verify after the debounce, and only log.
-    var DEBOUNCE_SETTLE_MS = 150;
+    // Jellyfin debounces setSubtitleOffset by 100ms, so reading it back right after gives the old value.
+    var lastDelayChange = 0;
 
     function applyDelay(delaySeconds) {
         var manager = playbackManager();
+        lastDelayChange = Date.now();
 
+        // No enableShowingSubtitleOffset: all it does is bring up Jellyfin's own offset slider at
+        // its old value. The panel hides that slider while it is open and keeps its value right.
         if (manager && manager.getCurrentPlayer && manager.getCurrentPlayer()) {
             try {
-                // Without this the player treats the offset as something it is not
-                // currently showing and puts it back to zero on the next track change.
-                if (typeof manager.enableShowingSubtitleOffset === 'function') {
-                    manager.enableShowingSubtitleOffset();
-                }
-
                 manager.setSubtitleOffset(delayToJellyfinOffset(delaySeconds));
-
-                // diagnostic only, logged and never acted on (see above)
-                var wanted = delayToJellyfinOffset(delaySeconds);
-                setTimeout(function () {
-                    try {
-                        var confirmed = parseFloat(manager.getPlayerSubtitleOffset());
-                        if (isNaN(confirmed) || Math.abs(confirmed - wanted) >= 0.01) {
-                            log('the player did not settle on the offset it was given - got ' +
-                                confirmed + ', wanted ' + wanted);
-                        }
-                    } catch (err) {
-                        log('could not confirm the subtitle offset after the fact: ' + err);
-                    }
-                }, DEBOUNCE_SETTLE_MS);
-
+                syncNativeOffsetSlider(delaySeconds);
                 return true;
             } catch (err) {
                 log('the player refused the subtitle offset: ' + err);
@@ -1653,6 +1645,42 @@
         }
 
         return applyDelayToTextTracks(delaySeconds);
+    }
+
+    // Jellyfin's own slider only resets itself when the offset is zero, so without this it would
+    // show its old value next time and jump back to it when touched.
+    function syncNativeOffsetSlider(delaySeconds) {
+        var offset = delayToJellyfinOffset(delaySeconds);
+        var slider = document.querySelector('.subtitleSyncSlider');
+        var field = document.querySelector('.subtitleSyncTextField');
+
+        if (slider) {
+            slider.value = offset;
+        }
+
+        if (field) {
+            field.textContent = offset + 's';
+        }
+    }
+
+    // Turning the track off and on makes the player fetch the file again. That also zeroes its offset.
+    function reloadPlayingSubtitle() {
+        var manager = playbackManager();
+
+        try {
+            var index = manager && manager.getCurrentPlayer() && manager.getSubtitleStreamIndex();
+            if (typeof index !== 'number' || index < 0) {
+                return false;
+            }
+
+            manager.setSubtitleStreamIndex(-1);
+            manager.setSubtitleStreamIndex(index);
+            syncNativeOffsetSlider(0);
+            return true;
+        } catch (err) {
+            log('could not reload the subtitle track: ' + err);
+            return false;
+        }
     }
 
     // Fallback when the player can't be reached: moves the browser's text track cues. Does nothing
@@ -1771,7 +1799,8 @@
         }
     }
 
-    // close the panel when playback ends, otherwise it floats over whatever page comes next
+    // Close the panel when playback ends, otherwise it floats over whatever page comes next. And follow
+    // offset changes made elsewhere: a track switch from the normal menu zeroes it, so do the G/H keys.
     function watchForPlaybackEnding() {
         if (panelWatchdog) {
             clearInterval(panelWatchdog);
@@ -1780,6 +1809,14 @@
         panelWatchdog = setInterval(function () {
             if (panelIsOpen() && !document.querySelector('video')) {
                 closePlayerPanel();
+                return;
+            }
+
+            if (document.getElementById('lapseDelaySlider') && Date.now() - lastDelayChange > 1000) {
+                var live = readCurrentDelay();
+                if (Math.abs(live - panelDelay) > 0.0005) {
+                    showDelay(live);
+                }
             }
         }, 1000);
     }
@@ -1809,6 +1846,11 @@
         document.body.appendChild(panel);
         document.addEventListener('keydown', panelKeyHandler, true);
         panel.addEventListener('keydown', panelKeys);
+
+        // the player turns the wheel into volume on the document, so scrolling the panel changed it
+        panel.addEventListener('wheel', function (e) {
+            e.stopPropagation();
+        }, { passive: true });
         watchForPlaybackEnding();
 
         panel.querySelector('#lapseToolsClose').addEventListener('click', closePlayerPanel);
@@ -1827,12 +1869,35 @@
                 return;
             }
 
+            useOwnPlayersTrack(context);
             panelDelay = readCurrentDelay();
             renderPanel();
         }).catch(function (err) {
             setPanelBody('<div class="lapseToolsNote">Could not read what is playing: ' +
                 escapeHtml(err.message) + '</div>');
         });
+    }
+
+    // The server guesses the track from the user's latest session, which can be another device or a
+    // stale one, and "Save to file" would then write to a file that isn't on screen. This player knows.
+    function useOwnPlayersTrack(context) {
+        var manager = playbackManager();
+
+        try {
+            var item = manager && manager.getCurrentPlayer() && manager.currentItem();
+            var index = manager && manager.getSubtitleStreamIndex();
+
+            if (!item || item.Id !== String(context.ItemId).replace(/-/g, '') || typeof index !== 'number') {
+                return;
+            }
+
+            var playing = (context.Subtitles || []).filter(function (s) {
+                return s.StreamIndex === index;
+            })[0];
+            context.PlayingPath = playing ? playing.Path : null;
+        } catch (err) {
+            log('could not ask the player which subtitle is on: ' + err);
+        }
     }
 
     function setPanelBody(html) {
@@ -1907,16 +1972,23 @@
             '</div>';
     }
 
-    function wireDelaySection() {
+    // shows a delay in the panel without applying it
+    function showDelay(seconds) {
+        // Matches Jellyfin's own native Subtitle Offset slider range, so a delay set
+        // there and read back here doesn't get clamped to something smaller.
+        panelDelay = Math.max(-30, Math.min(30, Math.round(seconds * 1000) / 1000));
+
         var slider = document.getElementById('lapseDelaySlider');
         var value = document.getElementById('lapseDelayValue');
+        if (slider) { slider.value = panelDelay; }
+        if (value) { value.textContent = formatDelay(panelDelay); }
+    }
+
+    function wireDelaySection() {
+        var slider = document.getElementById('lapseDelaySlider');
 
         function setDelay(next) {
-            // Matches Jellyfin's own native Subtitle Offset slider range, so a delay set
-            // there and read back here doesn't get clamped to something smaller.
-            panelDelay = Math.max(-30, Math.min(30, Math.round(next * 1000) / 1000));
-            slider.value = panelDelay;
-            value.textContent = formatDelay(panelDelay);
+            showDelay(next);
             applyDelay(panelDelay);
         }
 
@@ -1968,18 +2040,20 @@
                 return;
             }
 
-            // The file now carries the delay, so the live one has to come off or the
-            // subtitle would be moved twice over.
-            panelDelay = 0;
-            applyDelay(0);
+            // The player still holds the old timings, so dropping the live delay alone would put the subtitles
+            // back where they were. Reloading the track picks up the file and clears the player's offset.
+            if (!reloadPlayingSubtitle()) {
+                result.textContent = 'Saved. ' + moved + 'The player still has the old timings loaded, so the ' +
+                    'live delay stays on until you pick the subtitle again.';
+                return;
+            }
 
-            var slider = document.getElementById('lapseDelaySlider');
-            var value = document.getElementById('lapseDelayValue');
-            if (slider) { slider.value = 0; }
-            if (value) { value.textContent = formatDelay(0); }
+            lastDelayChange = Date.now();
+            fallbackDelaySeconds = 0;
+            showDelay(0);
 
             result.textContent = 'Saved. ' + moved +
-                'The live delay is back to zero because the file carries it now.';
+                'The subtitle has been reloaded from the file, so the live delay is back to zero.';
         }).catch(function (err) {
             result.textContent = 'Could not save it: ' + err.message;
         });
@@ -2364,7 +2438,7 @@
         // first in the list, people open this menu because the subtitles look wrong
         var entry = makeMenuButton('lapse-player-panel', 'Subtitle tools', 'tune', function () {
             openPlayerPanel();
-        });
+        }, 'From LAPSE');
 
         if (scroller.firstChild) {
             scroller.insertBefore(entry, scroller.firstChild);
@@ -2450,7 +2524,8 @@
                     'check_circle',
                     function () {
                         keepPlayingSubtitle(status.ItemId);
-                    });
+                    },
+                    'From LAPSE');
             } else {
                 // They are on the original, or on some other track. Pointing at the picker
                 // is more use than a button that would refuse.
@@ -2460,7 +2535,8 @@
                     'compare_arrows',
                     function () {
                         openCandidatePicker(status.ItemId);
-                    });
+                    },
+                    'From LAPSE');
             }
 
             button.classList.add('lapseKeepButton');

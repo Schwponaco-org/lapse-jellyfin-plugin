@@ -411,7 +411,7 @@ public partial class LapseEngine : IEngine
         {
             Key = "force",
             Label = "Sync even when the engine is unsure",
-            Description = "Treats every result as confident, and syncs files with too few cues to judge properly. Off by default, and the safer place to handle this is the low confidence setting under File output.",
+            Description = "Treats every result as confident, and syncs files with too few cues to judge properly. Off by default, and the safer place to handle this is the low confidence setting under Files.",
             Flag = "--force",
             Kind = EngineParameterKind.Boolean,
             DefaultValue = "false"

@@ -243,7 +243,7 @@ public partial class OpenSubtitlesService : IDisposable
 
         if (string.IsNullOrWhiteSpace(config.OpenSubtitlesApiKey))
         {
-            result.Error = "OpenSubtitles needs an API key, set under Settings, Experimental.";
+            result.Error = "OpenSubtitles needs an API key, set under Settings, Integrations.";
             return result;
         }
 
@@ -256,7 +256,7 @@ public partial class OpenSubtitlesService : IDisposable
         var languages = ResolveLanguages(string.IsNullOrWhiteSpace(languageOverride) ? config.OpenSubtitlesLanguage : languageOverride);
         if (languages.Count == 0)
         {
-            result.Error = "No language to search for. Put one under Settings, Experimental, for example en or da, en.";
+            result.Error = "No language to search for. Put one under Settings, Integrations, for example en or da, en.";
             return result;
         }
 
@@ -666,7 +666,7 @@ public partial class OpenSubtitlesService : IDisposable
     {
         if (string.IsNullOrWhiteSpace(credentials.Username) || string.IsNullOrWhiteSpace(credentials.Password))
         {
-            return (null, "Downloading needs the OpenSubtitles account name and password, set under Settings, Experimental.");
+            return (null, "Downloading needs the OpenSubtitles account name and password, set under Settings, Integrations.");
         }
 
         // tokens belong to one account, switching accounts mustn't keep using the old one's quota
@@ -857,7 +857,7 @@ public partial class OpenSubtitlesService : IDisposable
             HttpStatusCode.Unauthorized => "The OpenSubtitles sign in has expired. Try again.",
             HttpStatusCode.Forbidden when said?.Contains("agent", StringComparison.OrdinalIgnoreCase) == true =>
                 "OpenSubtitles turned the request down for its User-Agent.",
-            HttpStatusCode.Forbidden => "OpenSubtitles turned the API key down. Check it under Settings, Experimental.",
+            HttpStatusCode.Forbidden => "OpenSubtitles turned the API key down. Check it under Settings, Integrations.",
             HttpStatusCode.NotAcceptable => "The account's downloads for today are used up.",
             HttpStatusCode.Gone => "That subtitle has been removed from OpenSubtitles.",
             HttpStatusCode.TooManyRequests => "OpenSubtitles is rate limiting the account. Wait a little and try again.",

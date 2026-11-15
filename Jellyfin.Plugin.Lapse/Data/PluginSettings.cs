@@ -198,12 +198,12 @@ public class PluginSettings
     /// <summary>
     /// Gets or sets a value indicating whether alass is one of the engines that gets asked.
     /// </summary>
-    public bool MultiEngineUseAlass { get; set; } = true;
+    public bool MultiEngineUseAlass { get; set; }
 
     /// <summary>
     /// Gets or sets a value indicating whether ffsubsync is one of the engines that gets asked.
     /// </summary>
-    public bool MultiEngineUseFfsubsync { get; set; } = true;
+    public bool MultiEngineUseFfsubsync { get; set; }
 
     /// <summary>
     /// Gets or sets which of LAPSE's verdicts sets the others running.
