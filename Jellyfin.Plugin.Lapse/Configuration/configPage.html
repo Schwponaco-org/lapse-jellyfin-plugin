@@ -304,64 +304,62 @@
 
                         <div class="verticalSection">
                             <h2 class="sectionTitle">Multi engine sync <span class="lapseTag">Experimental</span></h2>
-                            <div class="fieldDescription">When LAPSE is unsure, alass and ffsubsync have a go too, and each answer becomes
-                                an extra subtitle track to pick from. It makes more work per sync, so it is off by default.
-                            </div>
-                            <div class="fieldDescription" id="lapseMultiEngineStatus">Checking what is installed...</div>
-
-                            <div class="checkboxContainer checkboxContainer-withDescription">
+                            <div class="paperList lapseEngineCard checkboxContainer checkboxContainer-withDescription">
                                 <label class="emby-checkbox-label">
                                     <input id="lapseMultiEngineEnabled" type="checkbox" is="emby-checkbox" />
-                                    <span>Ask the other engines when LAPSE is unsure</span>
+                                    <span>Ask alass and ffsubsync too when LAPSE is unsure</span>
                                 </label>
                                 <div class="fieldDescription checkboxFieldDescription">
-                                    Play the item, switch between the answers and keep the one that fits from the subtitle menu.
-                                    The original stays untouched until then.
+                                    Each answer becomes an extra subtitle track. Play the item, switch between them and keep
+                                    the one that fits from the subtitle menu. The original stays untouched until then.
                                 </div>
+                                <div class="fieldDescription" id="lapseMultiEngineStatus">Checking what is installed...</div>
                             </div>
 
-                            <div class="verticalSection">
-                                <h3 class="sectionTitle">Which engines to ask</h3>
-                                <div class="checkboxContainer">
+                            <div id="lapseMultiEngineOptions">
+                                <div class="verticalSection">
+                                    <h3 class="sectionTitle">Which engines to ask</h3>
+                                    <div class="checkboxContainer">
+                                        <label class="emby-checkbox-label">
+                                            <input id="lapseMultiEngineUseAlass" type="checkbox" is="emby-checkbox" />
+                                            <span>alass</span>
+                                        </label>
+                                    </div>
+                                    <div class="checkboxContainer">
+                                        <label class="emby-checkbox-label">
+                                            <input id="lapseMultiEngineUseFfsubsync" type="checkbox" is="emby-checkbox" />
+                                            <span>ffsubsync</span>
+                                        </label>
+                                    </div>
+                                </div>
+
+                                <div class="selectContainer">
+                                    <label class="selectLabel" for="lapseMultiEngineTrigger">When to ask them</label>
+                                    <select is="emby-select" id="lapseMultiEngineTrigger" class="emby-select-withcolor emby-select">
+                                        <option value="UnsureOnly">Only when LAPSE is unsure</option>
+                                        <option value="UnsureAndNothing">Also when LAPSE finds no match in the audio</option>
+                                    </select>
+                                    <div class="fieldDescription">No match usually means the subtitle is for another release, which the other engines rarely fix.</div>
+                                </div>
+
+                                <div class="selectContainer">
+                                    <label class="selectLabel" for="lapseMultiEngineCandidateFormat">Format of their answers</label>
+                                    <select is="emby-select" id="lapseMultiEngineCandidateFormat" class="emby-select-withcolor emby-select">
+                                        <option value="MatchOriginal">The same as the original where possible</option>
+                                        <option value="Srt">Always .srt</option>
+                                        <option value="Ass">Always .ass</option>
+                                    </select>
+                                    <div class="fieldDescription">They read only .srt, .ass, .ssa and .vtt. Picture subtitles only ever get LAPSE's answer.</div>
+                                </div>
+
+                                <div class="checkboxContainer checkboxContainer-withDescription">
                                     <label class="emby-checkbox-label">
-                                        <input id="lapseMultiEngineUseAlass" type="checkbox" is="emby-checkbox" />
-                                        <span>alass</span>
+                                        <input id="lapseMultiEngineInBulk" type="checkbox" is="emby-checkbox" />
+                                        <span>Also during bulk, scheduled and webhook runs</span>
                                     </label>
-                                </div>
-                                <div class="checkboxContainer">
-                                    <label class="emby-checkbox-label">
-                                        <input id="lapseMultiEngineUseFfsubsync" type="checkbox" is="emby-checkbox" />
-                                        <span>ffsubsync</span>
-                                    </label>
-                                </div>
-                            </div>
-
-                            <div class="selectContainer">
-                                <label class="selectLabel" for="lapseMultiEngineTrigger">When to ask them</label>
-                                <select is="emby-select" id="lapseMultiEngineTrigger" class="emby-select-withcolor emby-select">
-                                    <option value="UnsureOnly">Only when LAPSE is unsure</option>
-                                    <option value="UnsureAndNothing">Also when LAPSE finds no match in the audio</option>
-                                </select>
-                                <div class="fieldDescription">No match usually means the subtitle is for another release, which the other engines rarely fix.</div>
-                            </div>
-
-                            <div class="selectContainer">
-                                <label class="selectLabel" for="lapseMultiEngineCandidateFormat">Format of their answers</label>
-                                <select is="emby-select" id="lapseMultiEngineCandidateFormat" class="emby-select-withcolor emby-select">
-                                    <option value="MatchOriginal">The same as the original where possible</option>
-                                    <option value="Srt">Always .srt</option>
-                                    <option value="Ass">Always .ass</option>
-                                </select>
-                                <div class="fieldDescription">They read only .srt, .ass, .ssa and .vtt. Picture subtitles only ever get LAPSE's answer.</div>
-                            </div>
-
-                            <div class="checkboxContainer checkboxContainer-withDescription">
-                                <label class="emby-checkbox-label">
-                                    <input id="lapseMultiEngineInBulk" type="checkbox" is="emby-checkbox" />
-                                    <span>Also during bulk, scheduled and webhook runs</span>
-                                </label>
-                                <div class="fieldDescription checkboxFieldDescription">
-                                    On a large library this leaves far more answers waiting than anyone will go through.
+                                    <div class="fieldDescription checkboxFieldDescription">
+                                        On a large library this leaves far more answers waiting than anyone will go through.
+                                    </div>
                                 </div>
                             </div>
                             <div class="verticalSection">

@@ -15,6 +15,7 @@
     var allIgnoreRules = [];
     var currentSettings = null;
     var currentOverview = null;
+    var multiEngineAvailability = {};
     var currentDiagnostics = null;
     var currentFontStatus = null;
     var currentUsers = [];
@@ -3169,6 +3170,7 @@
         view.querySelector('#lapseMultiEngineTrigger').value = currentSettings.MultiEngineTrigger || 'UnsureOnly';
         view.querySelector('#lapseMultiEngineCandidateFormat').value = currentSettings.MultiEngineCandidateFormat || 'MatchOriginal';
         view.querySelector('#lapseMultiEngineInBulk').checked = !!currentSettings.MultiEngineInBulk;
+        syncMultiEngineOptions(view, false);
         refreshMultiEngine(view);
 
         renderAppearance(view);
@@ -3520,6 +3522,7 @@
         }
 
         var availability = status.Availability || {};
+        multiEngineAvailability = availability;
         var parts = [];
 
         if (availability.Available) {
@@ -3552,6 +3555,28 @@
             return (set.Candidates || []).some(function (c) { return c.EngineId !== 'lapse'; });
         });
         renderCandidateList(view, pending);
+    }
+
+    // Off means nothing is asked, so the choices under it are cleared and greyed out with it.
+    // Turning it on ticks whichever engine is installed, so it never runs with none to ask.
+    function syncMultiEngineOptions(view, justTurnedOn) {
+        var on = view.querySelector('#lapseMultiEngineEnabled').checked;
+        var alass = view.querySelector('#lapseMultiEngineUseAlass');
+        var ffsubsync = view.querySelector('#lapseMultiEngineUseFfsubsync');
+
+        if (!on) {
+            alass.checked = false;
+            ffsubsync.checked = false;
+        } else if (justTurnedOn && !alass.checked && !ffsubsync.checked) {
+            alass.checked = !!multiEngineAvailability.AlassInstalled;
+            ffsubsync.checked = !!multiEngineAvailability.FfsubsyncInstalled;
+        }
+
+        var options = view.querySelector('#lapseMultiEngineOptions');
+        options.classList.toggle('lapseDimmed', !on);
+        options.querySelectorAll('input, select').forEach(function (field) {
+            field.disabled = !on;
+        });
     }
 
     function renderCandidateList(view, sets) {
@@ -4100,6 +4125,9 @@
         });
         view.querySelector('#btnClearEngineCache').addEventListener('click', function () {
             clearEngineCache(view);
+        });
+        view.querySelector('#lapseMultiEngineEnabled').addEventListener('change', function () {
+            syncMultiEngineOptions(view, true);
         });
         view.querySelector('#btnSaveEngines').addEventListener('click', function (e) {
             saveSettings(view, e.currentTarget);
