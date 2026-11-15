@@ -1256,6 +1256,8 @@
             renderEngineDeployment(view);
             updateSubToSubEngineNote(view);
             renderConversionEngineNote(view);
+            // installing or removing an engine changes whether multi engine can be turned on
+            refreshMultiEngine(view);
             view.querySelector('#lapseAutoUpdateEngines').checked =
                 allEngines.length > 0 ? !!allEngines[0].AutoUpdate : true;
         });
