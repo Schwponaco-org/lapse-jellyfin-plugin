@@ -196,6 +196,26 @@
     align-items: center;
 }
 
+/* the "From LAPSE" line under a lone entry, and the heading over a group of them */
+.lapseSyncButton .listItemBodyText.secondary {
+    padding-top: 0;
+    font-size: .85em;
+    opacity: .6;
+}
+
+.lapseMenuHeading {
+    flex-shrink: 0;
+    padding: .5em 1em .15em;
+    font-size: .8em;
+    letter-spacing: .04em;
+    opacity: .6;
+}
+
+/* Jellyfin's Edit subtitles dialog: our verdict sits under its path line */
+.lapseVerdict::before {
+    content: "LAPSE: ";
+}
+
 .lapseSyncButton .actionSheetItemText,
 .lapseSyncButton .listItemBodyText {
     white-space: normal !important;

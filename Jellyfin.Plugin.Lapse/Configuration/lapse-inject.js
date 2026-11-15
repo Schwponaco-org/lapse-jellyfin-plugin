@@ -603,7 +603,7 @@
             sync.setAttribute('is', 'paper-icon-button-light');
             sync.type = 'button';
             sync.className = 'listItemButton paper-icon-button-light lapseEditorSync';
-            sync.title = 'Sync';
+            sync.title = 'Sync with LAPSE';
             sync.setAttribute('aria-label', 'Sync ' + baseName(subtitle.Path));
             sync.innerHTML = '<span class="material-icons sync" aria-hidden="true"></span>';
             row.insertBefore(sync, deleteButton);
@@ -762,7 +762,8 @@
 
     // --- detect the action sheet and add our buttons to it ---
 
-    function makeMenuButton(dataId, label, icon, onClick) {
+    // note: a second line in the sheet's own secondaryText markup, used to say a lone entry is ours
+    function makeMenuButton(dataId, label, icon, onClick, note) {
         var button = document.createElement('button');
         button.setAttribute('is', 'emby-button');
         button.type = 'button';
@@ -772,6 +773,7 @@
             '<span class="actionsheetMenuItemIcon listItemIcon listItemIcon-transparent material-icons ' + icon + '" aria-hidden="true"></span>' +
             '<div class="listItemBody actionsheetListItemBody">' +
             '<div class="listItemBodyText actionSheetItemText">' + escapeHtml(label) + '</div>' +
+            (note ? '<div class="listItemBodyText secondary">' + escapeHtml(note) + '</div>' : '') +
             '</div>';
 
         // Stop the click here. Otherwise it bubbles to the sheet's own handler, which reads our data-id
@@ -824,6 +826,15 @@
 
         var isContainer = CONTAINER_TYPES.indexOf(context.type) !== -1;
         actionTitle = context.name || 'LAPSE';
+
+        // a group of entries in someone else's menu, so say whose: the sheet's own divider and a small heading
+        var divider = document.createElement('div');
+        divider.className = 'actionsheetDivider';
+        var heading = document.createElement('div');
+        heading.className = 'lapseMenuHeading';
+        heading.textContent = 'LAPSE';
+        scroller.appendChild(divider);
+        scroller.appendChild(heading);
 
         if (isContainer) {
             scroller.appendChild(makeMenuButton('lapse-sync-all', 'Sync all subtitles', 'subtitles', function () {
@@ -2427,7 +2438,7 @@
         // first in the list, people open this menu because the subtitles look wrong
         var entry = makeMenuButton('lapse-player-panel', 'Subtitle tools', 'tune', function () {
             openPlayerPanel();
-        });
+        }, 'From LAPSE');
 
         if (scroller.firstChild) {
             scroller.insertBefore(entry, scroller.firstChild);
@@ -2513,7 +2524,8 @@
                     'check_circle',
                     function () {
                         keepPlayingSubtitle(status.ItemId);
-                    });
+                    },
+                    'From LAPSE');
             } else {
                 // They are on the original, or on some other track. Pointing at the picker
                 // is more use than a button that would refuse.
@@ -2523,7 +2535,8 @@
                     'compare_arrows',
                     function () {
                         openCandidatePicker(status.ItemId);
-                    });
+                    },
+                    'From LAPSE');
             }
 
             button.classList.add('lapseKeepButton');
