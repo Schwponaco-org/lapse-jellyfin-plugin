@@ -1652,6 +1652,26 @@
         }
     }
 
+    // Turning the track off and on makes the player fetch the file again. That also zeroes its offset.
+    function reloadPlayingSubtitle() {
+        var manager = playbackManager();
+
+        try {
+            var index = manager && manager.getCurrentPlayer() && manager.getSubtitleStreamIndex();
+            if (typeof index !== 'number' || index < 0) {
+                return false;
+            }
+
+            manager.setSubtitleStreamIndex(-1);
+            manager.setSubtitleStreamIndex(index);
+            syncNativeOffsetSlider(0);
+            return true;
+        } catch (err) {
+            log('could not reload the subtitle track: ' + err);
+            return false;
+        }
+    }
+
     // Fallback when the player can't be reached: moves the browser's text track cues. Does nothing
     // for ASS, libass draws that on a canvas.
     var fallbackDelaySeconds = 0;
@@ -1986,18 +2006,20 @@
                 return;
             }
 
-            // The file now carries the delay, so the live one has to come off or the
-            // subtitle would be moved twice over.
-            panelDelay = 0;
-            applyDelay(0);
+            // The player still holds the old timings, so dropping the live delay alone would put the subtitles
+            // back where they were. Reloading the track picks up the file and clears the player's offset.
+            if (!reloadPlayingSubtitle()) {
+                result.textContent = 'Saved. ' + moved + 'The player still has the old timings loaded, so the ' +
+                    'live delay stays on until you pick the subtitle again.';
+                return;
+            }
 
-            var slider = document.getElementById('lapseDelaySlider');
-            var value = document.getElementById('lapseDelayValue');
-            if (slider) { slider.value = 0; }
-            if (value) { value.textContent = formatDelay(0); }
+            lastDelayChange = Date.now();
+            fallbackDelaySeconds = 0;
+            showDelay(0);
 
             result.textContent = 'Saved. ' + moved +
-                'The live delay is back to zero because the file carries it now.';
+                'The subtitle has been reloaded from the file, so the live delay is back to zero.';
         }).catch(function (err) {
             result.textContent = 'Could not save it: ' + err.message;
         });
