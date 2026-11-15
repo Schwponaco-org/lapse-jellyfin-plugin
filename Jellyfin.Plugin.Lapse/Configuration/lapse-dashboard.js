@@ -525,17 +525,24 @@
             return;
         }
 
-        // nothing installed: one button for LAPSE instead of a page of zeroes
+        // nothing installed: say what LAPSE is and offer it, instead of a page of zeroes
         if (!overview.AnyEngineInstalled) {
             container.innerHTML = '' +
-                '<div class="verticalSection">' +
-                '  <p>LAPSE needs its sync engine before it can do anything. It is one download, for Linux, macOS and Windows.</p>' +
+                '<div class="paperList lapseWelcome">' +
+                '  <h2 class="sectionTitle">Install the LAPSE engine</h2>' +
+                '  <p>LAPSE listens to the audio and moves each subtitle to match the speech. It fixes subtitles ' +
+                'that are early or late, drift out of time or were cut for another release, and it runs here on your server.</p>' +
                 '  <button is="emby-button" type="button" class="raised button-submit" id="lapseInstallLapse"><span>Install LAPSE</span></button>' +
-                '  <div class="fieldDescription">Other engines are under Settings, Engines.</div>' +
+                '  <div class="fieldDescription">One download, for Linux, macOS and Windows. ' +
+                '<a is="emby-linkbutton" href="#" class="button-link" id="lapseGoEngines">Other engines</a></div>' +
                 '</div>';
 
             container.querySelector('#lapseInstallLapse').addEventListener('click', function (e) {
                 installEngine(view, 'lapse', e.currentTarget);
+            });
+            container.querySelector('#lapseGoEngines').addEventListener('click', function (e) {
+                e.preventDefault();
+                showPanel('lapsePanelEngines');
             });
 
             return;
@@ -545,12 +552,12 @@
         var engineNote = '';
 
         if (!overview.ActiveEngineReady) {
-            engineNote = 'It is not installed. Install it under Settings, Engines.';
+            engineNote = 'It is not installed.';
         } else if (engine && engine.RunCheckError) {
             engineNote = engine.RunCheckError;
         }
 
-        // offer the update right here instead of sending people to Settings > Engines
+        // offer the update right here instead of sending people to the engine settings
         var updateAvailable = !!(engine && overview.ActiveEngineReady && !engine.RunCheckError && engine.UpdateAvailable);
 
         var counts = countStatuses();
@@ -561,6 +568,16 @@
                     modeLabel = m.Label;
                 }
             });
+        }
+
+        var engineState = engineNote
+            ? '<div class="fieldDescription lapseProblem">' + escapeHtml(engineNote) + '</div>'
+            : '<div class="fieldDescription">' + escapeHtml(modeLabel) + ' mode. ' +
+              (updateAvailable ? escapeHtml(engine.LatestVersion || 'A new release') + ' is out.' : 'Up to date.') + '</div>';
+
+        // the plugin is built around LAPSE, so say so once when another engine is in use
+        if (overview.ActiveEngineId !== 'lapse') {
+            engineState += '<div class="fieldDescription">LAPSE is the engine this plugin is built around.</div>';
         }
 
         var eligible = counts.Synced + counts.PartiallySynced + counts.Pending + counts.Failed;
@@ -580,36 +597,44 @@
         });
 
         container.innerHTML = '' +
-            '<div class="verticalSection">' +
-            '  <h2 class="sectionTitle">' + counts.Synced + ' of ' + eligible + ' items synced</h2>' +
+            '<div class="paperList lapseSummary">' +
+            '  <div class="lapseStat">' +
+            '    <div class="lapseStatLabel">Synced</div>' +
+            '    <div class="lapseStatValue">' + counts.Synced + ' <span class="lapseStatOf">of ' + eligible + ' items</span></div>' +
             progressBar(counts) +
-            '  <div class="lapseStatusLinks">' + statusLinks(counts) + '</div>' +
+            '    <div class="lapseStatusLinks">' + statusLinks(counts) + '</div>' +
             (counts.WithoutSubtitles
-                ? '  <div class="fieldDescription">' + counts.WithoutSubtitles + ' of the ' + counts.Total +
-                  ' items in the turned on libraries have no subtitle file.</div>'
-                : '') +
-            '  <div class="lapseButtonRow">' +
-            '    <button is="emby-button" type="button" class="raised button-submit" id="lapseGoBulk"><span>Sync everything</span></button>' +
-            (updateAvailable
-                ? '    <button is="emby-button" type="button" class="raised" id="lapseUpdateEngine"><span>Update ' +
-                  escapeHtml(engine.DisplayName) + ' to ' + escapeHtml(engine.LatestVersion || 'the latest') + '</span></button>'
+                ? '  <div class="fieldDescription">' + counts.WithoutSubtitles +
+                  (counts.WithoutSubtitles === 1 ? ' has' : ' have') + ' no subtitle file</div>'
                 : '') +
             '  </div>' +
-            '  <div class="fieldDescription">Using ' + escapeHtml(overview.ActiveEngineName || '') +
-            (overview.ActiveEngineVersion ? ' ' + escapeHtml(overview.ActiveEngineVersion) : '') +
-            ' in ' + escapeHtml(modeLabel) + ' mode. ' +
-            '<a is="emby-linkbutton" href="#" class="button-link" id="lapseGoEngines">Change engine</a></div>' +
-            (engineNote ? '  <div class="fieldDescription lapseProblem">' + escapeHtml(engineNote) + '</div>' : '') +
+            '  <div class="lapseStat">' +
+            '    <div class="lapseStatLabel">Waiting for review</div>' +
+            '    <div class="lapseStatValue">' + unsure + '</div>' +
+            '    <div class="fieldDescription">' + (unsure
+                ? 'LAPSE was unsure and kept the originals.'
+                : 'Results LAPSE is unsure about land here.') + '</div>' +
+            '  </div>' +
+            '  <div class="lapseStat">' +
+            '    <div class="lapseStatLabel">Engine</div>' +
+            '    <div class="lapseStatValue">' + escapeHtml(overview.ActiveEngineName || '') +
+            (overview.ActiveEngineVersion ? ' <span class="lapseStatOf">' + escapeHtml(overview.ActiveEngineVersion) + '</span>' : '') + '</div>' +
+            engineState +
+            '    <a is="emby-linkbutton" href="#" class="button-link" id="lapseGoEngines">Engine settings</a>' +
+            '  </div>' +
             '</div>' +
 
+            '<div class="lapseButtonRow lapseOverviewActions">' +
+            '  <button is="emby-button" type="button" class="raised button-submit" id="lapseGoBulk"><span>Sync everything</span></button>' +
             (unsure
-                ? '<div class="verticalSection">' +
-                  '  <h2 class="sectionTitle">Waiting for review</h2>' +
-                  '  <p>LAPSE was unsure about ' + unsure + (unsure === 1 ? ' subtitle' : ' subtitles') +
-                  ' and kept the originals. Check the results and keep or discard them.</p>' +
-                  '  <button is="emby-button" type="button" class="raised" id="lapseGoReview"><span>Review</span></button>' +
-                  '</div>'
+                ? '  <button is="emby-button" type="button" class="raised" id="lapseGoReview"><span>Review ' + unsure +
+                  (unsure === 1 ? ' result' : ' results') + '</span></button>'
                 : '') +
+            (updateAvailable
+                ? '  <button is="emby-button" type="button" class="raised" id="lapseUpdateEngine"><span>Update ' +
+                  escapeHtml(engine.DisplayName) + ' to ' + escapeHtml(engine.LatestVersion || 'the latest') + '</span></button>'
+                : '') +
+            '</div>' +
 
             '<div class="verticalSection">' +
             '  <h2 class="sectionTitle">Recent activity</h2>' +

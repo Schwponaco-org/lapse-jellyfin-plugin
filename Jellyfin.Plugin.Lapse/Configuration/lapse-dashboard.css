@@ -264,6 +264,64 @@
 
 /* --- overview --- */
 
+.lapseSummary {
+    display: flex;
+    margin: 0 0 1em;
+}
+
+.lapseStat {
+    flex: 1 1 0;
+    min-width: 0;
+    padding: 1em 1.2em;
+}
+
+.lapseStat + .lapseStat {
+    border-left: 1px solid var(--jf-palette-divider, rgba(127, 127, 127, .25));
+}
+
+.lapseStatLabel {
+    color: var(--jf-palette-text-secondary, inherit);
+}
+
+.lapseStatValue {
+    margin: .15em 0 .35em;
+    font-size: 1.7em;
+}
+
+.lapseStatOf {
+    font-size: .55em;
+    color: var(--jf-palette-text-secondary, inherit);
+}
+
+.lapseStat > .button-link {
+    margin: .3em 0 0;
+    padding: 0;
+}
+
+.lapseOverviewActions {
+    margin-bottom: 1.5em;
+}
+
+.lapseWelcome {
+    max-width: 46em;
+    padding: 1.2em 1.5em 1.4em;
+}
+
+.lapseWelcome > p {
+    line-height: 1.6;
+}
+
+@media (max-width: 50em) {
+    .lapseSummary {
+        flex-direction: column;
+    }
+
+    .lapseStat + .lapseStat {
+        border-left: 0;
+        border-top: 1px solid var(--jf-palette-divider, rgba(127, 127, 127, .25));
+    }
+}
+
 .lapseProgressBar {
     display: flex;
     height: .4em;
