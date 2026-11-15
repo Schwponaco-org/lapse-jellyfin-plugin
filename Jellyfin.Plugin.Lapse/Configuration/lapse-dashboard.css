@@ -98,79 +98,104 @@
 
 /* --- navigation: a sidebar beside the panel, a drop-down on a phone --- */
 
-.lapseLayout {
+/* --- tabs: the main row is underlined like the dashboard's own tabs, the Settings row is chips
+   like the filters on the Plugins page. Both scroll sideways on a phone. --- */
+
+.lapseTabs,
+.lapseSubTabs {
+    position: relative;
     display: flex;
-    align-items: flex-start;
-    gap: 2em;
+    overflow-x: auto;
+    scrollbar-width: none;
 }
 
-.lapseNav {
-    flex: 0 0 13em;
-    position: sticky;
-    top: 1em;
-}
-
-.lapseNavItem,
-.lapseNavGroup {
-    display: block;
-    width: 100%;
-    padding: .55em .8em;
-    border: 0;
-    border-radius: .3em;
-    background: transparent;
-    color: inherit;
-    font: inherit;
-    text-align: left;
-    cursor: pointer;
-}
-
-.lapseNavItem:hover,
-.lapseNavGroup:hover {
-    background: var(--jf-palette-action-hover, rgba(127, 127, 127, .12));
-}
-
-.lapseNavItem:focus-visible,
-.lapseNavGroup:focus-visible,
-.lapseDetails > summary:focus-visible {
-    outline: 2px solid var(--jf-palette-primary-main, #00a4dc);
-    outline-offset: -2px;
-}
-
-.lapseNavItem-active {
-    background: var(--jf-palette-action-selected, rgba(127, 127, 127, .2));
-}
-
-.lapseNavHint {
-    display: block;
-    font-size: .8em;
-    color: var(--jf-palette-text-secondary, inherit);
-}
-
-.lapseNavHint:empty {
+.lapseTabs::-webkit-scrollbar,
+.lapseSubTabs::-webkit-scrollbar {
     display: none;
 }
 
-.lapseNavGroup {
+.lapseTabs {
+    margin: 0 0 1.5em;
+    border-bottom: 1px solid var(--jf-palette-divider, rgba(127, 127, 127, .3));
+}
+
+.lapseTabs > .lapseNavItem {
+    flex: none;
     display: flex;
     align-items: center;
-    margin-top: .6em;
+    gap: .45em;
+    padding: .8em 1em;
+    border: 0;
+    border-bottom: 2px solid transparent;
+    background: transparent;
+    color: var(--jf-palette-text-secondary, inherit);
+    font: inherit;
+    font-weight: 500;
+    white-space: nowrap;
+    cursor: pointer;
 }
 
-.lapseNavChevron {
-    margin-left: auto;
+.lapseTabs > .lapseNavItem:hover {
+    color: inherit;
 }
 
-.lapseNavGroup[aria-expanded="true"] .lapseNavChevron {
-    transform: rotate(180deg);
+.lapseTabs > .lapseNavItem-active {
+    color: var(--jf-palette-primary-main, #00a4dc);
+    border-bottom-color: var(--jf-palette-primary-main, #00a4dc);
 }
 
-.lapseNavSub {
-    padding-left: .8em;
+.lapseNavCount {
+    min-width: 1.4em;
+    padding: 0 .4em;
+    border-radius: 1em;
+    background: var(--jf-palette-action-selected, rgba(127, 127, 127, .25));
+    color: inherit;
+    font-size: .8em;
+    line-height: 1.6;
+    text-align: center;
 }
 
-.lapseContent {
-    flex: 1 1 auto;
-    min-width: 0;
+.lapseNavCount:empty {
+    display: none;
+}
+
+.lapseSubTabs {
+    gap: .5em;
+    margin: -.6em 0 1.8em;
+    padding-bottom: .2em;
+}
+
+.lapseSubTabs.hide {
+    display: none;
+}
+
+.lapseSubTabs > .lapseNavItem {
+    flex: none;
+    padding: .35em .9em;
+    border: 0;
+    border-radius: 1em;
+    background: var(--jf-palette-action-selected, rgba(127, 127, 127, .2));
+    color: inherit;
+    font: inherit;
+    font-size: .9em;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.lapseSubTabs > .lapseNavItem:hover {
+    background: var(--jf-palette-action-hover, rgba(127, 127, 127, .3));
+}
+
+.lapseSubTabs > .lapseNavItem-active,
+.lapseSubTabs > .lapseNavItem-active:hover {
+    background: var(--jf-palette-primary-main, #00a4dc);
+    color: var(--jf-palette-primary-contrastText, #fff);
+}
+
+.lapseNavItem:focus-visible,
+.lapseDetails > summary:focus-visible {
+    outline: 2px solid var(--jf-palette-primary-main, #00a4dc);
+    outline-offset: -2px;
 }
 
 .lapsePanel {
@@ -181,18 +206,21 @@
     display: block;
 }
 
-.lapseNavSelectContainer {
-    display: none;
+/* the word that marks a section as experimental, beside its heading */
+.lapseTag {
+    margin-left: .5em;
+    padding: .1em .5em;
+    border: 1px solid var(--jf-palette-divider, rgba(127, 127, 127, .4));
+    border-radius: .3em;
+    color: var(--jf-palette-text-secondary, inherit);
+    font-size: .8em;
+    font-weight: normal;
+    vertical-align: middle;
+    white-space: nowrap;
 }
 
-@media (max-width: 50em) {
-    .lapseNav {
-        display: none;
-    }
-
-    .lapseNavSelectContainer {
-        display: block;
-    }
+.sectionTitle > .lapseTag {
+    font-size: .55em;
 }
 
 /* --- lists --- */
@@ -304,6 +332,33 @@
 .lapseDetails > summary {
     padding: .5em 0;
     cursor: pointer;
+}
+
+/* a fold-out that has to be found, so its summary looks like Jellyfin's raised button */
+.lapseDetails-button > summary {
+    display: inline-block;
+    padding: .7em 1.2em;
+    border-radius: .2em;
+    background: var(--jf-palette-action-selected, rgba(127, 127, 127, .25));
+    font-weight: 600;
+    list-style: none;
+}
+
+.lapseDetails-button > summary::-webkit-details-marker {
+    display: none;
+}
+
+.lapseDetails-button > summary:hover {
+    background: var(--jf-palette-action-hover, rgba(127, 127, 127, .35));
+}
+
+/* the library, then its automation right under it, without Jellyfin's tall list rows */
+.lapseLibraryRow > .listItemBody {
+    padding: .4em 0;
+}
+
+.lapseLibraryRow .checkboxContainer {
+    margin: .3em 0;
 }
 
 .lapseLibrarySchedule {

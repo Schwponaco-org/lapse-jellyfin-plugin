@@ -104,7 +104,6 @@
         {
             value: 'srt',
             label: '.srt',
-            recommended: true,
             note: 'Read by everything, and the easiest to edit by hand.'
         },
         { value: 'vtt', label: '.vtt', note: 'What browsers use.' },
@@ -116,7 +115,6 @@
         {
             value: 'keep',
             label: 'Keep it beside the new one',
-            recommended: true,
             note: 'Nothing is lost if the conversion is not what you wanted.'
         },
         {
@@ -130,7 +128,6 @@
         {
             value: 'sync',
             label: 'Convert it, then sync it',
-            recommended: true,
             note: 'The conversion was only needed so the engine could read it.'
         },
         {
@@ -144,7 +141,6 @@
         {
             value: 'off',
             label: 'Only when the engine cannot read the format',
-            recommended: true,
             note: 'The file keeps the format it came in.'
         },
         {
@@ -158,13 +154,12 @@
         {
             value: 'Sync',
             label: 'Sync them',
-            recommended: true,
             note: 'Leaves their format alone.'
         },
         {
             value: 'ConvertThenSync',
             label: 'Convert them, then sync them',
-            note: 'Writes each one in the format set under Conversion first.'
+            note: 'Writes each one in the format set under Conversion first, on the Files tab.'
         },
         {
             value: 'Convert',
@@ -200,7 +195,6 @@
         {
             value: 'Sidecar',
             label: 'Write it beside the original for review',
-            recommended: true,
             note: 'The original stays as it is until you keep or discard the result under Review.'
         },
         {
@@ -211,7 +205,7 @@
         {
             value: 'OverwriteAnyway',
             label: 'Write it anyway',
-            note: 'Writes it the way File output says, sure or not.'
+            note: 'Writes it like a sure result.'
         }
     ];
 
@@ -340,41 +334,27 @@
         return allEngines.filter(function (e) { return e.Installed && !e.RunCheckError; });
     }
 
-    // --- sidebar navigation ---
+    // --- tab navigation ---
 
     var showPanel = null;
+    var lastSettingsPanel = 'lapsePanelLibraries';
 
-    // One panel at a time from the sidebar, Settings folds out so the first view isn't eleven config
-    // screens. On a phone the same list is a drop-down. A fresh visit lands on the overview.
+    // Tabs along the top like Jellyfin's own pages, Settings opens a second row of its sections
+    // and comes back to the one used last. A fresh visit lands on the overview.
     function setUpNavigation(view) {
-        var items = Array.prototype.slice.call(view.querySelectorAll('.lapseNavItem'));
-        if (items.length === 0) {
-            return;
-        }
+        var items = Array.prototype.slice.call(view.querySelectorAll('.lapseNavItem[data-panel]'));
+        var settingsRow = view.querySelector('#lapseSettingsGroup');
+        var settingsTab = view.querySelector('#lapseSettingsToggle');
 
-        var settingsGroup = view.querySelector('#lapseSettingsGroup');
-        var settingsToggle = view.querySelector('#lapseSettingsToggle');
-        var select = view.querySelector('#lapseNavSelect');
-
-        function label(item) {
-            return item.querySelector('.lapseNavLabel').textContent;
-        }
-
-        function option(item) {
-            return '<option value="' + item.getAttribute('data-panel') + '">' + escapeHtml(label(item)) + '</option>';
-        }
-
-        select.innerHTML = items.filter(function (item) { return !settingsGroup.contains(item); }).map(option).join('') +
-            '<optgroup label="Settings">' +
-            items.filter(function (item) { return settingsGroup.contains(item); }).map(option).join('') +
-            '</optgroup>';
-
-        function openSettings(open) {
-            settingsGroup.classList.toggle('hide', !open);
-            settingsToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+        // keep the chosen tab in view on a phone, where the row scrolls sideways
+        function reveal(item) {
+            var row = item.parentNode;
+            row.scrollLeft = item.offsetLeft - (row.clientWidth - item.offsetWidth) / 2;
         }
 
         showPanel = function (panelId) {
+            var inSettings = !!settingsRow.querySelector('[data-panel="' + panelId + '"]');
+
             items.forEach(function (item) {
                 var active = item.getAttribute('data-panel') === panelId;
                 item.classList.toggle('lapseNavItem-active', active);
@@ -386,15 +366,19 @@
                 }
             });
 
+            settingsTab.classList.toggle('lapseNavItem-active', inSettings);
+            settingsTab.setAttribute('aria-expanded', inSettings ? 'true' : 'false');
+            settingsRow.classList.toggle('hide', !inSettings);
+
+            if (inSettings) {
+                lastSettingsPanel = panelId;
+            }
+
             view.querySelectorAll('.lapsePanel').forEach(function (panel) {
                 panel.classList.toggle('lapsePanel-active', panel.id === panelId);
             });
 
-            if (settingsGroup.querySelector('[data-panel="' + panelId + '"]')) {
-                openSettings(true);
-            }
-
-            select.value = panelId;
+            view.querySelectorAll('.lapseNavItem-active').forEach(reveal);
         };
 
         items.forEach(function (item) {
@@ -403,12 +387,8 @@
             });
         });
 
-        select.addEventListener('change', function () {
-            showPanel(select.value);
-        });
-
-        settingsToggle.addEventListener('click', function () {
-            openSettings(settingsGroup.classList.contains('hide'));
+        settingsTab.addEventListener('click', function () {
+            showPanel(lastSettingsPanel);
         });
 
         showPanel('lapsePanelDashboard');
@@ -730,7 +710,6 @@
             '</div>' +
             '<div class="lapseButtonRow">' +
             '<a is="emby-linkbutton" class="button-link" href="https://github.com/Schwponaco-org/lapse-jellyfin-plugin" target="_blank" rel="noopener">Plugin on GitHub</a>' +
-            '<a is="emby-linkbutton" class="button-link" href="https://github.com/Schwponaco-org/lapse" target="_blank" rel="noopener">Engine on GitHub</a>' +
             '</div>';
     }
 
@@ -1170,9 +1149,6 @@
                 });
             }
         });
-
-        var installed = usableEngines().length;
-        view.querySelector('#lapseEnginesHint').textContent = installed + ' of ' + allEngines.length + ' installed';
     }
 
     function installEngine(view, id, button) {
@@ -1392,21 +1368,6 @@
             syncRowState();
         });
 
-        var enabled = allLibraries.filter(function (l) { return l.Enabled; }).length;
-        var scheduled = allLibraries.filter(function (l) { return l.Enabled && l.ScheduleEnabled; }).length;
-        var automatic = allLibraries.filter(function (l) { return l.Enabled && l.AutoSyncEnabled; }).length;
-
-        var extra = [];
-        if (automatic) {
-            extra.push(automatic + ' on new items');
-        }
-
-        if (scheduled) {
-            extra.push(scheduled + ' scheduled');
-        }
-
-        view.querySelector('#lapseLibrariesHint').textContent =
-            enabled + ' of ' + allLibraries.length + ' on' + (extra.length ? (', ' + extra.join(', ')) : '');
     }
 
     function refreshLibraries(view) {
@@ -1438,14 +1399,18 @@
 
         button.disabled = true;
         Dashboard.showLoadingMsg();
+
+        // the automatic run settings share this tab and its Save button
         lapsePost('Lapse/Libraries', payload).then(function () {
+            return lapsePost('Lapse/Settings', collectSettings(view));
+        }).then(function () {
             Dashboard.hideLoadingMsg();
             button.disabled = false;
             Dashboard.alert('Settings saved.');
 
             // read them straight back rather than trusting the form: if anything didn't
             // stick, the toggles snapping back is the honest answer
-            return refreshLibraries(view).then(function () {
+            return Promise.all([refreshLibraries(view), refreshSettings(view)]).then(function () {
                 return Promise.all([refreshItemList(view), refreshOverview(view)]);
             });
         }).catch(function (err) {
@@ -1703,8 +1668,6 @@
                 return (i.Name || '').toLowerCase().indexOf(search) !== -1;
             });
         }
-
-        view.querySelector('#lapseItemsHint').textContent = shown.length + ' of ' + items.length;
 
         if (shown.length === 0) {
             if (search || libraryId || status) {
@@ -2605,9 +2568,6 @@
     function renderIgnoreList(view) {
         var container = view.querySelector('#lapseIgnoreList');
 
-        view.querySelector('#lapseIgnoreHint').textContent =
-            allIgnoreRules.length === 0 ? '' : (allIgnoreRules.length + ' rules');
-
         if (allIgnoreRules.length === 0) {
             container.innerHTML = '<p class="fieldDescription">Nothing is ignored.</p>';
             return;
@@ -2876,15 +2836,10 @@
 
     // --- settings: output, translation, appearance, engines ---
 
-    // `options.hideRecommended` leaves the word out but keeps the default picked
-    function renderRadioGroup(container, name, modes, selected, onChange, options) {
-        var showRecommended = !(options && options.hideRecommended);
-
-        // no match = value gone or never set, use the recommended one so a dot always shows
-        var hasSelection = modes.some(function (mode) { return mode.value === selected; });
-        if (!hasSelection) {
-            var fallback = modes.filter(function (mode) { return mode.recommended; })[0] || modes[0];
-            selected = fallback && fallback.value;
+    function renderRadioGroup(container, name, modes, selected, onChange) {
+        // no match = value gone or never set, the first one is the default so a dot always shows
+        if (!modes.some(function (mode) { return mode.value === selected; })) {
+            selected = modes[0].value;
         }
 
         container.innerHTML = modes.map(function (mode) {
@@ -2893,8 +2848,7 @@
                 '  <input type="radio" name="' + name + '" value="' + escapeHtml(mode.value) + '"' +
                 (selected === mode.value ? ' checked' : '') + ' />' +
                 '  <span><span>' + escapeHtml(mode.label) + '</span>' +
-                '    <span class="fieldDescription">' + (mode.recommended && showRecommended ? 'Recommended. ' : '') +
-                escapeHtml(mode.note) + '</span>' +
+                '    <span class="fieldDescription">' + escapeHtml(mode.note) + '</span>' +
                 '  </span>' +
                 '</label>';
         }).join('');
@@ -2927,8 +2881,6 @@
             : 'Only used when a new file is written.';
 
         view.querySelector('#lapseSidecarPreview').textContent = preview;
-        view.querySelector('#lapseOutputHint').textContent =
-            (OUTPUT_MODES.filter(function (m) { return m.value === mode; })[0] || {}).label || '';
     }
 
     function updateConfidenceNote(view) {
@@ -2969,42 +2921,36 @@
 
     function renderConversion(view) {
         var settings = currentSettings || {};
-        var plain = { hideRecommended: true };
 
         renderRadioGroup(
             view.querySelector('#lapseConversionFormats'),
             'lapseConversionFormat',
             CONVERSION_FORMATS,
             conversionFormat(settings.ConversionFormat),
-            function () { updateConversionHint(view); },
-            plain);
+            null);
 
         renderRadioGroup(
             view.querySelector('#lapseConversionOriginal'),
             'lapseConversionOriginal',
             CONVERSION_ORIGINAL_MODES,
             settings.ConversionReplaceOriginal ? 'replace' : 'keep',
-            null,
-            plain);
+            null);
 
         renderRadioGroup(
             view.querySelector('#lapseConvertBeforeSync'),
             'lapseConvertBeforeSync',
             CONVERT_BEFORE_SYNC_MODES,
             settings.ConvertBeforeSync ? 'on' : 'off',
-            null,
-            plain);
+            null);
 
         renderRadioGroup(
             view.querySelector('#lapseConversionSync'),
             'lapseConversionSync',
             CONVERSION_SYNC_MODES,
             settings.ConversionSyncAfter === false ? 'convert' : 'sync',
-            null,
-            plain);
+            null);
 
         renderConversionEngineNote(view);
-        updateConversionHint(view);
     }
 
     // Says which formats the engine in use actually reads, so "do I need to convert this"
@@ -3028,11 +2974,6 @@
             'so converting is only needed for one format across the library.';
     }
 
-    function updateConversionHint(view) {
-        view.querySelector('#lapseConversionHint').textContent =
-            '.' + selectedRadio(view, 'lapseConversionFormat', 'srt');
-    }
-
     function renderAutomation(view) {
         var settings = currentSettings || {};
 
@@ -3041,26 +2982,13 @@
             'lapseAutomationAction',
             AUTOMATION_ACTIONS,
             settings.AutomationAction || 'Sync',
-            function () { updateAutomationHint(view); },
-            { hideRecommended: true });
+            null);
 
         view.querySelector('#lapseAutoTranslateEnabled').checked = settings.AutoTranslateEnabled === true;
         view.querySelector('#lapseAutoTranslateLanguage').value = settings.AutoTranslateLanguage || '';
         view.querySelector('#lapseAutoTranslateSkipExisting').checked = settings.AutoTranslateSkipExisting !== false;
         view.querySelector('#lapseSkipSyncedInUnattendedRuns').checked = settings.SkipSyncedInUnattendedRuns !== false;
         view.querySelector('#lapseAutoSyncNewSubtitles').checked = settings.AutoSyncNewSubtitles !== false;
-
-        updateAutomationHint(view);
-    }
-
-    function updateAutomationHint(view) {
-        var action = selectedRadio(view, 'lapseAutomationAction', 'Sync');
-        var label = AUTOMATION_ACTIONS.filter(function (a) { return a.value === action; })[0];
-        var translating = view.querySelector('#lapseAutoTranslateEnabled').checked
-            && view.querySelector('#lapseAutoTranslateLanguage').value.trim();
-
-        view.querySelector('#lapseAutomationHint').textContent =
-            (label ? label.label : 'Sync them') + (translating ? ' + translate' : '');
     }
 
     function renderAccess(view) {
@@ -3102,10 +3030,7 @@
 
     function updateAccessPanel(view) {
         var mode = selectedRadio(view, 'lapseAccessMode', 'AdminsOnly');
-        var chosen = ACCESS_MODES.filter(function (m) { return m.value === mode; })[0];
-
         view.querySelector('#lapseAccessUsersContainer').classList.toggle('hide', mode !== 'SelectedUsers');
-        view.querySelector('#lapseAccessHint').textContent = chosen ? chosen.label : '';
     }
 
     function selectedAccessUserIds(view) {
@@ -3390,14 +3315,6 @@
 
     // --- translation providers ---
 
-    function tierLabel(tier) {
-        if (tier === 0) {
-            return 'No setup needed';
-        }
-
-        return tier === 1 ? 'Self hosted' : 'Needs an API key';
-    }
-
     // Each provider gets the fields it actually needs, right under its own name, rather
     // than a flat pile of keys and URLs that gives no clue which goes with what.
     function providerFieldsHtml(provider) {
@@ -3433,8 +3350,8 @@
             return '' +
                 '<div class="verticalSection">' +
                 '  <h3 class="sectionTitle">' + escapeHtml(provider.DisplayName) + '</h3>' +
-                '  <div class="fieldDescription">' + escapeHtml(tierLabel(provider.Tier)) + ', ' +
-                (provider.Configured ? 'ready' : 'not set up') + '. ' + escapeHtml(provider.Summary) + '</div>' +
+                '  <div class="fieldDescription">' + escapeHtml(provider.Summary) + ' ' +
+                (provider.Configured ? 'Ready.' : 'Not set up.') + '</div>' +
                 providerFieldsHtml(provider) +
                 '</div>';
         }).join('');
@@ -3456,9 +3373,6 @@
         if (currentSettings) {
             defaultSelect.value = currentSettings.DefaultTranslationProvider;
         }
-
-        var active = allProviders.filter(function (p) { return p.Configured; }).length;
-        view.querySelector('#lapseTranslationHint').textContent = active + ' of ' + allProviders.length + ' ready';
     }
 
     function setInputValue(view, selector, value) {
@@ -3595,10 +3509,6 @@
         var pending = (status.Pending || []).filter(function (set) {
             return (set.Candidates || []).some(function (c) { return c.EngineId !== 'lapse'; });
         });
-        view.querySelector('#lapseMultiEngineHint').textContent = pending.length
-            ? pending.length + ' waiting'
-            : (availability.Enabled && usable ? 'on' : 'off');
-
         renderCandidateList(view, pending);
     }
 
@@ -3680,7 +3590,7 @@
     function renderReview(view, sets) {
         var host = view.querySelector('#lapseReviewList');
         currentReview = sets;
-        view.querySelector('#lapseReviewHint').textContent = sets.length ? sets.length + ' waiting' : '';
+        view.querySelector('#lapseReviewHint').textContent = sets.length || '';
         renderOverview(view);
 
         if (!sets.length) {
@@ -3868,8 +3778,6 @@
         text.style.fontSize = Math.max(10, Math.round(appearance.FontSizePx * 0.5)) + 'px';
         text.style.color = appearance.TextColor;
         text.style.backgroundColor = appearance.BackgroundEnabled ? appearance.BackgroundColor : 'transparent';
-
-        view.querySelector('#lapseAppearanceHint').textContent = appearance.Enabled ? 'on' : 'off';
     }
 
     function resetAppearance(view) {
@@ -4213,37 +4121,20 @@
         view.querySelector('#lapseSkipAlreadyInSync').addEventListener('change', function () {
             updateAlreadyInSyncNote(view);
         });
-        view.querySelector('#btnSaveConversion').addEventListener('click', function (e) {
-            saveSettings(view, e.currentTarget);
-        });
-        view.querySelector('#btnSaveAutomation').addEventListener('click', function (e) {
-            saveSettings(view, e.currentTarget);
-        });
-        view.querySelector('#lapseAutoTranslateEnabled').addEventListener('change', function () {
-            updateAutomationHint(view);
-        });
-        view.querySelector('#lapseAutoTranslateLanguage').addEventListener('input', function () {
-            updateAutomationHint(view);
-        });
         view.querySelector('#btnSaveAccess').addEventListener('click', function (e) {
             saveSettings(view, e.currentTarget);
         });
-        view.querySelector('#btnSaveOutput').addEventListener('click', function (e) {
+        view.querySelector('#btnSaveFiles').addEventListener('click', function (e) {
             saveSettings(view, e.currentTarget);
         });
         view.querySelector('#btnSaveTranslation').addEventListener('click', function (e) {
             saveSettings(view, e.currentTarget);
         });
-        view.querySelector('#btnSaveLabs').addEventListener('click', function (e) {
+        view.querySelector('#btnSaveIntegrations').addEventListener('click', function (e) {
             saveSettings(view, e.currentTarget);
         });
         view.querySelector('#btnTestOpenSubtitles').addEventListener('click', function () {
             testOpenSubtitles(view);
-        });
-        view.querySelector('#btnSaveMultiEngine').addEventListener('click', function (e) {
-            // Saving reads the settings back, and drawing those redraws this panel's
-            // status strip and waiting list too.
-            saveSettings(view, e.currentTarget);
         });
         view.querySelector('#btnSaveAppearance').addEventListener('click', function (e) {
             saveSettings(view, e.currentTarget);
