@@ -304,6 +304,7 @@
 
 .lapseWelcome {
     max-width: 46em;
+    margin: 0;
     padding: 1.2em 1.5em 1.4em;
 }
 

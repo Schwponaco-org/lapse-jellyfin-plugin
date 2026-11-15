@@ -1094,7 +1094,7 @@
               escapeHtml(engine.WhyLabel || 'Read more on GitHub') + '</a>'
             : '';
 
-        var state = (engine.IsDefault ? 'In use. ' : '') +
+        var state = (engine.IsDefault && engine.Installed ? 'In use. ' : '') +
             capitalize(engineUpdateNote(engine) || engineStateText(engine)) + '.' +
             (engine.Installed && !engine.InstalledVersion ? ' The installed copy does not say which version it is.' : '');
 
