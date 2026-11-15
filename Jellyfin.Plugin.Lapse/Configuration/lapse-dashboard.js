@@ -1316,11 +1316,11 @@
                 '    </label></div>' +
                 '    <div class="lapseLibrarySchedule">' +
                 '      <div class="checkboxContainer"><label class="emby-checkbox-label">' +
-                '        <input type="checkbox" is="emby-checkbox" class="lapseChkAutoSync"' + (library.AutoSyncEnabled ? ' checked' : '') + ' />' +
+                '        <input type="checkbox" is="emby-checkbox" class="lapseChkAutoSync"' + (library.Enabled && library.AutoSyncEnabled ? ' checked' : '') + ' />' +
                 '        <span>New items</span>' +
                 '      </label></div>' +
                 '      <div class="checkboxContainer"><label class="emby-checkbox-label">' +
-                '        <input type="checkbox" is="emby-checkbox" class="lapseChkSchedule"' + (library.ScheduleEnabled ? ' checked' : '') + ' />' +
+                '        <input type="checkbox" is="emby-checkbox" class="lapseChkSchedule"' + (library.Enabled && library.ScheduleEnabled ? ' checked' : '') + ' />' +
                 '        <span>Schedule</span>' +
                 '      </label></div>' +
                 '      <select is="emby-select" class="emby-select-withcolor emby-select lapseScheduleFrequency" aria-label="How often, ' + name + '">' +

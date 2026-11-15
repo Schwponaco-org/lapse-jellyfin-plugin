@@ -73,9 +73,10 @@ public class LibraryService
 
                 // untouched libraries are on, but auto-sync and schedules stay off until
                 // someone ticks them. An update shouldn't start rewriting files by itself.
+                // a library switched off by an older version can still carry both flags, report them off
                 Enabled = settings?.Enabled ?? true,
-                AutoSyncEnabled = settings?.AutoSyncEnabled ?? false,
-                ScheduleEnabled = settings?.ScheduleEnabled ?? false,
+                AutoSyncEnabled = (settings?.Enabled ?? true) && (settings?.AutoSyncEnabled ?? false),
+                ScheduleEnabled = (settings?.Enabled ?? true) && (settings?.ScheduleEnabled ?? false),
                 ScheduleFrequency = (settings?.ScheduleFrequency ?? ScheduleFrequency.Daily).ToString(),
                 ScheduleDay = settings?.ScheduleDay?.ToString(),
                 ScheduleTime = settings?.ScheduleTime ?? "03:00",
