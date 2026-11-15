@@ -1858,12 +1858,35 @@
                 return;
             }
 
+            useOwnPlayersTrack(context);
             panelDelay = readCurrentDelay();
             renderPanel();
         }).catch(function (err) {
             setPanelBody('<div class="lapseToolsNote">Could not read what is playing: ' +
                 escapeHtml(err.message) + '</div>');
         });
+    }
+
+    // The server guesses the track from the user's latest session, which can be another device or a
+    // stale one, and "Save to file" would then write to a file that isn't on screen. This player knows.
+    function useOwnPlayersTrack(context) {
+        var manager = playbackManager();
+
+        try {
+            var item = manager && manager.getCurrentPlayer() && manager.currentItem();
+            var index = manager && manager.getSubtitleStreamIndex();
+
+            if (!item || item.Id !== String(context.ItemId).replace(/-/g, '') || typeof index !== 'number') {
+                return;
+            }
+
+            var playing = (context.Subtitles || []).filter(function (s) {
+                return s.StreamIndex === index;
+            })[0];
+            context.PlayingPath = playing ? playing.Path : null;
+        } catch (err) {
+            log('could not ask the player which subtitle is on: ' + err);
+        }
     }
 
     function setPanelBody(html) {
