@@ -1809,6 +1809,11 @@
         document.body.appendChild(panel);
         document.addEventListener('keydown', panelKeyHandler, true);
         panel.addEventListener('keydown', panelKeys);
+
+        // the player turns the wheel into volume on the document, so scrolling the panel changed it
+        panel.addEventListener('wheel', function (e) {
+            e.stopPropagation();
+        }, { passive: true });
         watchForPlaybackEnding();
 
         panel.querySelector('#lapseToolsClose').addEventListener('click', closePlayerPanel);
