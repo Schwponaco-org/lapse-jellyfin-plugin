@@ -17,7 +17,7 @@ namespace Jellyfin.Plugin.Lapse.Engines;
 /// lapse &lt;video_or_subtitle&gt; &lt;subtitle&gt; [auto|ols|nosplit|split] [penalty]
 ///       [--output PATH] [--confidence N] [--audio-track N] [--sub-track N]
 ///       [--fps N] [--snap [ms]] [--encoding NAME] [--from VIDEO] [--min-shift ms]
-///       [--whisper MODEL]
+///       [--whisper MODEL] [--threads N]
 ///       [--no-backup] [--no-sidecar] [--no-embedded] [--full-scan] [--no-cache]
 ///       [--force] [--strict] [--dry-run] [--json] [--quiet]
 ///
@@ -40,7 +40,8 @@ public partial class LapseEngine : IEngine
         ("audioTrack", "--audio-track"),
         ("subTrack", "--sub-track"),
         ("fps", "--fps"),
-        ("snap", "--snap")
+        ("snap", "--snap"),
+        ("threads", "--threads")
     };
 
     // Ship in the archive and have to sit next to the binary. Without them silero quietly
@@ -385,6 +386,20 @@ public partial class LapseEngine : IEngine
             IsPath = true,
             Since = "2.3.0",
             RequiresFlag = "--whisper"
+        });
+
+        descriptor.Parameters.Add(new EngineParameter
+        {
+            Key = "threads",
+            Label = "Threads for listening",
+            Description = "How many threads LAPSE uses to listen to a video. Blank uses every core, up to 8. "
+                + "Set it lower on a small server that also transcodes, so a sync leaves room for playback.",
+            Flag = "--threads",
+            Kind = EngineParameterKind.Number,
+            Minimum = 1,
+            Maximum = 64,
+            BlankMeansUnset = true,
+            Since = "2.5.1"
         });
 
         descriptor.Parameters.Add(new EngineParameter
