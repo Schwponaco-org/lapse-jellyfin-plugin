@@ -189,7 +189,7 @@ A synced subtitle goes back out in the encoding it came in, so a Windows-1252 fi
 
 ## Engines
 
-- **LAPSE** is the engine this plugin is built around and the one to use. It works out on its own whether a subtitle is early, drifting or cut differently, tells you how sure it is, and reads the most formats. Every download is checked against the checksums published with the release. Bulk runs in one process need LAPSE 2.2.3, moving a subtitle between copies and whisper need 2.3.0, and shifting formats other than `.srt`, `.vtt`, `.ass` and `.ssa`, `.itt`, TTML saved as `.xml` and the Alpine build need 2.5.0. The engine card says when a setting needs a newer build than the one installed.
+- **LAPSE** is the engine this plugin is built around and the one to use. It works out on its own whether a subtitle is early, drifting or cut differently, tells you how sure it is, and reads the most formats. Every download is checked against the checksums published with the release. Bulk runs in one process need LAPSE 2.2.3, moving a subtitle between copies and whisper need 2.3.0, and shifting formats other than `.srt`, `.vtt`, `.ass` and `.ssa`, `.itt`, TTML saved as `.xml` and the Alpine build need 2.5.0. The thread limit needs 2.5.1. The engine card says when a setting needs a newer build than the one installed.
 - **alass** splits a file into sections and times each one separately, which suits recordings cut around ad breaks. Linux and Windows on x86-64.
 - **ffsubsync** shifts the whole subtitle and can fix framerate mismatches. Linux, Windows and macOS.
 
