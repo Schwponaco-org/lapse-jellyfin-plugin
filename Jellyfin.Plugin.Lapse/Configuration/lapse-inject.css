@@ -46,6 +46,19 @@
     margin: 0;
 }
 
+/* On a big screen the client lets a sized dialog grow with its content, so a long one (Advanced)
+   ran off the top with no way to scroll up. Cap it and let the content scroll. */
+@media (min-width: 80.01em) and (min-height: 45.01em) {
+    .lapseDialog.dialog-fixedSize {
+        max-height: 90vh;
+    }
+}
+
+.lapseDialog > .formDialogContent {
+    min-height: 0;
+    overflow-y: auto;
+}
+
 /* only when the client has no dialog helper of its own */
 .lapseDialogFallback {
     background: rgba(0, 0, 0, .6);
@@ -259,6 +272,7 @@
 
     /* Jellyfin's video is at 1000, our toast at 10001, so in between */
     z-index: 9000;
+    width: 23em;
     width: min(23em, 92vw);
     display: flex;
     flex-direction: column;
@@ -272,10 +286,21 @@ body:has(#lapsePlayerPanel) .subtitleSyncContainer {
     display: none !important;
 }
 
-.lapseTools button:focus-visible,
-.lapseTools input:focus-visible {
+/* :focus first, older TV browsers have no :focus-visible and would show no focus at all */
+.lapseTools button:focus,
+.lapseTools input:focus {
     outline: 2px solid #00a4dc;
     outline-offset: 1px;
+}
+
+.lapseTools button:focus:not(:focus-visible),
+.lapseTools input:focus:not(:focus-visible) {
+    outline: none;
+}
+
+/* read from the sofa */
+.layout-tv .lapseTools {
+    font-size: 20px;
 }
 
 .lapseToolsHead {
