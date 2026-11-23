@@ -1017,6 +1017,17 @@
             closeDialog(dlg);
         });
 
+        // The client focuses the first focusable, the back arrow, and on a TV Down from there skips the
+        // first fields. Start on the first field instead, but not a text box, which pops up the on-screen
+        // keyboard, and not a disabled control, which the client would focus anyway and lose the focus.
+        if (!dlg.querySelector('[autofocus]')) {
+            var first = dlg.querySelector('.dialogContentInner select:not([disabled]), ' +
+                '.dialogContentInner input[type="checkbox"]:not([disabled]), .dialogContentInner button:not([disabled])');
+            if (first) {
+                first.setAttribute('autofocus', '');
+            }
+        }
+
         if (helper) {
             helper.open(dlg);
         } else {
@@ -1049,7 +1060,7 @@
         var overlay = openDialog('Sync subtitles',
             '<div class="fieldDescription">Sync with the engine and mode set in the LAPSE settings, or choose them under Advanced.</div>' +
             '<div class="lapseDialogButtons">' +
-            '<button is="emby-button" type="button" class="raised button-submit" id="lapsePopupSync"><span>Sync</span></button>' +
+            '<button is="emby-button" type="button" class="raised button-submit" id="lapsePopupSync" autofocus><span>Sync</span></button>' +
             '<button is="emby-button" type="button" class="raised" id="lapsePopupAdvanced"><span>Advanced</span></button>' +
             '</div>');
 
@@ -1762,9 +1773,19 @@
         }
     }
 
-    // Escape closes the panel wherever the focus is.
+    // Escape and a remote's Back (461 on LG, 10009 on Samsung) close the panel wherever the focus is.
+    // Prevented here, the client's own Back handling skips it, so the film keeps playing.
+    function isBackKey(e) {
+        return e.key === 'Escape' || e.key === 'GoBack' || e.key === 'BrowserBack' ||
+            e.keyCode === 27 || e.keyCode === 461 || e.keyCode === 10009;
+    }
+
     function panelKeyHandler(e) {
-        if (e.key === 'Escape' && document.getElementById(PANEL_ID)) {
+        // A client dialog over the panel (the subtitle menu, Find one online, an alert) closes first and
+        // handles Back itself. Checked on the page, the focus can be on the body while one is open.
+        var dialogOpen = document.querySelector('.dialogContainer');
+
+        if (isBackKey(e) && !dialogOpen && document.getElementById(PANEL_ID)) {
             closePlayerPanel();
             e.stopPropagation();
             e.preventDefault();
@@ -1777,25 +1798,41 @@
     // to the element its key handling saw last, and in Firefox that click comes after the key.
     function panelKeys(e) {
         var panel = e.currentTarget;
+        var target = e.target;
 
-        if (e.key === 'Enter' && e.target.tagName === 'BUTTON') {
+        // older TV browsers fill in keyCode more reliably than key
+        var key = { 13: 'Enter', 37: 'ArrowLeft', 38: 'ArrowUp', 39: 'ArrowRight', 40: 'ArrowDown' }[e.keyCode] || e.key;
+
+        if (key === 'Enter' && target.tagName === 'BUTTON') {
             return;
         }
 
         e.stopPropagation();
 
-        // A TV remote has only arrows, so up and down walk the panel like the client's own lists.
-        // Left and right stay with the control, which is how a slider is moved.
-        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        // a remote has no space bar, so Enter ticks a checkbox
+        if (key === 'Enter' && target.type === 'checkbox') {
+            target.click();
+            e.preventDefault();
+            return;
+        }
+
+        // A TV remote has only arrows, so they walk the panel like the client's own lists. Left and
+        // right stay with a slider or text box, which is how its value or caret is moved.
+        var step = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 }[key];
+        var sideways = key === 'ArrowLeft' || key === 'ArrowRight';
+
+        if (step && !(sideways && target.tagName === 'INPUT' && target.type !== 'checkbox')) {
             var stops = Array.prototype.filter.call(panel.querySelectorAll('button, input'), function (el) {
                 return !el.disabled && el.offsetParent !== null;
             });
-            var next = stops.indexOf(e.target) + (e.key === 'ArrowDown' ? 1 : -1);
+            var next = stops.indexOf(target) + step;
 
             if (next >= 0 && next < stops.length) {
                 stops[next].focus();
-                e.preventDefault();
             }
+
+            // even at either end, or the browser scrolls the panel or moves a slider as well
+            e.preventDefault();
         }
     }
 
@@ -3252,7 +3289,7 @@
     function shiftTimingLine(line, offsetMs) {
         return line.replace(/(\d{1,3}):(\d{2}):(\d{2})([,.])(\d{1,3})/g, function (all, h, m, s, sep, frac) {
             var total = (parseInt(h, 10) * 3600000) + (parseInt(m, 10) * 60000) +
-                (parseInt(s, 10) * 1000) + parseInt(frac.padEnd(3, '0'), 10) + offsetMs;
+                (parseInt(s, 10) * 1000) + parseInt((frac + '00').slice(0, 3), 10) + offsetMs;
 
             if (total < 0) {
                 total = 0;
@@ -3272,7 +3309,13 @@
     }
 
     function pad(value, width) {
-        return String(value).padStart(width, '0');
+        // not padStart, older TV browsers (webOS 4) don't have it
+        var text = String(value);
+        while (text.length < width) {
+            text = '0' + text;
+        }
+
+        return text;
     }
 
     // --- "Sync Subtitles to Reference" on a single item ---

@@ -21,6 +21,10 @@ public static partial class EngineResults
     [GeneratedRegex(@"^\[[a-z0-9_,]+ @ 0x[0-9a-f]+\]", RegexOptions.IgnoreCase)]
     private static partial Regex LibavNoiseRegex();
 
+    // onnxruntime warns about the CPU on every ARM box and in emulated containers, it is never why a sync failed
+    [GeneratedRegex(@"^onnxruntime cpuid_info warning:", RegexOptions.IgnoreCase)]
+    private static partial Regex OnnxCpuWarningRegex();
+
     // a traceback's last line is the actual exception
     [GeneratedRegex(@"^\s+(at |File ""|\.\.\.)", RegexOptions.IgnoreCase)]
     private static partial Regex StackFrameRegex();
@@ -54,7 +58,7 @@ public static partial class EngineResults
         {
             var line = raw.Trim().TrimEnd('\r');
 
-            if (line.Length == 0 || StackFrameRegex().IsMatch(raw))
+            if (line.Length == 0 || StackFrameRegex().IsMatch(raw) || OnnxCpuWarningRegex().IsMatch(line))
             {
                 continue;
             }
