@@ -3311,7 +3311,9 @@
 
         var previous = lastExtractStart;
 
-        lapsePost('Lapse/Settings', collectSettings(view)).then(function () {
+        Promise.resolve().then(function () {
+            return lapsePost('Lapse/Settings', collectSettings(view));
+        }).then(function () {
             return lapsePost('Lapse/Extraction/Run');
         }).then(function () {
             Dashboard.hideLoadingMsg();
@@ -3936,7 +3938,8 @@
             Engines: []
         };
 
-        view.querySelectorAll('.lapseEngineCard').forEach(function (card) {
+        // only the real engine cards: the multi engine box borrows the card look but has no engine fields
+        view.querySelectorAll('.lapseEngineCard[data-id]').forEach(function (card) {
             var penaltyInput = card.querySelector('.lapseSettingPenalty');
             var pathInput = card.querySelector('.lapseSettingPath');
             var modeSelect = card.querySelector('.lapseSettingMode');
@@ -3967,7 +3970,10 @@
         button.disabled = true;
         Dashboard.showLoadingMsg();
 
-        lapsePost('Lapse/Settings', collectSettings(view)).then(function () {
+        // collectSettings inside the chain, so a throw ends in the catch instead of a spinner that never stops
+        Promise.resolve().then(function () {
+            return lapsePost('Lapse/Settings', collectSettings(view));
+        }).then(function () {
             Dashboard.hideLoadingMsg();
             Dashboard.alert('Settings saved.');
             return refreshSettings(view).then(function () {
@@ -4096,7 +4102,9 @@
         // A filter-like toggle sitting above the list, so it saves itself rather than
         // waiting for a Save button on a page that hasn't got one.
         view.querySelector('#lapseCountEmbedded').addEventListener('change', function () {
-            lapsePost('Lapse/Settings', collectSettings(view)).then(function () {
+            Promise.resolve().then(function () {
+                return lapsePost('Lapse/Settings', collectSettings(view));
+            }).then(function () {
                 return refreshSettings(view);
             }).then(function () {
                 return Promise.all([refreshItemList(view), refreshOverview(view)]);
