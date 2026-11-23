@@ -1017,10 +1017,12 @@
             closeDialog(dlg);
         });
 
-        // On a TV the client focuses the first focusable, the back arrow, and Down from there skips the
-        // first fields. Start on the first field instead. The client only autofocuses in the TV layout.
+        // The client focuses the first focusable, the back arrow, and on a TV Down from there skips the
+        // first fields. Start on the first field instead, but not a text box, which pops up the on-screen
+        // keyboard, and not a disabled control, which the client would focus anyway and lose the focus.
         if (!dlg.querySelector('[autofocus]')) {
-            var first = dlg.querySelector('.dialogContentInner select, .dialogContentInner input:not([type="range"]), .dialogContentInner button');
+            var first = dlg.querySelector('.dialogContentInner select:not([disabled]), ' +
+                '.dialogContentInner input[type="checkbox"]:not([disabled]), .dialogContentInner button:not([disabled])');
             if (first) {
                 first.setAttribute('autofocus', '');
             }
@@ -1779,10 +1781,11 @@
     }
 
     function panelKeyHandler(e) {
-        // a dialog opened from the panel (Find one online) closes first, the client handles that one
-        var inDialog = e.target && e.target.closest && e.target.closest('.dialog');
+        // A client dialog over the panel (the subtitle menu, Find one online, an alert) closes first and
+        // handles Back itself. Checked on the page, the focus can be on the body while one is open.
+        var dialogOpen = document.querySelector('.dialogContainer');
 
-        if (isBackKey(e) && !inDialog && document.getElementById(PANEL_ID)) {
+        if (isBackKey(e) && !dialogOpen && document.getElementById(PANEL_ID)) {
             closePlayerPanel();
             e.stopPropagation();
             e.preventDefault();
@@ -3286,7 +3289,7 @@
     function shiftTimingLine(line, offsetMs) {
         return line.replace(/(\d{1,3}):(\d{2}):(\d{2})([,.])(\d{1,3})/g, function (all, h, m, s, sep, frac) {
             var total = (parseInt(h, 10) * 3600000) + (parseInt(m, 10) * 60000) +
-                (parseInt(s, 10) * 1000) + parseInt(frac.padEnd(3, '0'), 10) + offsetMs;
+                (parseInt(s, 10) * 1000) + parseInt((frac + '00').slice(0, 3), 10) + offsetMs;
 
             if (total < 0) {
                 total = 0;
