@@ -1,7 +1,7 @@
 ---
 name: "LAPSE"
 guid: "486090e1-ca92-46e1-8549-9f6bb914a1d0"
-version: "2.2.1.0"
+version: "2.2.2.0"
 targetAbi: "10.11.0.0"
 framework: "net9.0"
 overview: "Sync subtitles to audio (or subtitle to subtitle) using the LAPSE engine. Open Settings after installing to set it up."
@@ -23,18 +23,17 @@ artifacts:
 changelog: >
   Works with LAPSE 2.5.1.
 
-  The engine's advanced settings get Threads for listening, which passes
-  --threads to LAPSE 2.5.1 so a sync on a small server leaves room for
-  playback. Older builds leave it off.
+  Save works again on every Settings tab. It left the spinner going and saved
+  nothing.
 
-  The LAPSE page is on tabs, with the settings in fewer sections and engine,
-  sync and review status side by side on the Overview. LAPSE has the large card
-  on the Engines tab. Multi engine sync has its own switch and can be turned on
-  right after installing an engine, and macOS servers are told alass has no
-  builds for them.
+  Advanced under Sync subtitles fits on a big screen and scrolls, so the top
+  can be reached.
 
-  Subtitle tools in the player saves the delay into the subtitle that player
-  shows and reloads it, so the change is not undone on screen. Jellyfin's own
-  offset slider is hidden while it is open, and the mouse wheel no longer
-  changes the volume there. A library that is turned off shows New items and
-  Schedule unticked.
+  Subtitle tools in the player works with a TV remote. Back closes it and the
+  film keeps playing, the arrows move between the buttons, and the focus can be
+  seen on older LG and Samsung TVs. The LAPSE dialogs from an item's menu start
+  on their first field on a TV, and their sliders can be reached.
+
+  Sync now in the player keeps its result on screen, and the panel follows the
+  subtitle that player has on after a track switch. A failed sync no longer
+  leads with onnxruntime's CPU warning on ARM servers.
