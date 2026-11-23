@@ -207,6 +207,14 @@ public class EngineArgumentTests
         Assert.Null(EngineResults.Summarize("  \n"));
     }
 
+    [Fact]
+    public void TheOnnxCpuWarningIsNotTheReason()
+    {
+        Assert.Equal(
+            "No speech found in: /m/Film.mkv",
+            EngineResults.Summarize("onnxruntime cpuid_info warning: Unknown CPU vendor. cpuinfo_vendor value: 0\nNo speech found in: /m/Film.mkv\n"));
+    }
+
     [Theory]
     [InlineData("/m/Film.en.srt", OutputMode.SidecarOnly, null, "/m/Film.en.shifted.srt")]
     [InlineData("/m/Film.en.srt", OutputMode.OverwriteWithBackup, null, "/m/Film.en.srt")]
