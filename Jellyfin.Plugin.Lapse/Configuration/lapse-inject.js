@@ -1028,6 +1028,11 @@
             }
         }
 
+        // the client's focus manager skips sliders unless they are marked focusable, so a remote never reached them
+        Array.prototype.forEach.call(dlg.querySelectorAll('input[type="range"]'), function (range) {
+            range.classList.add('focusable');
+        });
+
         if (helper) {
             helper.open(dlg);
         } else {
@@ -1754,6 +1759,7 @@
     var panelWatchdog = null;
 
     var panelOpener = null;
+    var lastPanelFocusId = null;
 
     function closePlayerPanel() {
         var panel = document.getElementById(PANEL_ID);
@@ -1775,9 +1781,13 @@
 
     // Escape and a remote's Back (461 on LG, 10009 on Samsung) close the panel wherever the focus is.
     // Prevented here, the client's own Back handling skips it, so the film keeps playing.
+    // Backspace is Back on a Hisense VIDAA remote, so it counts too outside a text box.
     function isBackKey(e) {
+        var typing = e.target && e.target.tagName === 'INPUT' && /^(text|search|number|password)$/.test(e.target.type);
+
         return e.key === 'Escape' || e.key === 'GoBack' || e.key === 'BrowserBack' ||
-            e.keyCode === 27 || e.keyCode === 461 || e.keyCode === 10009;
+            e.keyCode === 27 || e.keyCode === 461 || e.keyCode === 10009 ||
+            (e.keyCode === 8 && !typing);
     }
 
     function panelKeyHandler(e) {
@@ -1804,6 +1814,11 @@
         var key = { 13: 'Enter', 37: 'ArrowLeft', 38: 'ArrowUp', 39: 'ArrowRight', 40: 'ArrowDown' }[e.keyCode] || e.key;
 
         if (key === 'Enter' && target.tagName === 'BUTTON') {
+            return;
+        }
+
+        // play, pause and stop on a remote keep working with the panel open
+        if (/^Media/.test(e.key) || [19, 412, 413, 415, 417, 10252].indexOf(e.keyCode) !== -1) {
             return;
         }
 
@@ -1890,6 +1905,10 @@
         }, { passive: true });
         watchForPlaybackEnding();
 
+        panel.addEventListener('focusin', function (e) {
+            lastPanelFocusId = e.target.id;
+        });
+
         panel.querySelector('#lapseToolsClose').addEventListener('click', closePlayerPanel);
         panel.querySelector('#lapseToolsClose').focus();
 
@@ -1897,7 +1916,7 @@
     }
 
     function loadPanel() {
-        lapseGet('Lapse/Player/Context').then(function (context) {
+        return lapseGet('Lapse/Player/Context').then(function (context) {
             panelContext = context;
 
             if (!context || !context.Playing) {
@@ -1921,8 +1940,9 @@
         var manager = playbackManager();
 
         try {
-            var item = manager && manager.getCurrentPlayer() && manager.currentItem();
-            var index = manager && manager.getSubtitleStreamIndex();
+            var player = manager && manager.getCurrentPlayer();
+            var item = player && manager.currentItem(player);
+            var index = player && manager.getSubtitleStreamIndex(player);
 
             if (!item || item.Id !== String(context.ItemId).replace(/-/g, '') || typeof index !== 'number') {
                 return;
@@ -1969,6 +1989,19 @@
         wireSyncSection();
         wireTracksSection();
         wireAppearanceSection();
+
+        // The redraw took the focused button with it. On a remote that leaves nothing focused and the
+        // next arrow jumps somewhere unrelated, so put the focus back on the same control or the first one.
+        var active = document.activeElement;
+        if (!active || active === document.body) {
+            var again = lastPanelFocusId && document.getElementById(lastPanelFocusId);
+            var target = again && !again.disabled && again.closest('#' + PANEL_ID)
+                ? again
+                : document.querySelector('#lapseToolsBody button:not([disabled]), #lapseToolsBody input');
+            if (target) {
+                target.focus();
+            }
+        }
     }
 
     function delaySectionHtml(playing, reachable, canEdit) {
@@ -2124,21 +2157,35 @@
         var advanced = document.getElementById('lapseToolsAdvanced');
 
         if (sync && !sync.disabled) {
+            var running = false;
+
+            // Not disabled while it runs: a disabled button drops the focus, and a remote is lost after that.
             sync.addEventListener('click', function () {
+                if (running) {
+                    return;
+                }
+
                 var result = document.getElementById('lapseSyncResult');
                 result.textContent = 'Syncing...';
-                sync.disabled = true;
+                running = true;
 
                 lapsePost('Lapse/Sync', {
                     ItemId: panelContext.ItemId,
                     SubtitlePath: panelContext.PlayingPath
                 }).then(function (outcome) {
-                    result.textContent = describeSyncOutcome(outcome);
-                    sync.disabled = false;
-                    loadPanel();
+                    var message = describeSyncOutcome(outcome);
+
+                    // the reload redraws the panel, so the result goes back in after it
+                    return loadPanel().then(function () {
+                        var fresh = document.getElementById('lapseSyncResult');
+                        if (fresh) {
+                            fresh.textContent = message;
+                        }
+                    });
                 }).catch(function (err) {
                     result.textContent = 'Sync failed: ' + err.message;
-                    sync.disabled = false;
+                }).then(function () {
+                    running = false;
                 });
             });
         }
